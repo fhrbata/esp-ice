@@ -326,7 +326,7 @@ int cmd_build(int argc, const char **argv)
 		OPT_END(),
 	};
 
-	argc = parse_options(argc, argv, opts, build_usage);
+	parse_options(argc, argv, opts, build_usage);
 
 	if (access("CMakeLists.txt", F_OK) != 0)
 		die("no CMakeLists.txt found in current directory");

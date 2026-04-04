@@ -3,6 +3,10 @@ Checks: >-
   -*,
   clang-analyzer-*,
   bugprone-*,
+  -bugprone-easily-swappable-parameters,
+  -bugprone-narrowing-conversions,
+  -bugprone-multi-level-implicit-pointer-conversion,
+  -bugprone-switch-missing-default-case,
   performance-*,
   portability-*
 WarningsAsErrors: "*"

@@ -124,8 +124,13 @@ ssize_t sbuf_read_file(struct sbuf *sb, const char *path)
 	if (!fp)
 		return -1;
 
-	if (fseek(fp, 0, SEEK_END) || (size = ftell(fp)) < 0 ||
-	    fseek(fp, 0, SEEK_SET)) {
+	if (fseek(fp, 0, SEEK_END)) {
+		fclose(fp);
+		return -1;
+	}
+
+	size = ftell(fp);
+	if (size < 0 || fseek(fp, 0, SEEK_SET)) {
 		fclose(fp);
 		return -1;
 	}

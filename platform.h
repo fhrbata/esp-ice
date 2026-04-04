@@ -55,6 +55,13 @@ int fputs_p(const char *, FILE *);
 
 typedef ptrdiff_t ssize_t;
 
+/*
+ * Include <io.h> early -- before our mkdir/access/fopen macros --
+ * because MSYS2's <io.h> declares its own mkdir(const char *) and
+ * the macro would conflict with that prototype.
+ */
+#include <io.h>
+
 /* UTF-8-aware filesystem function replacements (Windows only). */
 FILE *fopen_w(const char *, const char *);
 int access_w(const char *, int);
@@ -64,8 +71,6 @@ int mkdir_w(const char *, int);
 #define access access_w
 #define fopen fopen_w
 #define mkdir mkdir_w
-
-#include <io.h>
 #define isatty _isatty
 #define putenv _putenv
 #define STDIN_FILENO 0
