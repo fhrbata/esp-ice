@@ -149,8 +149,9 @@ jobs:
             -v ${{ github.workspace }}:/work -w /work \
             alpine:latest sh -c '
               apk add gcc musl-dev make pkgconf curl-dev curl-static \
-                openssl-libs-static zlib-static nghttp2-static brotli-static \
-                libidn2-static libunistring-static libpsl-static &&
+                openssl-libs-static zlib-static nghttp2-static \
+                brotli-static libidn2-static libunistring-static \
+                libpsl-static libnghttp3-static &&
               CURL_LIBS="$(pkg-config --libs --static libcurl 2>/dev/null || echo "-lcurl -lssl -lcrypto -lz")" &&
               make LDFLAGS_APPEND="-static ${CURL_LIBS}" ${{ matrix.dist }}
             '
@@ -180,6 +181,7 @@ jobs:
             ${{ matrix.mingw_prefix }}-curl
             ${{ matrix.mingw_prefix }}-pkgconf
             make
+            zip
 
       - name: build windows
         if: startsWith(matrix.name, 'windows-')
