@@ -23,14 +23,12 @@ ARCH_CFLAGS := -mlong-double-64
 MUSL_CFLAGS_ENV := CFLAGS="$(ARCH_CFLAGS)"
 endif
 
-# s390x: zlib CRC32 VX code requires the vector-extension flag and
-# HWCAP_S390_VX was renamed to HWCAP_S390_VXRS in newer kernel headers.
-# Flags are injected into the generated Makefile after configure, because
-# zlib's configure rejects unknown flags in CFLAGS.
+# s390x: zlib's configure includes CRC32 VX vector-extension code but
+# the default target arch (z196) doesn't support it.  Strip the VX
+# objects from the generated Makefile instead of fighting compiler flags.
 ZLIB_POST_CONFIGURE :=
 ifeq ($(ARCH),s390x)
-ZLIB_S390X_FLAGS := -mvx -DHWCAP_S390_VX=HWCAP_S390_VXRS
-ZLIB_POST_CONFIGURE := sed -i 's/^CFLAGS=\(.*\)/CFLAGS=\1 $(ZLIB_S390X_FLAGS)/' Makefile && sed -i 's/^SFLAGS=\(.*\)/SFLAGS=\1 $(ZLIB_S390X_FLAGS)/' Makefile &&
+ZLIB_POST_CONFIGURE := sed -i 's/crc32_vx\.o//g' Makefile &&
 endif
 
 # On Linux, build musl and use musl-gcc for all deps.
