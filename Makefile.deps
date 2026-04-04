@@ -13,13 +13,22 @@ DEPS_SRC := $(CURDIR)/deps/src
 STAMP := $(CURDIR)/deps/.stamp
 NPROC := $(shell nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 2)
 
-# On Linux, build musl and use musl-gcc for all deps.
-# On macOS/Windows, use the system compiler.
+# On glibc Linux, build musl and use musl-gcc for all deps.
+# On musl Linux (Alpine), macOS, Windows: use the system compiler.
 UNAME_S := $(shell uname -s)
+IS_MUSL := $(shell ldd --version 2>&1 | grep -c musl)
 ifeq ($(UNAME_S),Linux)
+ifeq ($(IS_MUSL),0)
+# glibc system: build musl from source
 USE_MUSL := 1
 DEPS_CC := $(PREFIX)/bin/musl-gcc -static
-MUSL_DEP := $(DEPS_CC)
+MUSL_DEP := $(PREFIX)/bin/musl-gcc
+else
+# musl system (Alpine): already have musl, just use gcc
+USE_MUSL :=
+DEPS_CC := $(CC)
+MUSL_DEP :=
+endif
 else
 USE_MUSL :=
 DEPS_CC := $(CC)
