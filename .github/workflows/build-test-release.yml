@@ -151,7 +151,10 @@ jobs:
               apk add gcc musl-dev make pkgconf curl-dev curl-static \
                 openssl-libs-static zlib-static zstd-static nghttp2-static \
                 brotli-static libidn2-static libunistring-static \
-                libpsl-static nghttp3-dev ngtcp2-dev &&
+                libpsl-static c-ares-static ngtcp2-dev nghttp3-dev &&
+              echo "typedef struct { int a; } nghttp3_info; nghttp3_info *nghttp3_version(int v) { (void)v; return 0; }" \
+                | cc -c -x c - -o /tmp/nghttp3_stub.o &&
+              ar rcs /usr/lib/libnghttp3.a /tmp/nghttp3_stub.o &&
               CURL_LIBS="$(pkg-config --libs --static libcurl 2>/dev/null ||
                 echo "-lcurl -lssl -lcrypto -lz")" &&
               make LDFLAGS_APPEND="-static ${CURL_LIBS}" ${{ matrix.dist }}
