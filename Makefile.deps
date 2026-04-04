@@ -18,7 +18,7 @@ NPROC := $(shell nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 2)
 UNAME_S := $(shell uname -s)
 ifeq ($(UNAME_S),Linux)
 USE_MUSL := 1
-DEPS_CC := $(PREFIX)/bin/musl-gcc
+DEPS_CC := $(PREFIX)/bin/musl-gcc -static
 MUSL_DEP := $(DEPS_CC)
 else
 USE_MUSL :=
@@ -74,8 +74,8 @@ $(PREFIX)/lib/libbearssl.a: $(DEPS_SRC)/bearssl-$(BEARSSL_VERSION).tar.gz $(MUSL
 	@cd $(DEPS_SRC) && tar xf bearssl-$(BEARSSL_VERSION).tar.gz
 	@cd $(DEPS_SRC)/bearssl-$(BEARSSL_VERSION) && \
 		$(MAKE) -j$(NPROC) CC="$(DEPS_CC)" lib && \
+		mkdir -p $(PREFIX)/lib $(PREFIX)/include && \
 		cp build/libbearssl.a $(PREFIX)/lib/ && \
-		mkdir -p $(PREFIX)/include && \
 		cp inc/*.h $(PREFIX)/include/
 	@echo "BearSSL done."
 
