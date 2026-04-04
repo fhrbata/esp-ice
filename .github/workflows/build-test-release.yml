@@ -69,6 +69,7 @@ jobs:
       - lint-windows
       - lint-macos
     strategy:
+      fail-fast: false
       matrix:
         include:
           # ----------------------------------------------------------
@@ -147,9 +148,10 @@ jobs:
           docker run --rm --platform ${{ matrix.platform }} \
             -v ${{ github.workspace }}:/work -w /work \
             alpine:latest sh -c '
-              apk add gcc musl-dev make curl-static curl-dev \
-                openssl-libs-static zlib-static &&
-              make LDFLAGS_APPEND="-static" ${{ matrix.dist }}
+              apk add gcc musl-dev make pkgconf curl-static curl-dev \
+                openssl-libs-static zlib-static nghttp2-static brotli-static &&
+              make LDFLAGS_APPEND="-static $(pkg-config --libs --static libcurl)" \
+                ${{ matrix.dist }}
             '
 
       # ----- macOS -----
