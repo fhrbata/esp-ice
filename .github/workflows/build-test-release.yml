@@ -99,19 +99,9 @@ jobs:
             platform: linux/arm/v7
             dist: targz-pkg
 
-          - name: linux-ppc64el
-            runner: ubuntu-latest
-            platform: linux/ppc64le
-            dist: targz-pkg
-
           - name: linux-riscv64
             runner: ubuntu-latest
             platform: linux/riscv64
-            dist: targz-pkg
-
-          - name: linux-s390x
-            runner: ubuntu-latest
-            platform: linux/s390x
             dist: targz-pkg
 
           # ----------------------------------------------------------
