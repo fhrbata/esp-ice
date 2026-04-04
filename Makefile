@@ -132,7 +132,7 @@ $(O)/%.o: cmd/build/%.c Makefile $(O)/context | $(O)
 	$(CC) $(BUILD_DEFINES) $(BUILD_CFLAGS) -MD -MP -o $@ -c $<
 
 $(BINARY): $(OBJS) | $(O)
-	$(CC) $(BUILD_LDFLAGS) -o $@ $^
+	$(CC) -o $@ $^ $(BUILD_LDFLAGS)
 
 .PHONY: clean \
 	targz-pkg \
