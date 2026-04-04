@@ -25,9 +25,12 @@ endif
 
 # s390x: zlib CRC32 VX code requires the vector-extension flag and
 # HWCAP_S390_VX was renamed to HWCAP_S390_VXRS in newer kernel headers.
-ZLIB_CFLAGS_ENV :=
+# Flags are injected into the generated Makefile after configure, because
+# zlib's configure rejects unknown flags in CFLAGS.
+ZLIB_POST_CONFIGURE :=
 ifeq ($(ARCH),s390x)
-ZLIB_CFLAGS_ENV := CFLAGS="-O3 -mvx -DHWCAP_S390_VX=HWCAP_S390_VXRS"
+ZLIB_S390X_FLAGS := -mvx -DHWCAP_S390_VX=HWCAP_S390_VXRS
+ZLIB_POST_CONFIGURE := sed -i 's/^CFLAGS=\(.*\)/CFLAGS=\1 $(ZLIB_S390X_FLAGS)/' Makefile && sed -i 's/^SFLAGS=\(.*\)/SFLAGS=\1 $(ZLIB_S390X_FLAGS)/' Makefile &&
 endif
 
 # On Linux, build musl and use musl-gcc for all deps.
@@ -77,7 +80,8 @@ $(PREFIX)/lib/libz.a: $(DEPS_SRC)/zlib-$(ZLIB_VERSION).tar.gz $(MUSL_DEP) | $(PR
 	@echo "Building zlib $(ZLIB_VERSION)..."
 	@cd $(DEPS_SRC) && tar xf zlib-$(ZLIB_VERSION).tar.gz
 	@cd $(DEPS_SRC)/zlib-$(ZLIB_VERSION) && \
-		CC="$(DEPS_CC)" $(ZLIB_CFLAGS_ENV) ./configure --prefix=$(PREFIX) --static && \
+		CC="$(DEPS_CC)" ./configure --prefix=$(PREFIX) --static && \
+		$(ZLIB_POST_CONFIGURE) \
 		$(MAKE) -j$(NPROC) && \
 		$(MAKE) install
 	@echo "zlib done."
