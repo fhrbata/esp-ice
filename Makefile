@@ -61,14 +61,24 @@ SRCS := ice.c \
 	svec.c \
 	http.c
 
-# STATIC=1: use musl + deps built by Makefile.deps (fully self-contained)
+# STATIC=1: use deps built by Makefile.deps (fully self-contained)
+# On Linux: musl-gcc for fully static binary
+# On macOS: static deps, dynamic system frameworks
+# On Windows: static deps with MinGW
 # otherwise: use system libcurl (for development)
 ifdef STATIC
 DEPS_PREFIX := $(CURDIR)/deps/install
-CC := $(DEPS_PREFIX)/bin/musl-gcc
 BUILD_CFLAGS += -I$(DEPS_PREFIX)/include -DCURL_STATICLIB
 LIBS := $(shell PKG_CONFIG_PATH=$(DEPS_PREFIX)/lib/pkgconfig pkg-config --libs --static libcurl 2>/dev/null || echo "-L$(DEPS_PREFIX)/lib -lcurl -lbearssl -lz")
+# Use musl-gcc on Linux for fully static binary
+ifneq ($(wildcard $(DEPS_PREFIX)/bin/musl-gcc),)
+CC := $(DEPS_PREFIX)/bin/musl-gcc
 LDFLAGS += -static
+else ifneq ($(findstring apple,$(DUMPMACHINE)),)
+# macOS: can't use -static, but deps are .a so they link statically
+else
+LDFLAGS += -static
+endif
 else
 LIBS := -lcurl
 endif

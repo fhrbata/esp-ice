@@ -13,8 +13,18 @@ DEPS_SRC := $(CURDIR)/deps/src
 STAMP := $(CURDIR)/deps/.stamp
 NPROC := $(shell nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 2)
 
-# After musl is built, use musl-gcc for everything
-MUSL_GCC := $(PREFIX)/bin/musl-gcc
+# On Linux, build musl and use musl-gcc for all deps.
+# On macOS/Windows, use the system compiler.
+UNAME_S := $(shell uname -s)
+ifeq ($(UNAME_S),Linux)
+USE_MUSL := 1
+DEPS_CC := $(PREFIX)/bin/musl-gcc
+MUSL_DEP := $(DEPS_CC)
+else
+USE_MUSL :=
+DEPS_CC := $(CC)
+MUSL_DEP :=
+endif
 
 all: $(STAMP)
 
@@ -27,11 +37,12 @@ $(DEPS_SRC):
 $(PREFIX):
 	@mkdir -p $@
 
-# --- musl ---
+# --- musl (Linux only) ---
+ifdef USE_MUSL
 $(DEPS_SRC)/musl-$(MUSL_VERSION).tar.gz: | $(DEPS_SRC)
 	curl -fsSL -o $@ $(MUSL_URL)
 
-$(MUSL_GCC): $(DEPS_SRC)/musl-$(MUSL_VERSION).tar.gz | $(PREFIX)
+$(DEPS_CC): $(DEPS_SRC)/musl-$(MUSL_VERSION).tar.gz | $(PREFIX)
 	@echo "Building musl $(MUSL_VERSION)..."
 	@cd $(DEPS_SRC) && tar xf musl-$(MUSL_VERSION).tar.gz
 	@cd $(DEPS_SRC)/musl-$(MUSL_VERSION) && \
@@ -39,16 +50,17 @@ $(MUSL_GCC): $(DEPS_SRC)/musl-$(MUSL_VERSION).tar.gz | $(PREFIX)
 		$(MAKE) -j$(NPROC) && \
 		$(MAKE) install
 	@echo "musl done."
+endif
 
-# --- zlib (built with musl-gcc) ---
+# --- zlib ---
 $(DEPS_SRC)/zlib-$(ZLIB_VERSION).tar.gz: | $(DEPS_SRC)
 	curl -fsSL -o $@ $(ZLIB_URL)
 
-$(PREFIX)/lib/libz.a: $(DEPS_SRC)/zlib-$(ZLIB_VERSION).tar.gz $(MUSL_GCC) | $(PREFIX)
+$(PREFIX)/lib/libz.a: $(DEPS_SRC)/zlib-$(ZLIB_VERSION).tar.gz $(MUSL_DEP) | $(PREFIX)
 	@echo "Building zlib $(ZLIB_VERSION)..."
 	@cd $(DEPS_SRC) && tar xf zlib-$(ZLIB_VERSION).tar.gz
 	@cd $(DEPS_SRC)/zlib-$(ZLIB_VERSION) && \
-		CC="$(MUSL_GCC)" ./configure --prefix=$(PREFIX) --static && \
+		CC="$(DEPS_CC)" ./configure --prefix=$(PREFIX) --static && \
 		$(MAKE) -j$(NPROC) && \
 		$(MAKE) install
 	@echo "zlib done."
@@ -57,17 +69,17 @@ $(PREFIX)/lib/libz.a: $(DEPS_SRC)/zlib-$(ZLIB_VERSION).tar.gz $(MUSL_GCC) | $(PR
 $(DEPS_SRC)/bearssl-$(BEARSSL_VERSION).tar.gz: | $(DEPS_SRC)
 	curl -fsSL -o $@ $(BEARSSL_URL)
 
-$(PREFIX)/lib/libbearssl.a: $(DEPS_SRC)/bearssl-$(BEARSSL_VERSION).tar.gz $(MUSL_GCC) | $(PREFIX)
+$(PREFIX)/lib/libbearssl.a: $(DEPS_SRC)/bearssl-$(BEARSSL_VERSION).tar.gz $(MUSL_DEP) | $(PREFIX)
 	@echo "Building BearSSL $(BEARSSL_VERSION)..."
 	@cd $(DEPS_SRC) && tar xf bearssl-$(BEARSSL_VERSION).tar.gz
 	@cd $(DEPS_SRC)/bearssl-$(BEARSSL_VERSION) && \
-		$(MAKE) -j$(NPROC) CC="$(MUSL_GCC)" lib && \
+		$(MAKE) -j$(NPROC) CC="$(DEPS_CC)" lib && \
 		cp build/libbearssl.a $(PREFIX)/lib/ && \
 		mkdir -p $(PREFIX)/include && \
 		cp inc/*.h $(PREFIX)/include/
 	@echo "BearSSL done."
 
-# --- curl (built with musl-gcc + bearssl) ---
+# --- curl ---
 $(DEPS_SRC)/curl-$(CURL_VERSION).tar.gz: | $(DEPS_SRC)
 	curl -fsSL -o $@ $(CURL_URL)
 
@@ -75,7 +87,7 @@ $(PREFIX)/lib/libcurl.a: $(DEPS_SRC)/curl-$(CURL_VERSION).tar.gz $(PREFIX)/lib/l
 	@echo "Building curl $(CURL_VERSION)..."
 	@cd $(DEPS_SRC) && tar xf curl-$(CURL_VERSION).tar.gz
 	@cd $(DEPS_SRC)/curl-$(CURL_VERSION) && \
-		CC="$(MUSL_GCC)" \
+		CC="$(DEPS_CC)" \
 		CFLAGS="-I$(PREFIX)/include" \
 		LDFLAGS="-L$(PREFIX)/lib" \
 		LIBS="-lbearssl" \
