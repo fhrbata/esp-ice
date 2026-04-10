@@ -15,6 +15,7 @@ $(PREFIX)/lib/libcurl.a: $(TARBALL)
 		CC="$(CC)" \
 		CFLAGS="-I$(PREFIX)/include" \
 		LDFLAGS="-L$(PREFIX)/lib -L$(PREFIX)/lib64" \
+		LIBS="-lmbedx509 -lmbedcrypto -ltfpsacrypto" \
 		./configure --prefix=$(PREFIX) \
 			--disable-shared --enable-static \
 			--with-mbedtls=$(PREFIX) --with-zlib=$(PREFIX) \

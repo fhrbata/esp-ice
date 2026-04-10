@@ -67,16 +67,16 @@ SRCS := ice.c \
 	svec.c \
 	http.c
 
-# STATIC=1: use deps built by Makefile.deps (fully self-contained)
-# Deps are built as static .a libraries and linked in directly.
-# On Linux/macOS: libc is linked dynamically for compatibility.
-# On Windows: fully static binary with MinGW.
+# STATIC=1: use vendored deps from deps/ (fully self-contained)
+# Linux: fully static via musl (zero runtime deps)
+# macOS: static deps, dynamic system frameworks
+# Windows: fully static via MinGW
 # otherwise: use system libcurl (for development)
 ifdef STATIC
 DEPS_PREFIX := $(CURDIR)/deps/install
 DEPS_STAMP := $(CURDIR)/deps/.stamp
 BUILD_CFLAGS += -I$(DEPS_PREFIX)/include -DCURL_STATICLIB
-LIBS := $(shell PKG_CONFIG_LIBDIR=$(DEPS_PREFIX)/lib/pkgconfig:$(DEPS_PREFIX)/lib64/pkgconfig pkg-config --libs --static libcurl 2>/dev/null || echo "-L$(DEPS_PREFIX)/lib -L$(DEPS_PREFIX)/lib64 -lcurl -lmbedtls -lmbedx509 -lmbedcrypto -lz")
+LIBS := -L$(DEPS_PREFIX)/lib -L$(DEPS_PREFIX)/lib64 -lcurl -lmbedtls -lmbedx509 -lmbedcrypto -ltfpsacrypto -lz
 ifeq ($(S),linux)
 CC := $(DEPS_PREFIX)/bin/musl-gcc
 LDFLAGS += -static
@@ -85,6 +85,9 @@ MUSL := 1
 ifeq ($(ARCH),ppc64el)
 BUILD_CFLAGS += -mlong-double-64
 endif
+endif
+ifeq ($(S),macos)
+LIBS += -framework CoreFoundation -framework SystemConfiguration
 endif
 ifeq ($(S),win)
 LDFLAGS += -static
