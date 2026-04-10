@@ -24,9 +24,9 @@ CONTEXT := "$(COMPILER_VERSION) $(CFLAGS) $(LDFLAGS)"
 DUMPMACHINE := $(shell $(CC) -dumpmachine)
 
 ifneq ($(findstring x86_64,$(DUMPMACHINE)),)
-	ARCH := x86_64
+	ARCH := amd64
 else ifneq ($(findstring i686,$(DUMPMACHINE)),)
-	ARCH := x86
+	ARCH := i386
 else ifneq ($(findstring aarch64,$(DUMPMACHINE)),)
 	ARCH := arm64
 else ifneq ($(findstring arm64,$(DUMPMACHINE)),)

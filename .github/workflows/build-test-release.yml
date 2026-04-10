@@ -127,20 +127,20 @@ jobs:
             runner: macos-latest
             dist: targz-pkg
 
-          - name: macos-x86-64
+          - name: macos-amd64
             runner: macos-15-intel
             dist: targz-pkg
 
           # ----------------------------------------------------------
           # Windows: MSYS2 with MinGW static libcurl (mbedTLS)
           # ----------------------------------------------------------
-          - name: windows-x86_64
+          - name: windows-amd64
             runner: windows-latest
             msystem: MINGW64
             mingw_prefix: mingw-w64-x86_64
             dist: zip-pkg
 
-          - name: windows-i686
+          - name: windows-i386
             runner: windows-latest
             msystem: MINGW32
             mingw_prefix: mingw-w64-i686
