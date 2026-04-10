@@ -3,6 +3,14 @@ URL := https://curl.se/download/curl-$(VERSION).tar.gz
 TARBALL := curl-$(VERSION).tar.gz
 SRC := curl-$(VERSION)
 
+# mbedTLS transitive deps needed for curl's configure link test.
+# Windows additionally needs bcrypt (entropy) and ws2_32 (sockets).
+MBEDTLS_LIBS := -lmbedx509 -lmbedcrypto -ltfpsacrypto
+DUMPMACHINE := $(shell $(CC) -dumpmachine 2>/dev/null)
+ifneq ($(findstring mingw,$(DUMPMACHINE)),)
+MBEDTLS_LIBS += -lbcrypt -lws2_32
+endif
+
 all: $(PREFIX)/lib/libcurl.a
 
 $(TARBALL):
@@ -15,7 +23,7 @@ $(PREFIX)/lib/libcurl.a: $(TARBALL)
 		CC="$(CC)" \
 		CFLAGS="-I$(PREFIX)/include" \
 		LDFLAGS="-L$(PREFIX)/lib -L$(PREFIX)/lib64" \
-		LIBS="-lmbedx509 -lmbedcrypto -ltfpsacrypto" \
+		LIBS="$(MBEDTLS_LIBS)" \
 		./configure --prefix=$(PREFIX) \
 			--disable-shared --enable-static \
 			--with-mbedtls=$(PREFIX) --with-zlib=$(PREFIX) \
