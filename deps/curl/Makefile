@@ -23,7 +23,7 @@ $(PREFIX)/lib/libcurl.a: $(TARBALL)
 		CFLAGS="-I$(PREFIX)/include" \
 		LDFLAGS="-L$(PREFIX)/lib -L$(PREFIX)/lib64" \
 		LIBS="$(MBEDTLS_LIBS)" \
-		./configure --prefix=$(PREFIX) \
+		./configure --prefix=$(PREFIX) $(CONFIGURE_HOST) \
 			--disable-shared --enable-static \
 			--with-mbedtls=$(PREFIX) --with-zlib=$(PREFIX) \
 			--without-openssl --without-gnutls \

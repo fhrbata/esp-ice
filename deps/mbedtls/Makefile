@@ -16,6 +16,7 @@ $(PREFIX)/lib/libmbedtls.a: $(TARBALL) $(MBEDTLS_CONFIG) $(CRYPTO_CONFIG)
 	@tar xf $(TARBALL)
 	@cd $(SRC) && \
 		cmake -B build \
+			$(CMAKE_CROSS_FLAGS) \
 			-DCMAKE_C_COMPILER="$(CC)" \
 			-DCMAKE_INSTALL_PREFIX=$(PREFIX) \
 			-DMBEDTLS_CONFIG_FILE=$(MBEDTLS_CONFIG) \

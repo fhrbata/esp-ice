@@ -11,8 +11,13 @@ T ?= t/
 PFLAGS ?=
 T_OUT ?= t_out
 
-CROSS_COMPILE := $(subst $(lastword $(subst -, ,$(CC))),,$(CC))
-WINDRES := $(CROSS_COMPILE)windres
+# Cross-compilation: make STATIC=1 CROSS_COMPILE=arm-linux-gnueabihf- targz-pkg
+ifdef CROSS_COMPILE
+CC := $(CROSS_COMPILE)gcc
+endif
+
+_CC_PREFIX := $(subst $(lastword $(subst -, ,$(CC))),,$(CC))
+WINDRES := $(_CC_PREFIX)windres
 
 BUILD_CFLAGS = $(CFLAGS) $(CFLAGS_APPEND)
 BUILD_LDFLAGS = $(LDFLAGS) $(LDFLAGS_APPEND)

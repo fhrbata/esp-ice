@@ -73,7 +73,7 @@ jobs:
       matrix:
         include:
           # ----------------------------------------------------------
-          # Linux: Debian Trixie Docker, native or QEMU-emulated.
+          # Linux: native or cross-compiled.
           # Fully static binaries via musl + vendored deps.
           # ----------------------------------------------------------
           - name: linux-amd64
@@ -86,38 +86,38 @@ jobs:
 
           - name: linux-armel
             runner: ubuntu-latest
-            platform: linux/arm/v5
-            qemu: true
+            cross_compile: arm-linux-gnueabi-
+            cross_pkg: gcc-arm-linux-gnueabi
             dist: targz-pkg
 
           - name: linux-armhf
             runner: ubuntu-latest
-            platform: linux/arm/v7
-            qemu: true
+            cross_compile: arm-linux-gnueabihf-
+            cross_pkg: gcc-arm-linux-gnueabihf
             dist: targz-pkg
 
           - name: linux-ppc64el
             runner: ubuntu-latest
-            platform: linux/ppc64le
-            qemu: true
+            cross_compile: powerpc64le-linux-gnu-
+            cross_pkg: gcc-powerpc64le-linux-gnu
             dist: targz-pkg
 
           - name: linux-riscv64
             runner: ubuntu-latest
-            platform: linux/riscv64
-            qemu: true
+            cross_compile: riscv64-linux-gnu-
+            cross_pkg: gcc-riscv64-linux-gnu
             dist: targz-pkg
 
           - name: linux-i386
             runner: ubuntu-latest
-            platform: linux/386
-            qemu: true
+            cross_compile: i686-linux-gnu-
+            cross_pkg: gcc-i686-linux-gnu
             dist: targz-pkg
 
           - name: linux-s390x
             runner: ubuntu-latest
-            platform: linux/s390x
-            qemu: true
+            cross_compile: s390x-linux-gnu-
+            cross_pkg: gcc-s390x-linux-gnu
             dist: targz-pkg
 
           # ----------------------------------------------------------
@@ -157,30 +157,21 @@ jobs:
 
       # ----- Linux (native) -----
       - name: build linux
-        if: startsWith(matrix.name, 'linux-') && !matrix.qemu
+        if: startsWith(matrix.name, 'linux-') && !matrix.cross_compile
         run: |
           sudo apt-get update
           sudo apt-get install -y gcc make cmake curl bzip2
           make STATIC=1 ${{ matrix.dist }}
           build/ice --version
 
-      # ----- Linux (QEMU-emulated via Debian Trixie Docker) -----
-      - name: setup qemu
-        if: matrix.qemu
-        uses: docker/setup-qemu-action@v3
-
-      - name: build linux (qemu)
-        if: matrix.qemu
+      # ----- Linux (cross-compiled) -----
+      - name: build linux (cross)
+        if: matrix.cross_compile
         run: |
-          docker run --rm \
-            --platform ${{ matrix.platform }} \
-            -v ${{ github.workspace }}:/work -w /work \
-            debian:trixie-slim sh -c '
-              apt-get update &&
-              apt-get install -y gcc make cmake curl bzip2 &&
-              make STATIC=1 ${{ matrix.dist }} &&
-              build/ice --version
-            '
+          sudo apt-get update
+          sudo apt-get install -y make cmake curl bzip2 qemu-user-static ${{ matrix.cross_pkg }}
+          make STATIC=1 CROSS_COMPILE=${{ matrix.cross_compile }} ${{ matrix.dist }}
+          build/ice --version
 
       # ----- macOS -----
       # Static deps (zlib, mbedTLS, curl), dynamic system frameworks.

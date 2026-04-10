@@ -12,7 +12,7 @@ $(PREFIX)/lib/libyaml.a: $(TARBALL)
 	@echo "Building libyaml $(VERSION)..."
 	@tar xf $(TARBALL)
 	@cd $(SRC) && \
-		CC="$(CC)" ./configure --prefix=$(PREFIX) \
+		CC="$(CC)" ./configure --prefix=$(PREFIX) $(CONFIGURE_HOST) \
 			--disable-shared --enable-static && \
 		$(MAKE) -j$(NPROC) && \
 		$(MAKE) install
