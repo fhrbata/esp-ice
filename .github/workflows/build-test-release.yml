@@ -108,6 +108,12 @@ jobs:
             qemu: true
             dist: targz-pkg
 
+          - name: linux-i386
+            runner: ubuntu-latest
+            platform: linux/386
+            qemu: true
+            dist: targz-pkg
+
           - name: linux-s390x
             runner: ubuntu-latest
             platform: linux/s390x
@@ -126,7 +132,7 @@ jobs:
             dist: targz-pkg
 
           # ----------------------------------------------------------
-          # Windows: MSYS2 with MinGW static libcurl (Schannel TLS)
+          # Windows: MSYS2 with MinGW static libcurl (mbedTLS)
           # ----------------------------------------------------------
           - name: windows-x86_64
             runner: windows-latest
@@ -138,6 +144,12 @@ jobs:
             runner: windows-latest
             msystem: MINGW32
             mingw_prefix: mingw-w64-i686
+            dist: zip-pkg
+
+          - name: windows-arm64
+            runner: windows-11-arm
+            msystem: CLANGARM64
+            mingw_prefix: mingw-w64-clang-aarch64
             dist: zip-pkg
 
     steps:
