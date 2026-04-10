@@ -15,6 +15,10 @@ $(PREFIX)/bin/musl-gcc: $(TARBALL)
 		./configure --prefix=$(PREFIX) --disable-shared && \
 		$(MAKE) -j$(NPROC) && \
 		$(MAKE) install
+	@# Default to static linking -- the musl dynamic linker is not
+	@# installed on the host, so configure scripts that try to run
+	@# compiled test programs would fail without this.
+	@sed -i 's/-dynamic-linker [^ ]*//' $(PREFIX)/lib/musl-gcc.specs
 	@echo "musl done."
 
 clean:
