@@ -165,13 +165,18 @@ jobs:
           build/ice --version
 
       # ----- Linux (cross-compiled) -----
+      # No execution smoke test here: the cross-compiled binary cannot run
+      # on the x86_64 host without QEMU, and qemu-user-static's binfmt
+      # handlers can interfere with the build (e.g., hang musl/autotools
+      # configure checks on some targets).  Verify via `file` instead.
       - name: build linux (cross)
         if: matrix.cross_compile
         run: |
           sudo apt-get update
-          sudo apt-get install -y make cmake curl bzip2 qemu-user-static ${{ matrix.cross_pkg }}
+          sudo apt-get install -y make cmake curl bzip2 file ${{ matrix.cross_pkg }}
           make STATIC=1 CROSS_COMPILE=${{ matrix.cross_compile }} ${{ matrix.dist }}
-          build/ice --version
+          file build/ice
+          file build/ice | grep -q "ELF.*statically linked"
 
       # ----- macOS -----
       # Static deps (zlib, mbedTLS, curl), dynamic system frameworks.
