@@ -73,15 +73,42 @@ jobs:
       matrix:
         include:
           # ----------------------------------------------------------
-          # Linux: CentOS 7 Docker for old glibc (2.17) compatibility.
-          # Static deps (zlib + BearSSL + curl), dynamic glibc.
+          # Linux: Debian Trixie Docker + QEMU for all architectures.
+          # Fully static binaries via musl + vendored deps.
           # ----------------------------------------------------------
           - name: linux-amd64
             runner: ubuntu-latest
+            platform: linux/amd64
             dist: targz-pkg
 
           - name: linux-arm64
             runner: ubuntu-24.04-arm
+            platform: linux/arm64
+            dist: targz-pkg
+
+          - name: linux-armel
+            runner: ubuntu-latest
+            platform: linux/arm/v5
+            dist: targz-pkg
+
+          - name: linux-armhf
+            runner: ubuntu-latest
+            platform: linux/arm/v7
+            dist: targz-pkg
+
+          - name: linux-ppc64el
+            runner: ubuntu-latest
+            platform: linux/ppc64le
+            dist: targz-pkg
+
+          - name: linux-riscv64
+            runner: ubuntu-latest
+            platform: linux/riscv64
+            dist: targz-pkg
+
+          - name: linux-s390x
+            runner: ubuntu-latest
+            platform: linux/s390x
             dist: targz-pkg
 
           # ----------------------------------------------------------
@@ -113,35 +140,34 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # ----- Linux (CentOS 7 Docker) -----
-      # Build zlib + BearSSL + curl from source inside Docker.
-      # Old glibc (2.17) ensures compatibility with any modern Linux.
+      # ----- Linux (Debian Trixie Docker + QEMU) -----
+      # Fully static binaries: musl + vendored deps (zlib, mbedTLS, curl).
+      - name: setup qemu
+        if: startsWith(matrix.name, 'linux-') && matrix.platform != 'linux/amd64'
+        uses: docker/setup-qemu-action@v3
+
       - name: build linux
         if: startsWith(matrix.name, 'linux-')
         run: |
           docker run --rm \
+            --platform ${{ matrix.platform }} \
             -v ${{ github.workspace }}:/work -w /work \
-            centos:7 sh -c '
-              sed -i s/mirror.centos.org/vault.centos.org/g /etc/yum.repos.d/CentOS-*.repo &&
-              sed -i s/^#.*baseurl=http/baseurl=http/g /etc/yum.repos.d/CentOS-*.repo &&
-              sed -i s/^mirrorlist=http/#mirrorlist=http/g /etc/yum.repos.d/CentOS-*.repo &&
-              yum install -y gcc make perl-IPC-Cmd &&
-              make -f Makefile.deps &&
+            debian:trixie-slim sh -c '
+              apt-get update &&
+              apt-get install -y gcc make cmake curl perl &&
               make STATIC=1 ${{ matrix.dist }}
             '
 
       # ----- macOS -----
-      # Build zlib + BearSSL + curl from source. Static deps,
-      # dynamic system frameworks.
+      # Static deps (zlib, mbedTLS, curl), dynamic system frameworks.
       - name: build macos
         if: startsWith(matrix.name, 'macos-')
         run: |
-          brew install coreutils
-          make -f Makefile.deps
+          brew install coreutils cmake
           make STATIC=1 ${{ matrix.dist }}
 
       # ----- Windows (MSYS2) -----
-      # Build zlib + BearSSL + curl from source with MinGW.
+      # Build zlib + mbedTLS + curl from source with MinGW.
       - name: setup msys2
         if: startsWith(matrix.name, 'windows-')
         uses: msys2/setup-msys2@v2
@@ -150,6 +176,7 @@ jobs:
           update: true
           install: >-
             ${{ matrix.mingw_prefix }}-gcc
+            ${{ matrix.mingw_prefix }}-cmake
             make
             zip
             curl
@@ -157,9 +184,7 @@ jobs:
       - name: build windows
         if: startsWith(matrix.name, 'windows-')
         shell: msys2 {0}
-        run: |
-          make -f Makefile.deps
-          make STATIC=1 ${{ matrix.dist }}
+        run: make STATIC=1 ${{ matrix.dist }}
 
       - name: sign binaries
         if: |

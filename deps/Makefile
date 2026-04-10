@@ -1,6 +1,13 @@
 PREFIX ?= $(CURDIR)/install
 NPROC := $(shell nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 2)
 STAMP := $(CURDIR)/.stamp
+ARCH := $(shell uname -m)
+
+# ppc64le: Debian Trixie GCC defaults to IEEE 128-bit long double,
+# which musl does not support.  Force 64-bit long double everywhere.
+ifeq ($(ARCH),ppc64le)
+export CFLAGS += -mlong-double-64
+endif
 
 # MUSL=1: build musl first, use musl-gcc for all other deps
 HOST_CC := $(CC)

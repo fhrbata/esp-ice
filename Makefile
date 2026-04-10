@@ -38,6 +38,12 @@ else ifneq ($(findstring arm,$(DUMPMACHINE)),)
 	else
 		ARCH := armel
 	endif
+else ifneq ($(findstring powerpc64le,$(DUMPMACHINE)),)
+	ARCH := ppc64el
+else ifneq ($(findstring s390x,$(DUMPMACHINE)),)
+	ARCH := s390x
+else ifneq ($(findstring riscv64,$(DUMPMACHINE)),)
+	ARCH := riscv64
 endif
 
 ifneq ($(findstring mingw,$(DUMPMACHINE)),)
@@ -75,6 +81,10 @@ ifeq ($(S),linux)
 CC := $(DEPS_PREFIX)/bin/musl-gcc
 LDFLAGS += -static
 MUSL := 1
+# ppc64le: musl requires 64-bit long double (not IEEE 128-bit)
+ifeq ($(ARCH),ppc64el)
+BUILD_CFLAGS += -mlong-double-64
+endif
 endif
 ifeq ($(S),win)
 LDFLAGS += -static
