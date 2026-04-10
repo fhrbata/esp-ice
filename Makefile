@@ -90,6 +90,12 @@ MUSL := 1
 ifeq ($(ARCH),ppc64el)
 BUILD_CFLAGS += -mlong-double-64
 endif
+# i386: musl's cross-compiled libc.a doesn't provide __stack_chk_fail_local
+ifdef CROSS_COMPILE
+ifeq ($(ARCH),i386)
+BUILD_CFLAGS += -fno-stack-protector
+endif
+endif
 endif
 ifeq ($(S),macos)
 LIBS += -framework CoreFoundation -framework SystemConfiguration

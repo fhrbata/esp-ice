@@ -23,6 +23,12 @@ ifneq ($(findstring powerpc64le,$(shell $(HOST_CC) -dumpmachine 2>/dev/null)),)
 export CFLAGS += -mlong-double-64
 endif
 
+# i386: musl's cross-compiled libc.a doesn't provide __stack_chk_fail_local.
+# Disable stack protector to avoid generating references to it.
+ifneq ($(findstring i686,$(shell $(HOST_CC) -dumpmachine 2>/dev/null)),)
+export CFLAGS += -fno-stack-protector
+endif
+
 ifdef MUSL
 MUSL_DEP := musl
 CC := $(PREFIX)/bin/musl-gcc
