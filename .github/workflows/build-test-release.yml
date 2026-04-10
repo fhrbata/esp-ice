@@ -73,7 +73,7 @@ jobs:
       matrix:
         include:
           # ----------------------------------------------------------
-          # Linux: Debian Trixie Docker + QEMU for all architectures.
+          # Linux: Debian Trixie Docker, native or QEMU-emulated.
           # Fully static binaries via musl + vendored deps.
           # ----------------------------------------------------------
           - name: linux-amd64
@@ -89,26 +89,31 @@ jobs:
           - name: linux-armel
             runner: ubuntu-latest
             platform: linux/arm/v5
+            qemu: true
             dist: targz-pkg
 
           - name: linux-armhf
             runner: ubuntu-latest
             platform: linux/arm/v7
+            qemu: true
             dist: targz-pkg
 
           - name: linux-ppc64el
             runner: ubuntu-latest
             platform: linux/ppc64le
+            qemu: true
             dist: targz-pkg
 
           - name: linux-riscv64
             runner: ubuntu-latest
             platform: linux/riscv64
+            qemu: true
             dist: targz-pkg
 
           - name: linux-s390x
             runner: ubuntu-latest
             platform: linux/s390x
+            qemu: true
             dist: targz-pkg
 
           # ----------------------------------------------------------
@@ -143,11 +148,11 @@ jobs:
       # ----- Linux (Debian Trixie Docker + QEMU) -----
       # Fully static binaries: musl + vendored deps (zlib, mbedTLS, curl).
       - name: setup qemu
-        if: startsWith(matrix.name, 'linux-')
+        if: matrix.qemu
         uses: docker/setup-qemu-action@v3
 
       - name: build linux
-        if: startsWith(matrix.name, 'linux-')
+        if: matrix.platform
         run: |
           docker run --rm \
             --platform ${{ matrix.platform }} \
