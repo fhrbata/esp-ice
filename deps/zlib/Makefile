@@ -15,7 +15,7 @@ $(PREFIX)/lib/libz.a: $(TARBALL)
 		$(if $(HOST_TRIPLE),CHOST=$(HOST_TRIPLE)) \
 		CC="$(CC)" ./configure --prefix=$(PREFIX) --static \
 			--disable-crcvx && \
-		$(MAKE) -j$(NPROC) && \
+		$(MAKE) -j$(NPROC) libz.a && \
 		$(MAKE) install
 	@echo "zlib done."
 
