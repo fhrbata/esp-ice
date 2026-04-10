@@ -3,9 +3,8 @@ URL := https://zlib.net/zlib-$(VERSION).tar.gz
 TARBALL := zlib-$(VERSION).tar.gz
 SRC := zlib-$(VERSION)
 
-# Detect s390x: zlib auto-enables VX vector extensions which require
+# s390x: zlib auto-enables VX vector extensions which require
 # flags the default target arch (z196) does not support.  Strip them.
-ARCH := $(shell uname -m)
 
 all: $(PREFIX)/lib/libz.a
 

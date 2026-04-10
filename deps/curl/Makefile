@@ -6,8 +6,7 @@ SRC := curl-$(VERSION)
 # mbedTLS transitive deps needed for curl's configure link test.
 # Windows additionally needs bcrypt (entropy) and ws2_32 (sockets).
 MBEDTLS_LIBS := -lmbedx509 -lmbedcrypto -ltfpsacrypto
-DUMPMACHINE := $(shell $(CC) -dumpmachine 2>/dev/null)
-ifneq ($(findstring mingw,$(DUMPMACHINE)),)
+ifeq ($(S),win)
 MBEDTLS_LIBS += -lbcrypt -lws2_32
 endif
 

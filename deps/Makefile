@@ -2,6 +2,15 @@ PREFIX ?= $(CURDIR)/install
 NPROC := $(shell nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 2)
 STAMP := $(CURDIR)/.stamp
 ARCH := $(shell uname -m)
+DUMPMACHINE := $(shell $(CC) -dumpmachine 2>/dev/null)
+
+ifneq ($(findstring mingw,$(DUMPMACHINE)),)
+S := win
+else ifneq ($(findstring apple,$(DUMPMACHINE)),)
+S := macos
+else
+S := linux
+endif
 
 # ppc64le: Debian Trixie GCC defaults to IEEE 128-bit long double,
 # which musl does not support.  Force 64-bit long double everywhere.
@@ -16,7 +25,7 @@ MUSL_DEP := musl
 CC := $(PREFIX)/bin/musl-gcc
 endif
 
-export PREFIX CC NPROC
+export PREFIX CC NPROC S ARCH
 
 all: $(STAMP)
 
