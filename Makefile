@@ -82,15 +82,19 @@ SRCS := ice.c \
 	http.c
 
 # STATIC=1: use vendored deps from deps/ (fully self-contained).
-# The user is expected to provide a CC that targets musl on Linux
-# (e.g. x86_64-linux-musl-gcc, fetched via Makefile.toolchain), MinGW
-# on Windows (e.g. x86_64-w64-mingw32-gcc), or the system clang on macOS.
+# On Linux this requires a musl CC (enforced below); glibc -static is
+# a lie because NSS dlopen()s the target system's libc at runtime, so
+# the binary isn't actually portable.  Fetch a musl toolchain via
+# Makefile.toolchain.  Windows uses MinGW, macOS uses system clang.
 ifdef STATIC
 DEPS_PREFIX := $(CURDIR)/deps/install
 DEPS_STAMP := $(CURDIR)/deps/.stamp
 BUILD_CFLAGS += -I$(DEPS_PREFIX)/include -DCURL_STATICLIB
 LIBS := -L$(DEPS_PREFIX)/lib -L$(DEPS_PREFIX)/lib64 -lcurl -lmbedtls -lmbedx509 -lmbedcrypto -ltfpsacrypto -lz
 ifeq ($(S),linux)
+ifeq ($(findstring musl,$(TRIPLE)),)
+$(error STATIC=1 on Linux requires a musl toolchain (got CC='$(CC)', triple='$(TRIPLE)'). Fetch one: eval "$$(make -f Makefile.toolchain linux-<arch>)")
+endif
 LDFLAGS += -static
 endif
 ifeq ($(S),macos)
