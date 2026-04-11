@@ -203,41 +203,16 @@ $(LLVM_MINGW_DONE): Makefile.toolchain
 	@curl -fL $(LLVM_MINGW_URL) | tar -xJ -C $(LLVM_MINGW_DIR) --strip-components=1
 	@touch $(LLVM_MINGW_DONE)
 
-# ---------------------------------------------------------------------------
-# windows-amd64
-# ---------------------------------------------------------------------------
+# All three windows-* targets share the single llvm-mingw install above;
+# they differ only in which CC basename the user passes on the make
+# command line (x86_64-w64-mingw32-gcc, i686-w64-mingw32-gcc, or
+# aarch64-w64-mingw32-gcc — all present in $(LLVM_MINGW_DIR)/bin).
 
-WINDOWS_AMD64_DIR := $(CURDIR)/toolchains/windows-amd64
+windows-amd64: $(LLVM_MINGW_DONE)
+	@echo "export PATH=\"$(LLVM_MINGW_DIR)/bin:\$$PATH\""
 
-windows-amd64: $(WINDOWS_AMD64_DIR)
-	@echo "export PATH=\"$(WINDOWS_AMD64_DIR)/bin:\$$PATH\""
+windows-i386: $(LLVM_MINGW_DONE)
+	@echo "export PATH=\"$(LLVM_MINGW_DIR)/bin:\$$PATH\""
 
-$(WINDOWS_AMD64_DIR): $(LLVM_MINGW_DONE)
-	@rm -f $@
-	@ln -s llvm-mingw $@
-
-# ---------------------------------------------------------------------------
-# windows-i386
-# ---------------------------------------------------------------------------
-
-WINDOWS_I386_DIR := $(CURDIR)/toolchains/windows-i386
-
-windows-i386: $(WINDOWS_I386_DIR)
-	@echo "export PATH=\"$(WINDOWS_I386_DIR)/bin:\$$PATH\""
-
-$(WINDOWS_I386_DIR): $(LLVM_MINGW_DONE)
-	@rm -f $@
-	@ln -s llvm-mingw $@
-
-# ---------------------------------------------------------------------------
-# windows-arm64
-# ---------------------------------------------------------------------------
-
-WINDOWS_ARM64_DIR := $(CURDIR)/toolchains/windows-arm64
-
-windows-arm64: $(WINDOWS_ARM64_DIR)
-	@echo "export PATH=\"$(WINDOWS_ARM64_DIR)/bin:\$$PATH\""
-
-$(WINDOWS_ARM64_DIR): $(LLVM_MINGW_DONE)
-	@rm -f $@
-	@ln -s llvm-mingw $@
+windows-arm64: $(LLVM_MINGW_DONE)
+	@echo "export PATH=\"$(LLVM_MINGW_DIR)/bin:\$$PATH\""

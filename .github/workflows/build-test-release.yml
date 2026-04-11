@@ -56,60 +56,73 @@ jobs:
           - name: linux-amd64
             runner: ubuntu-latest
             cc: x86_64-linux-musl-gcc
+            toolchain_dir: linux-amd64
             dist: targz-pkg
 
           - name: linux-arm64
             runner: ubuntu-latest
             cc: aarch64-linux-musl-gcc
+            toolchain_dir: linux-arm64
             dist: targz-pkg
 
           - name: linux-armel
             runner: ubuntu-latest
             cc: arm-linux-musleabi-gcc
+            toolchain_dir: linux-armel
             dist: targz-pkg
 
           - name: linux-armhf
             runner: ubuntu-latest
             cc: arm-linux-musleabihf-gcc
+            toolchain_dir: linux-armhf
             dist: targz-pkg
 
           - name: linux-i386
             runner: ubuntu-latest
             cc: i686-linux-musl-gcc
+            toolchain_dir: linux-i386
             dist: targz-pkg
 
           - name: linux-ppc64el
             runner: ubuntu-latest
             cc: powerpc64le-linux-musl-gcc
+            toolchain_dir: linux-ppc64el
             dist: targz-pkg
 
           - name: linux-riscv64
             runner: ubuntu-latest
             cc: riscv64-linux-musl-gcc
+            toolchain_dir: linux-riscv64
             dist: targz-pkg
 
           - name: linux-s390x
             runner: ubuntu-latest
             cc: s390x-linux-musl-gcc
+            toolchain_dir: linux-s390x
             dist: targz-pkg
 
           # ----------------------------------------------------------
           # Windows: cross-compiled on ubuntu-latest via llvm-mingw
-          # fetched by Makefile.toolchain.
+          # fetched by Makefile.toolchain.  All three windows-* targets
+          # share the same llvm-mingw install, so they all cache
+          # toolchains/llvm-mingw under one shared key.
           # ----------------------------------------------------------
           - name: windows-amd64
             runner: ubuntu-latest
             cc: x86_64-w64-mingw32-gcc
+            toolchain_dir: llvm-mingw
             dist: zip-pkg
 
           - name: windows-i386
             runner: ubuntu-latest
             cc: i686-w64-mingw32-gcc
+            toolchain_dir: llvm-mingw
             dist: zip-pkg
 
           - name: windows-arm64
             runner: ubuntu-latest
             cc: aarch64-w64-mingw32-gcc
+            toolchain_dir: llvm-mingw
             dist: zip-pkg
 
           # ----------------------------------------------------------
@@ -135,8 +148,8 @@ jobs:
         if: startsWith(matrix.runner, 'ubuntu')
         uses: actions/cache@v4
         with:
-          path: toolchains/${{ matrix.name }}
-          key: toolchain-${{ matrix.name }}-${{ hashFiles('Makefile.toolchain') }}
+          path: toolchains/${{ matrix.toolchain_dir }}
+          key: toolchain-${{ matrix.toolchain_dir }}-${{ hashFiles('Makefile.toolchain') }}
 
       - name: build (cross)
         if: startsWith(matrix.runner, 'ubuntu')
