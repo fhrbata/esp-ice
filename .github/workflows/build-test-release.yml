@@ -55,7 +55,7 @@ jobs:
 
       - name: install
         run: |
-          brew install llvm curl
+          brew install llvm
           echo "$(brew --prefix llvm)/bin" >> $GITHUB_PATH
 
       - name: lint
@@ -187,7 +187,7 @@ jobs:
       - name: build (macos)
         if: startsWith(matrix.runner, 'macos')
         run: |
-          brew install coreutils cmake
+          brew install coreutils
           make STATIC=1 CC=${{ matrix.cc }} ${{ matrix.dist }}
 
       - name: verify
