@@ -1,7 +1,7 @@
 VERSION = 0.1.0
 NAME := ice
 
-O ?= build
+O ?= build/$(TRIPLE)
 DIST ?= dist
 STAGE ?= stage
 CFLAGS ?= -Wall -Werror -std=c99 -pedantic
@@ -87,8 +87,8 @@ SRCS := ice.c \
 # the binary isn't actually portable.  Fetch a musl toolchain via
 # Makefile.toolchain.  Windows uses MinGW, macOS uses system clang.
 ifdef STATIC
-DEPS_PREFIX := $(CURDIR)/deps/install
-DEPS_STAMP := $(CURDIR)/deps/.stamp
+DEPS_PREFIX := $(CURDIR)/deps/install/$(TRIPLE)
+DEPS_STAMP := $(DEPS_PREFIX)/.stamp
 BUILD_CFLAGS += -I$(DEPS_PREFIX)/include -DCURL_STATICLIB
 LIBS := -L$(DEPS_PREFIX)/lib -L$(DEPS_PREFIX)/lib64 -lcurl -lmbedtls -lmbedx509 -lmbedcrypto -ltfpsacrypto -lz
 ifeq ($(S),linux)
@@ -179,7 +179,7 @@ $(O)/%.o: cmd/build/%.c Makefile $(O)/context | $(O)
 ifdef STATIC
 $(OBJS): | $(DEPS_STAMP)
 $(DEPS_STAMP):
-	$(MAKE) -C deps S=$(S) TRIPLE=$(TRIPLE) $(if $(CROSS),CROSS=1)
+	$(MAKE) -C deps PREFIX=$(DEPS_PREFIX) S=$(S) TRIPLE=$(TRIPLE) $(if $(CROSS),CROSS=1)
 endif
 
 $(BINARY): $(OBJS) | $(O)
@@ -219,13 +219,14 @@ $(DIST)/$(PKG_NAME).zip: $(STAGE) | $(DIST)
 	cd $(STAGE) && zip -r $(abspath $@) $(NAME)-$(VERSION)
 
 deps:
-	$(MAKE) -C deps S=$(S) TRIPLE=$(TRIPLE) $(if $(CROSS),CROSS=1)
+	$(MAKE) -C deps PREFIX=$(CURDIR)/deps/install/$(TRIPLE) S=$(S) TRIPLE=$(TRIPLE) $(if $(CROSS),CROSS=1)
 
 clean:
 	rm -rf $(O) $(DIST) $(STAGE) $(T_OUT)
 
 mrproper: clean
-	$(MAKE) -C deps clean
+	rm -rf $(CURDIR)/build
+	$(MAKE) -C deps mrproper
 
 clang-format:
 	clang-format --style=file -i *.[ch] platform/posix/*.[ch] platform/win/*.[ch] cmd/*/*.[ch]

@@ -1,6 +1,6 @@
 PREFIX ?= $(CURDIR)/install
 NPROC := $(shell nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 2)
-STAMP := $(CURDIR)/.stamp
+STAMP := $(PREFIX)/.stamp
 
 # S and TRIPLE are passed by the parent Makefile.
 # CROSS=1 when target triple != build machine triple.
@@ -44,4 +44,13 @@ clean:
 	$(MAKE) -C libyaml clean
 	rm -rf $(PREFIX) $(STAMP)
 
-.PHONY: all clean zlib mbedtls curl libyaml
+# mrproper wipes the entire install tree (all TRIPLEs) and all
+# extracted sub-lib sources.  `clean` only targets the current PREFIX.
+mrproper:
+	$(MAKE) -C zlib clean
+	$(MAKE) -C mbedtls clean
+	$(MAKE) -C curl clean
+	$(MAKE) -C libyaml clean
+	rm -rf $(CURDIR)/install
+
+.PHONY: all clean mrproper zlib mbedtls curl libyaml

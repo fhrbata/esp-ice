@@ -13,6 +13,7 @@ $(TARBALL):
 
 $(PREFIX)/lib/libmbedtls.a: $(TARBALL) $(MBEDTLS_CONFIG) $(CRYPTO_CONFIG)
 	@echo "Building mbedTLS $(VERSION) (minimal config)..."
+	@rm -rf $(SRC)
 	@tar xf $(TARBALL)
 	@cd $(SRC) && \
 		cmake -B build \

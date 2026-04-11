@@ -10,6 +10,7 @@ $(TARBALL):
 
 $(PREFIX)/lib/libyaml.a: $(TARBALL)
 	@echo "Building libyaml $(VERSION)..."
+	@rm -rf $(SRC)
 	@tar xf $(TARBALL)
 	@cd $(SRC) && \
 		CC="$(CC)" ./configure --prefix=$(PREFIX) $(CONFIGURE_HOST) \

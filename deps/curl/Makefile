@@ -17,6 +17,7 @@ $(TARBALL):
 
 $(PREFIX)/lib/libcurl.a: $(TARBALL)
 	@echo "Building curl $(VERSION)..."
+	@rm -rf $(SRC)
 	@tar xf $(TARBALL)
 	@cd $(SRC) && \
 		CC="$(CC)" \

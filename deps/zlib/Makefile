@@ -10,6 +10,7 @@ $(TARBALL):
 
 $(PREFIX)/lib/libz.a: $(TARBALL)
 	@echo "Building zlib $(VERSION)..."
+	@rm -rf $(SRC)
 	@tar xf $(TARBALL)
 	@cd $(SRC) && \
 		$(if $(CROSS),CHOST=$(TRIPLE)) \
