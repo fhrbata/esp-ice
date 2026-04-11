@@ -8,8 +8,17 @@ STAMP := $(CURDIR)/.stamp
 # non-MUSL builds (Windows cross, macOS) HOST_CC is used directly.
 HOST_CC ?= $(CC)
 
-# Cross-compilation: target triple != build machine triple.
+# Derive the target triple from HOST_CC.  Prefer the compiler-name
+# prefix (e.g. aarch64-w64-mingw32-clang → aarch64-w64-mingw32) because
+# llvm-mingw's clang reports -dumpmachine as "aarch64-w64-windows-gnu",
+# which autotools' config.sub rejects.  Fall back to -dumpmachine for
+# unprefixed compilers (gcc, clang).
+HOST_CC_PREFIX := $(patsubst %-,%,$(subst $(lastword $(subst -, ,$(HOST_CC))),,$(HOST_CC)))
+ifneq ($(HOST_CC_PREFIX),)
+HOST_TRIPLE := $(HOST_CC_PREFIX)
+else
 HOST_TRIPLE := $(shell $(HOST_CC) -dumpmachine 2>/dev/null)
+endif
 BUILD_TRIPLE := $(shell cc -dumpmachine 2>/dev/null)
 ifneq ($(HOST_TRIPLE),$(BUILD_TRIPLE))
 CROSS := 1
