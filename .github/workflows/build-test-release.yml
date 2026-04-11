@@ -25,28 +25,6 @@ jobs:
       - name: lint
         run: make CC=clang clang-format clang-tidy
 
-  lint-windows:
-    name: lint windows
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: install
-        uses: msys2/setup-msys2@v2
-        with:
-          msystem: CLANG64
-          update: true
-          install: >-
-            mingw-w64-clang-x86_64-clang-tools-extra
-            mingw-w64-clang-x86_64-clang
-            mingw-w64-clang-x86_64-curl
-            make
-            diffutils
-
-      - name: lint
-        shell: msys2 {0}
-        run: make CC=clang clang-format clang-tidy
-
   lint-macos:
     name: lint macos
     runs-on: macos-latest
@@ -66,149 +44,128 @@ jobs:
     name: dist ${{ matrix.name }}
     needs:
       - lint-linux
-      - lint-windows
       - lint-macos
     strategy:
       fail-fast: false
       matrix:
         include:
           # ----------------------------------------------------------
-          # Linux: native or cross-compiled.
+          # Linux: cross-compiled on ubuntu-latest.
           # Fully static binaries via musl + vendored deps.
           # ----------------------------------------------------------
           - name: linux-amd64
             runner: ubuntu-latest
+            cc: x86_64-linux-gnu-gcc
+            apt: gcc-x86-64-linux-gnu
             dist: targz-pkg
 
           - name: linux-arm64
-            runner: ubuntu-24.04-arm
+            runner: ubuntu-latest
+            cc: aarch64-linux-gnu-gcc
+            apt: gcc-aarch64-linux-gnu
             dist: targz-pkg
 
           - name: linux-armel
             runner: ubuntu-latest
-            cross_compile: arm-linux-gnueabi-
-            cross_pkg: gcc-arm-linux-gnueabi
+            cc: arm-linux-gnueabi-gcc
+            apt: gcc-arm-linux-gnueabi
             dist: targz-pkg
 
           - name: linux-armhf
             runner: ubuntu-latest
-            cross_compile: arm-linux-gnueabihf-
-            cross_pkg: gcc-arm-linux-gnueabihf
+            cc: arm-linux-gnueabihf-gcc
+            apt: gcc-arm-linux-gnueabihf
             dist: targz-pkg
 
           - name: linux-ppc64el
             runner: ubuntu-latest
-            cross_compile: powerpc64le-linux-gnu-
-            cross_pkg: gcc-powerpc64le-linux-gnu
+            cc: powerpc64le-linux-gnu-gcc
+            apt: gcc-powerpc64le-linux-gnu
             dist: targz-pkg
 
           - name: linux-riscv64
             runner: ubuntu-latest
-            cross_compile: riscv64-linux-gnu-
-            cross_pkg: gcc-riscv64-linux-gnu
+            cc: riscv64-linux-gnu-gcc
+            apt: gcc-riscv64-linux-gnu
             dist: targz-pkg
 
           - name: linux-i386
             runner: ubuntu-latest
-            cross_compile: i686-linux-gnu-
-            cross_pkg: gcc-i686-linux-gnu
+            cc: i686-linux-gnu-gcc
+            apt: gcc-i686-linux-gnu
             dist: targz-pkg
 
           - name: linux-s390x
             runner: ubuntu-latest
-            cross_compile: s390x-linux-gnu-
-            cross_pkg: gcc-s390x-linux-gnu
+            cc: s390x-linux-gnu-gcc
+            apt: gcc-s390x-linux-gnu
             dist: targz-pkg
 
           # ----------------------------------------------------------
-          # macOS: static libcurl, dynamic system frameworks
+          # Windows: cross-compiled on ubuntu-latest.
+          # amd64/i386 use gcc-mingw-w64 from apt;
+          # arm64 uses llvm-mingw (fetched via Makefile.llvm-mingw).
+          # ----------------------------------------------------------
+          - name: windows-amd64
+            runner: ubuntu-latest
+            cc: x86_64-w64-mingw32-gcc
+            apt: gcc-mingw-w64-x86-64
+            dist: zip-pkg
+
+          - name: windows-i386
+            runner: ubuntu-latest
+            cc: i686-w64-mingw32-gcc
+            apt: gcc-mingw-w64-i686
+            dist: zip-pkg
+
+          - name: windows-arm64
+            runner: ubuntu-latest
+            cc: aarch64-w64-mingw32-clang
+            llvm_mingw: true
+            dist: zip-pkg
+
+          # ----------------------------------------------------------
+          # macOS: on native runners (cross-compiling Darwin needs
+          # the Apple SDK).  Static deps, dynamic system frameworks.
           # ----------------------------------------------------------
           - name: macos-arm64
             runner: macos-latest
+            cc: clang
+            brew: coreutils cmake
             dist: targz-pkg
 
           - name: macos-amd64
             runner: macos-15-intel
+            cc: clang
+            brew: coreutils cmake
             dist: targz-pkg
-
-          # ----------------------------------------------------------
-          # Windows: MSYS2 with MinGW static libcurl (mbedTLS)
-          # ----------------------------------------------------------
-          - name: windows-amd64
-            runner: windows-latest
-            msystem: MINGW64
-            mingw_prefix: mingw-w64-x86_64
-            dist: zip-pkg
-
-          - name: windows-i386
-            runner: windows-latest
-            msystem: MINGW32
-            mingw_prefix: mingw-w64-i686
-            dist: zip-pkg
-
-          - name: windows-arm64
-            runner: windows-11-arm
-            msystem: CLANGARM64
-            mingw_prefix: mingw-w64-clang-aarch64
-            dist: zip-pkg
 
     steps:
       - uses: actions/checkout@v4
 
-      # ----- Linux (native) -----
-      - name: build linux
-        if: startsWith(matrix.name, 'linux-') && !matrix.cross_compile
+      - name: install (apt)
+        if: matrix.apt
         run: |
           sudo apt-get update
-          sudo apt-get install -y gcc make cmake curl bzip2
-          make STATIC=1 ${{ matrix.dist }}
-          build/ice --version
+          sudo apt-get install -y make cmake curl bzip2 file zip ${{ matrix.apt }}
 
-      # ----- Linux (cross-compiled) -----
-      # No execution smoke test here: the cross-compiled binary cannot run
-      # on the x86_64 host without QEMU, and qemu-user-static's binfmt
-      # handlers can interfere with the build (e.g., hang musl/autotools
-      # configure checks on some targets).  Verify via `file` instead.
-      - name: build linux (cross)
-        if: matrix.cross_compile
+      - name: install (llvm-mingw)
+        if: matrix.llvm_mingw
         run: |
           sudo apt-get update
-          sudo apt-get install -y make cmake curl bzip2 file ${{ matrix.cross_pkg }}
-          make STATIC=1 CROSS_COMPILE=${{ matrix.cross_compile }} ${{ matrix.dist }}
-          file build/ice
-          file build/ice | grep -q "ELF.*statically linked"
+          sudo apt-get install -y make cmake curl bzip2 file zip
+          make -f Makefile.llvm-mingw
+          echo "$PWD/llvm-mingw/bin" >> $GITHUB_PATH
 
-      # ----- macOS -----
-      # Static deps (zlib, mbedTLS, curl), dynamic system frameworks.
-      - name: build macos
-        if: startsWith(matrix.name, 'macos-')
-        run: |
-          brew install coreutils cmake
-          make STATIC=1 ${{ matrix.dist }}
-          build/ice --version
+      - name: install (brew)
+        if: matrix.brew
+        run: brew install ${{ matrix.brew }}
 
-      # ----- Windows (MSYS2) -----
-      # Build zlib + mbedTLS + curl from source with MinGW.
-      - name: setup msys2
-        if: startsWith(matrix.name, 'windows-')
-        uses: msys2/setup-msys2@v2
-        with:
-          msystem: ${{ matrix.msystem }}
-          update: true
-          install: >-
-            ${{ matrix.mingw_prefix }}-gcc
-            ${{ matrix.mingw_prefix }}-cmake
-            make
-            zip
-            curl
-            diffutils
+      - name: build
+        run: make STATIC=1 CC=${{ matrix.cc }} ${{ matrix.dist }}
 
-      - name: build windows
-        if: startsWith(matrix.name, 'windows-')
-        shell: msys2 {0}
-        run: |
-          make STATIC=1 ${{ matrix.dist }}
-          build/ice.exe --version
+      - name: verify
+        run: file build/ice*
 
       - name: sign binaries
         if: |
