@@ -15,7 +15,7 @@ jobs:
     name: lint linux
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: install
         run: |
@@ -25,11 +25,33 @@ jobs:
       - name: lint
         run: make CC=clang clang-format clang-tidy
 
+  lint-windows:
+    name: lint windows
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: install
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: CLANG64
+          update: true
+          install: >-
+            mingw-w64-clang-x86_64-clang-tools-extra
+            mingw-w64-clang-x86_64-clang
+            mingw-w64-clang-x86_64-curl
+            make
+            diffutils
+
+      - name: lint
+        shell: msys2 {0}
+        run: make CC=clang clang-format clang-tidy
+
   lint-macos:
     name: lint macos
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: install
         run: |
@@ -44,6 +66,7 @@ jobs:
     name: dist ${{ matrix.name }}
     needs:
       - lint-linux
+      - lint-windows
       - lint-macos
     strategy:
       fail-fast: false
@@ -141,13 +164,13 @@ jobs:
             dist: targz-pkg
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # --- Linux/Windows: fetch toolchain via Makefile.toolchain ---
 
       - name: cache toolchain
         if: startsWith(matrix.runner, 'ubuntu')
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: toolchains/${{ matrix.toolchain }}
           key: toolchain-${{ matrix.toolchain }}-${{ hashFiles('Makefile.toolchain') }}
@@ -190,7 +213,7 @@ jobs:
           notarization-team-id: ${{ secrets.MACOS_CS_APPLE_TEAM_ID }}
 
       - name: upload
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.name }}
           path: dist/*
@@ -203,12 +226,12 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
       - name: download artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: artifacts
 
