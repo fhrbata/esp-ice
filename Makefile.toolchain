@@ -8,15 +8,13 @@
 #
 # Layout:
 #
-#     toolchains/download/<original-filename>   — cached tarballs
-#     toolchains/<install-dir>/                 — extracted tree
-#     toolchains/<target>.downloaded            — stamp: curl ok
-#     toolchains/<target>.unpacked              — stamp: extract ok
+#     toolchains/<install-dir>/    — extracted tree
+#     toolchains/<target>.done     — stamp: fetch + extract ok
 #
-# The download is kept around after extraction, so clearing an
-# extracted tree and re-running the target re-extracts from the local
-# cache without hitting the network.  Run `make -f Makefile.toolchain
-# clean` to wipe everything.
+# The archive is streamed from curl directly into tar, so there is
+# no on-disk tarball cache: clearing an extracted tree and re-running
+# the target re-downloads.  Run `make -f Makefile.toolchain clean` to
+# wipe everything.
 #
 # Run without arguments (or with `help`) for the catalogue of targets.
 #
@@ -61,86 +59,70 @@ clean:
 # ---------------------------------------------------------------------------
 
 TOOLCHAINS_DIR := $(CURDIR)/toolchains
-DOWNLOAD_DIR   := $(TOOLCHAINS_DIR)/download
 
 # ---------------------------------------------------------------------------
 # Per-target configuration.
 #
-# Each target T declares three variables:
+# Each target T declares two variables:
 #
 #     T-url    — upstream URL to fetch
-#     T-arch   — local path of the downloaded tarball (kept after extract)
 #     T-dir    — local path the extracted tree lives in
 #
 # For Linux, -dir matches the target name one-to-one.  For Windows, the
 # three arch-specific targets of a given runtime flavour (msvcrt, ucrt)
 # all point -dir at the same llvm-mingw-<flavour> install; each arch
-# target still has its own -url/-arch/-dir trio, so each one will fetch
-# and extract the shared install independently (3× cost, one per
-# target).  That's fine — in CI each matrix job runs exactly one target,
-# and developers almost never build more than one Windows arch locally.
+# target still has its own -url/-dir pair, so each one fetches and
+# extracts the shared install independently (3× cost, one per target).
+# That's fine — in CI each matrix job runs exactly one target, and
+# developers almost never build more than one Windows arch locally.
 # ---------------------------------------------------------------------------
 
 # ----- Linux (musl.cc) -----
 
 linux-amd64-url   := https://github.com/musl-cc/musl.cc/releases/download/v0.0.1/x86_64-linux-musl-cross.tgz
-linux-amd64-arch  := $(DOWNLOAD_DIR)/x86_64-linux-musl-cross.tgz
 linux-amd64-dir   := $(TOOLCHAINS_DIR)/linux-amd64
 
 linux-arm64-url   := https://github.com/musl-cc/musl.cc/releases/download/v0.0.1/aarch64-linux-musl-cross.tgz
-linux-arm64-arch  := $(DOWNLOAD_DIR)/aarch64-linux-musl-cross.tgz
 linux-arm64-dir   := $(TOOLCHAINS_DIR)/linux-arm64
 
 linux-armel-url   := https://github.com/musl-cc/musl.cc/releases/download/v0.0.1/arm-linux-musleabi-cross.tgz
-linux-armel-arch  := $(DOWNLOAD_DIR)/arm-linux-musleabi-cross.tgz
 linux-armel-dir   := $(TOOLCHAINS_DIR)/linux-armel
 
 linux-armhf-url   := https://github.com/musl-cc/musl.cc/releases/download/v0.0.1/arm-linux-musleabihf-cross.tgz
-linux-armhf-arch  := $(DOWNLOAD_DIR)/arm-linux-musleabihf-cross.tgz
 linux-armhf-dir   := $(TOOLCHAINS_DIR)/linux-armhf
 
 linux-i386-url    := https://github.com/musl-cc/musl.cc/releases/download/v0.0.1/i686-linux-musl-cross.tgz
-linux-i386-arch   := $(DOWNLOAD_DIR)/i686-linux-musl-cross.tgz
 linux-i386-dir    := $(TOOLCHAINS_DIR)/linux-i386
 
 linux-ppc64el-url  := https://github.com/musl-cc/musl.cc/releases/download/v0.0.1/powerpc64le-linux-musl-cross.tgz
-linux-ppc64el-arch := $(DOWNLOAD_DIR)/powerpc64le-linux-musl-cross.tgz
 linux-ppc64el-dir  := $(TOOLCHAINS_DIR)/linux-ppc64el
 
 linux-riscv64-url  := https://github.com/musl-cc/musl.cc/releases/download/v0.0.1/riscv64-linux-musl-cross.tgz
-linux-riscv64-arch := $(DOWNLOAD_DIR)/riscv64-linux-musl-cross.tgz
 linux-riscv64-dir  := $(TOOLCHAINS_DIR)/linux-riscv64
 
 linux-s390x-url   := https://github.com/musl-cc/musl.cc/releases/download/v0.0.1/s390x-linux-musl-cross.tgz
-linux-s390x-arch  := $(DOWNLOAD_DIR)/s390x-linux-musl-cross.tgz
 linux-s390x-dir   := $(TOOLCHAINS_DIR)/linux-s390x
 
 # ----- Windows (llvm-mingw, msvcrt runtime) -----
 
 windows-amd64-msvcrt-url  := https://github.com/mstorsjo/llvm-mingw/releases/download/20251216/llvm-mingw-20251216-msvcrt-ubuntu-22.04-x86_64.tar.xz
-windows-amd64-msvcrt-arch := $(DOWNLOAD_DIR)/llvm-mingw-20251216-msvcrt-ubuntu-22.04-x86_64.tar.xz
 windows-amd64-msvcrt-dir  := $(TOOLCHAINS_DIR)/llvm-mingw-msvcrt
 
 windows-i386-msvcrt-url   := https://github.com/mstorsjo/llvm-mingw/releases/download/20251216/llvm-mingw-20251216-msvcrt-ubuntu-22.04-x86_64.tar.xz
-windows-i386-msvcrt-arch  := $(DOWNLOAD_DIR)/llvm-mingw-20251216-msvcrt-ubuntu-22.04-x86_64.tar.xz
 windows-i386-msvcrt-dir   := $(TOOLCHAINS_DIR)/llvm-mingw-msvcrt
 
 windows-arm64-msvcrt-url  := https://github.com/mstorsjo/llvm-mingw/releases/download/20251216/llvm-mingw-20251216-msvcrt-ubuntu-22.04-x86_64.tar.xz
-windows-arm64-msvcrt-arch := $(DOWNLOAD_DIR)/llvm-mingw-20251216-msvcrt-ubuntu-22.04-x86_64.tar.xz
 windows-arm64-msvcrt-dir  := $(TOOLCHAINS_DIR)/llvm-mingw-msvcrt
 
 # ----- Windows (llvm-mingw, ucrt runtime) -----
 
 windows-amd64-ucrt-url    := https://github.com/mstorsjo/llvm-mingw/releases/download/20251216/llvm-mingw-20251216-ucrt-ubuntu-22.04-x86_64.tar.xz
-windows-amd64-ucrt-arch   := $(DOWNLOAD_DIR)/llvm-mingw-20251216-ucrt-ubuntu-22.04-x86_64.tar.xz
 windows-amd64-ucrt-dir    := $(TOOLCHAINS_DIR)/llvm-mingw-ucrt
 
 windows-i386-ucrt-url     := https://github.com/mstorsjo/llvm-mingw/releases/download/20251216/llvm-mingw-20251216-ucrt-ubuntu-22.04-x86_64.tar.xz
-windows-i386-ucrt-arch    := $(DOWNLOAD_DIR)/llvm-mingw-20251216-ucrt-ubuntu-22.04-x86_64.tar.xz
 windows-i386-ucrt-dir     := $(TOOLCHAINS_DIR)/llvm-mingw-ucrt
 
 windows-arm64-ucrt-url    := https://github.com/mstorsjo/llvm-mingw/releases/download/20251216/llvm-mingw-20251216-ucrt-ubuntu-22.04-x86_64.tar.xz
-windows-arm64-ucrt-arch   := $(DOWNLOAD_DIR)/llvm-mingw-20251216-ucrt-ubuntu-22.04-x86_64.tar.xz
 windows-arm64-ucrt-dir    := $(TOOLCHAINS_DIR)/llvm-mingw-ucrt
 
 TOOLCHAINS := linux-amd64 linux-arm64 linux-armel linux-armhf \
@@ -150,46 +132,29 @@ TOOLCHAINS := linux-amd64 linux-arm64 linux-armel linux-armhf \
 
 .PHONY: $(TOOLCHAINS)
 
-# Keep the .downloaded and .unpacked stamps around after they've been
-# used.  Without this, Make considers them intermediate files of the
-# chain reaching the phony target and auto-removes them at end of run,
-# printing a `rm <path>` message on stdout.  That message then gets
-# captured by `eval "$(make -f Makefile.toolchain …)"` and re-executed
-# as a shell command, failing because the file is already gone.
-.SECONDARY:
-
-# ---------------------------------------------------------------------------
-# Pipeline: phony target → .unpacked stamp → .downloaded stamp → curl
-# ---------------------------------------------------------------------------
-
-$(TOOLCHAINS): %: $(TOOLCHAINS_DIR)/%.unpacked
-	@echo "export PATH=\"$($*-dir)/bin:\$$PATH\""
-
-# Extract.  Dispatches on the archive filename suffix so we don't need
-# a separate per-target tar-flag variable.  Add more cases here if we
-# ever ship a toolchain in a different format.
-$(TOOLCHAINS_DIR)/%.unpacked: $(TOOLCHAINS_DIR)/%.downloaded | $(TOOLCHAINS_DIR)
-	@echo "Unpacking $($*-arch)..." >&2
-	@rm -rf "$($*-dir)"
-	@mkdir -p "$($*-dir)"
-	@case "$($*-arch)" in \
-	    *.tgz|*.tar.gz)   tar -xzf "$($*-arch)" -C "$($*-dir)" --strip-components=1 ;; \
-	    *.tbz2|*.tar.bz2) tar -xjf "$($*-arch)" -C "$($*-dir)" --strip-components=1 ;; \
-	    *.txz|*.tar.xz)   tar -xJf "$($*-arch)" -C "$($*-dir)" --strip-components=1 ;; \
-	    *.zip)            unzip -q "$($*-arch)" -d "$($*-dir)" ;; \
-	    *) echo "Unknown archive format: $($*-arch)" >&2; exit 1 ;; \
-	esac
-	@touch $@
-
-# Download.  The stamp depends on Makefile.toolchain so editing any URL
-# here auto-invalidates the affected downloads on the next invocation.
-$(TOOLCHAINS_DIR)/%.downloaded: Makefile.toolchain | $(TOOLCHAINS_DIR) $(DOWNLOAD_DIR)
-	@echo "Downloading $($*-url)..." >&2
-	@curl -fL "$($*-url)" -o "$($*-arch)"
-	@touch $@
-
 $(TOOLCHAINS_DIR):
 	@mkdir -p $@
 
-$(DOWNLOAD_DIR):
-	@mkdir -p $@
+$(TOOLCHAINS): %: $(TOOLCHAINS_DIR)/%.done
+	@echo "export PATH=\"$($*-dir)/bin:\$$PATH\""
+
+# Fetch and extract.  The archive is streamed from curl into tar, so
+# nothing is cached on disk — re-running a target re-downloads.  The
+# case dispatches on the URL suffix because GNU tar doesn't reliably
+# auto-detect compression when reading from stdin; .zip would need
+# spooling to a file first (unzip can't read stdin).  pipefail is
+# required so curl failures bubble past the successful tar that would
+# otherwise "succeed" on an empty pipe.  The stamp depends on
+# Makefile.toolchain so editing any URL here auto-invalidates the
+# affected toolchain on the next invocation.
+$(TOOLCHAINS_DIR)/%.done: Makefile.toolchain | $(TOOLCHAINS_DIR)
+	@echo "Fetching $($*-url)..." >&2
+	@rm -rf "$($*-dir)"
+	@mkdir -p "$($*-dir)"
+	@set -o pipefail; case "$($*-url)" in \
+	    *.tgz|*.tar.gz)   curl -fsSL "$($*-url)" | tar -xzf - -C "$($*-dir)" --strip-components=1 ;; \
+	    *.tbz2|*.tar.bz2) curl -fsSL "$($*-url)" | tar -xjf - -C "$($*-dir)" --strip-components=1 ;; \
+	    *.txz|*.tar.xz)   curl -fsSL "$($*-url)" | tar -xJf - -C "$($*-dir)" --strip-components=1 ;; \
+	    *) echo "Unknown archive format: $($*-url)" >&2; exit 1 ;; \
+	esac
+	@touch $@
