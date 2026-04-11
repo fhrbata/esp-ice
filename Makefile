@@ -11,13 +11,12 @@ T ?= t/
 PFLAGS ?=
 T_OUT ?= t_out
 
-# Cross-compilation: make STATIC=1 CROSS_COMPILE=arm-linux-gnueabihf- targz-pkg
-ifdef CROSS_COMPILE
-CC := $(CROSS_COMPILE)gcc
-endif
+# Original user-provided CC (preserved before the musl-gcc override
+# below, used to build musl in the deps tree).
+HOST_CC := $(CC)
 
-_CC_PREFIX := $(subst $(lastword $(subst -, ,$(CC))),,$(CC))
-WINDRES := $(_CC_PREFIX)windres
+CROSS_COMPILE := $(subst $(lastword $(subst -, ,$(CC))),,$(CC))
+WINDRES := $(CROSS_COMPILE)windres
 
 BUILD_CFLAGS = $(CFLAGS) $(CFLAGS_APPEND)
 BUILD_LDFLAGS = $(LDFLAGS) $(LDFLAGS_APPEND)
@@ -61,6 +60,11 @@ else
 	S ?= linux
 endif
 
+# Cross-compilation: target triple != build machine triple.
+ifneq ($(DUMPMACHINE),$(shell cc -dumpmachine 2>/dev/null))
+CROSS := 1
+endif
+
 PKG_NAME := $(NAME)-$(VERSION)-$(S)-$(ARCH)$(PKG_SUFFIX)
 
 SRCS := ice.c \
@@ -83,7 +87,10 @@ DEPS_STAMP := $(CURDIR)/deps/.stamp
 BUILD_CFLAGS += -I$(DEPS_PREFIX)/include -DCURL_STATICLIB
 LIBS := -L$(DEPS_PREFIX)/lib -L$(DEPS_PREFIX)/lib64 -lcurl -lmbedtls -lmbedx509 -lmbedcrypto -ltfpsacrypto -lz
 ifeq ($(S),linux)
-CC := $(DEPS_PREFIX)/bin/musl-gcc
+# Override so that CC passed on the command line (for cross-compiling)
+# is still substituted with musl-gcc for the final binary link.  HOST_CC
+# above captures the user's original CC for building musl itself.
+override CC := $(DEPS_PREFIX)/bin/musl-gcc
 LDFLAGS += -static
 MUSL := 1
 # ppc64le: musl requires 64-bit long double (not IEEE 128-bit)
@@ -91,7 +98,7 @@ ifeq ($(ARCH),ppc64el)
 BUILD_CFLAGS += -mlong-double-64
 endif
 # i386: musl's cross-compiled libc.a doesn't provide __stack_chk_fail_local
-ifdef CROSS_COMPILE
+ifdef CROSS
 ifeq ($(ARCH),i386)
 BUILD_CFLAGS += -fno-stack-protector
 endif
@@ -179,7 +186,7 @@ $(O)/%.o: cmd/build/%.c Makefile $(O)/context | $(O)
 ifdef STATIC
 $(OBJS): | $(DEPS_STAMP)
 $(DEPS_STAMP):
-	$(MAKE) -C deps S=$(S) $(if $(MUSL),MUSL=1)
+	$(MAKE) -C deps S=$(S) $(if $(MUSL),MUSL=1) HOST_CC="$(HOST_CC)"
 endif
 
 $(BINARY): $(OBJS) | $(O)
@@ -219,7 +226,7 @@ $(DIST)/$(PKG_NAME).zip: $(STAGE) | $(DIST)
 	cd $(STAGE) && zip -r $(abspath $@) $(NAME)-$(VERSION)
 
 deps:
-	$(MAKE) -C deps S=$(S) $(if $(MUSL),MUSL=1)
+	$(MAKE) -C deps S=$(S) $(if $(MUSL),MUSL=1) HOST_CC="$(HOST_CC)"
 
 clean:
 	rm -rf $(O) $(DIST) $(STAGE) $(T_OUT)

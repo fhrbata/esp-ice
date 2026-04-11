@@ -2,56 +2,75 @@ PREFIX ?= $(CURDIR)/install
 NPROC := $(shell nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 2)
 STAMP := $(CURDIR)/.stamp
 
-# MUSL=1: build musl first, use musl-gcc for all other deps.
-# For cross-compilation, HOST_CC is the cross-compiler (used to build musl);
-# after musl is built, CC becomes musl-gcc (which wraps the cross-compiler).
-HOST_CC := $(if $(CROSS_COMPILE),$(CROSS_COMPILE)gcc,$(CC))
+# HOST_CC is the user's compiler, passed explicitly from the parent
+# Makefile.  For MUSL builds, musl is built with HOST_CC first and then
+# everything else is compiled with musl-gcc (which wraps HOST_CC).  For
+# non-MUSL builds (Windows cross, macOS) HOST_CC is used directly.
+HOST_CC ?= $(CC)
 
-ifdef CROSS_COMPILE
-HOST_TRIPLE := $(patsubst %-,%,$(CROSS_COMPILE))
+# Cross-compilation: target triple != build machine triple.
+HOST_TRIPLE := $(shell $(HOST_CC) -dumpmachine 2>/dev/null)
+BUILD_TRIPLE := $(shell cc -dumpmachine 2>/dev/null)
+ifneq ($(HOST_TRIPLE),$(BUILD_TRIPLE))
+CROSS := 1
 CONFIGURE_HOST := --host=$(HOST_TRIPLE)
-CMAKE_CROSS_FLAGS := -DCMAKE_SYSTEM_NAME=Linux
 # Static linking for configure tests: on i386 musl-gcc, the hidden
 # __stack_chk_fail_local symbol isn't available for dynamic linking,
 # so configure link tests would fail without -static.
 CROSS_STATIC := -static
+# CMake cross-compilation: set target system name from S.
+ifeq ($(S),linux)
+CMAKE_CROSS_FLAGS := -DCMAKE_SYSTEM_NAME=Linux
+else ifeq ($(S),win)
+CMAKE_CROSS_FLAGS := -DCMAKE_SYSTEM_NAME=Windows
+else ifeq ($(S),macos)
+CMAKE_CROSS_FLAGS := -DCMAKE_SYSTEM_NAME=Darwin
+endif
 endif
 
 # ppc64le: Debian Trixie GCC defaults to IEEE 128-bit long double,
 # which musl does not support.  Force 64-bit long double everywhere.
-ifneq ($(findstring powerpc64le,$(shell $(HOST_CC) -dumpmachine 2>/dev/null)),)
+ifneq ($(findstring powerpc64le,$(HOST_TRIPLE)),)
 export CFLAGS += -mlong-double-64
 endif
 
 # i386: musl's cross-compiled libc.a doesn't provide __stack_chk_fail_local.
 # Disable stack protector to avoid generating references to it.
-ifneq ($(findstring i686,$(shell $(HOST_CC) -dumpmachine 2>/dev/null)),)
+ifdef CROSS
+ifneq ($(findstring i686,$(HOST_TRIPLE)),)
 export CFLAGS += -fno-stack-protector
 endif
-
-ifdef MUSL
-MUSL_DEP := musl
-CC := $(PREFIX)/bin/musl-gcc
 endif
 
-export PREFIX CC NPROC S HOST_TRIPLE CONFIGURE_HOST CMAKE_CROSS_FLAGS CROSS_STATIC
+# MUSL builds: after musl is built, everything else uses musl-gcc.
+# Override beats the CC command-line variable inherited from the parent
+# make via MAKEFLAGS.
+ifdef MUSL
+MUSL_DEP := musl
+override CC := $(PREFIX)/bin/musl-gcc
+endif
+
+export PREFIX NPROC S HOST_TRIPLE CONFIGURE_HOST CMAKE_CROSS_FLAGS CROSS_STATIC
 
 all: $(STAMP)
 
 $(STAMP): curl libyaml
 	@touch $@
 
+# Explicitly pass CC on each sub-make command line so that the override
+# above (and the non-MUSL HOST_CC case) wins over any CC that leaks down
+# through MAKEFLAGS from the user-level make invocation.
 curl: mbedtls zlib
-	$(MAKE) -C curl
+	$(MAKE) -C curl CC="$(CC)"
 
 mbedtls: $(MUSL_DEP)
-	$(MAKE) -C mbedtls
+	$(MAKE) -C mbedtls CC="$(CC)"
 
 zlib: $(MUSL_DEP)
-	$(MAKE) -C zlib
+	$(MAKE) -C zlib CC="$(CC)"
 
 libyaml: $(MUSL_DEP)
-	$(MAKE) -C libyaml
+	$(MAKE) -C libyaml CC="$(CC)"
 
 musl:
 	$(MAKE) -C musl CC="$(HOST_CC)"
