@@ -22,6 +22,12 @@
 # musl-based toolchains are fetched through musl-cc/musl.cc on GitHub
 # (byte-perfect mirror, served from GitHub's CDN).
 
+# `set -o pipefail` in the extract recipe is a bash/modern-dash
+# builtin, but the dash shipped with Ubuntu 22.04 (0.5.11, the version
+# on `ubuntu-latest` runners today) doesn't have it yet.  Force bash
+# for every recipe in this file so we don't trip on that.
+SHELL := /bin/bash
+
 .DEFAULT_GOAL := help
 
 .PHONY: help clean
