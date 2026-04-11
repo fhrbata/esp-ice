@@ -1,16 +1,28 @@
 # Makefile.toolchain
 #
-# Downloads prebuilt cross-compilation toolchains under toolchains/ and
-# prints an `export PATH=…` line on stdout so it can be eval-ed:
+# Downloads prebuilt cross-compilation toolchains and prints an
+# `export PATH=…` line on stdout so it can be eval-ed:
 #
 #     eval "$(make -f Makefile.toolchain linux-arm64)"
 #     make STATIC=1 CC=aarch64-linux-musl-gcc targz-pkg
 #
+# Layout:
+#
+#     toolchains/download/<original-filename>   — cached tarballs
+#     toolchains/<install-dir>/                 — extracted tree
+#     toolchains/<target>.downloaded            — stamp: curl ok
+#     toolchains/<target>.unpacked              — stamp: extract ok
+#
+# The download is kept around after extraction, so clearing an
+# extracted tree and re-running the target re-extracts from the local
+# cache without hitting the network.  Run `make -f Makefile.toolchain
+# clean` to wipe everything.
+#
 # Run without arguments (or with `help`) for the catalogue of targets.
 #
-# musl.cc is unreachable from GitHub Actions' Azure IP ranges, so we
-# fetch the musl-based toolchains through the musl-cc/musl.cc GitHub
-# mirror — byte-perfect and on GitHub's CDN.
+# musl.cc is unreachable from GitHub Actions' Azure IP ranges, so the
+# musl-based toolchains are fetched through musl-cc/musl.cc on GitHub
+# (byte-perfect mirror, served from GitHub's CDN).
 
 .DEFAULT_GOAL := help
 
@@ -24,73 +36,152 @@ help:
 	@echo '    make STATIC=1 CC=<compiler> targz-pkg'
 	@echo ''
 	@echo 'LINUX TARGETS (musl.cc, gcc):'
-	@echo '    linux-amd64        CC=x86_64-linux-musl-gcc'
-	@echo '    linux-arm64        CC=aarch64-linux-musl-gcc'
-	@echo '    linux-armel        CC=arm-linux-musleabi-gcc'
-	@echo '    linux-armhf        CC=arm-linux-musleabihf-gcc'
-	@echo '    linux-i386         CC=i686-linux-musl-gcc'
-	@echo '    linux-ppc64el      CC=powerpc64le-linux-musl-gcc'
-	@echo '    linux-riscv64      CC=riscv64-linux-musl-gcc'
-	@echo '    linux-s390x        CC=s390x-linux-musl-gcc'
+	@echo '    linux-amd64              CC=x86_64-linux-musl-gcc'
+	@echo '    linux-arm64              CC=aarch64-linux-musl-gcc'
+	@echo '    linux-armel              CC=arm-linux-musleabi-gcc'
+	@echo '    linux-armhf              CC=arm-linux-musleabihf-gcc'
+	@echo '    linux-i386               CC=i686-linux-musl-gcc'
+	@echo '    linux-ppc64el            CC=powerpc64le-linux-musl-gcc'
+	@echo '    linux-riscv64            CC=riscv64-linux-musl-gcc'
+	@echo '    linux-s390x              CC=s390x-linux-musl-gcc'
 	@echo ''
 	@echo 'WINDOWS TARGETS (llvm-mingw, gcc/clang):'
-	@echo '    windows-amd64      CC=x86_64-w64-mingw32-gcc'
-	@echo '    windows-i386       CC=i686-w64-mingw32-gcc'
-	@echo '    windows-arm64      CC=aarch64-w64-mingw32-gcc'
+	@echo '    windows-amd64-msvcrt     CC=x86_64-w64-mingw32-gcc    (msvcrt runtime, XP+)'
+	@echo '    windows-i386-msvcrt      CC=i686-w64-mingw32-gcc      (msvcrt runtime, XP+)'
+	@echo '    windows-arm64-msvcrt     CC=aarch64-w64-mingw32-gcc   (msvcrt runtime, XP+)'
+	@echo '    windows-amd64-ucrt       CC=x86_64-w64-mingw32-gcc    (ucrt runtime, Win10+)'
+	@echo '    windows-i386-ucrt        CC=i686-w64-mingw32-gcc      (ucrt runtime, Win10+)'
+	@echo '    windows-arm64-ucrt       CC=aarch64-w64-mingw32-gcc   (ucrt runtime, Win10+)'
 
 clean:
 	@rm -rf $(CURDIR)/toolchains
 
 # ---------------------------------------------------------------------------
-# Linux — one musl.cc tarball per target.
-#
-# Each target X has a matching `X-URL` variable below.  The static
-# pattern rule then uses GNU Make's computed variable reference —
-# $(linux-$*-URL) — to look the URL up at recipe expansion time.
+# Paths
 # ---------------------------------------------------------------------------
 
-linux-amd64-URL   := https://github.com/musl-cc/musl.cc/releases/download/v0.0.1/x86_64-linux-musl-cross.tgz
-linux-arm64-URL   := https://github.com/musl-cc/musl.cc/releases/download/v0.0.1/aarch64-linux-musl-cross.tgz
-linux-armel-URL   := https://github.com/musl-cc/musl.cc/releases/download/v0.0.1/arm-linux-musleabi-cross.tgz
-linux-armhf-URL   := https://github.com/musl-cc/musl.cc/releases/download/v0.0.1/arm-linux-musleabihf-cross.tgz
-linux-i386-URL    := https://github.com/musl-cc/musl.cc/releases/download/v0.0.1/i686-linux-musl-cross.tgz
-linux-ppc64el-URL := https://github.com/musl-cc/musl.cc/releases/download/v0.0.1/powerpc64le-linux-musl-cross.tgz
-linux-riscv64-URL := https://github.com/musl-cc/musl.cc/releases/download/v0.0.1/riscv64-linux-musl-cross.tgz
-linux-s390x-URL   := https://github.com/musl-cc/musl.cc/releases/download/v0.0.1/s390x-linux-musl-cross.tgz
+TOOLCHAINS_DIR := $(CURDIR)/toolchains
+DOWNLOAD_DIR   := $(TOOLCHAINS_DIR)/download
 
-LINUX_TARGETS := linux-amd64 linux-arm64 linux-armel linux-armhf \
-                 linux-i386 linux-ppc64el linux-riscv64 linux-s390x
+# ---------------------------------------------------------------------------
+# Per-target configuration.
+#
+# Each target T declares three variables:
+#
+#     T-url    — upstream URL to fetch
+#     T-arch   — local path of the downloaded tarball (kept after extract)
+#     T-dir    — local path the extracted tree lives in
+#
+# For Linux, -dir matches the target name one-to-one.  For Windows, the
+# three arch-specific targets of a given runtime flavour (msvcrt, ucrt)
+# all point -dir at the same llvm-mingw-<flavour> install; each arch
+# target still has its own -url/-arch/-dir trio, so each one will fetch
+# and extract the shared install independently (3× cost, one per
+# target).  That's fine — in CI each matrix job runs exactly one target,
+# and developers almost never build more than one Windows arch locally.
+# ---------------------------------------------------------------------------
 
-.PHONY: $(LINUX_TARGETS)
+# ----- Linux (musl.cc) -----
 
-$(LINUX_TARGETS): linux-%: $(CURDIR)/toolchains/linux-%/.done
-	@echo "export PATH=\"$(CURDIR)/toolchains/linux-$*/bin:\$$PATH\""
+linux-amd64-url   := https://github.com/musl-cc/musl.cc/releases/download/v0.0.1/x86_64-linux-musl-cross.tgz
+linux-amd64-arch  := $(DOWNLOAD_DIR)/x86_64-linux-musl-cross.tgz
+linux-amd64-dir   := $(TOOLCHAINS_DIR)/linux-amd64
 
-$(CURDIR)/toolchains/linux-%/.done: Makefile.toolchain
-	@rm -rf $(@D)
-	@echo "Downloading and installing linux-$* toolchain..." >&2
-	@mkdir -p $(@D)
-	@curl -fL $(linux-$*-URL) | tar -xz -C $(@D) --strip-components=1
+linux-arm64-url   := https://github.com/musl-cc/musl.cc/releases/download/v0.0.1/aarch64-linux-musl-cross.tgz
+linux-arm64-arch  := $(DOWNLOAD_DIR)/aarch64-linux-musl-cross.tgz
+linux-arm64-dir   := $(TOOLCHAINS_DIR)/linux-arm64
+
+linux-armel-url   := https://github.com/musl-cc/musl.cc/releases/download/v0.0.1/arm-linux-musleabi-cross.tgz
+linux-armel-arch  := $(DOWNLOAD_DIR)/arm-linux-musleabi-cross.tgz
+linux-armel-dir   := $(TOOLCHAINS_DIR)/linux-armel
+
+linux-armhf-url   := https://github.com/musl-cc/musl.cc/releases/download/v0.0.1/arm-linux-musleabihf-cross.tgz
+linux-armhf-arch  := $(DOWNLOAD_DIR)/arm-linux-musleabihf-cross.tgz
+linux-armhf-dir   := $(TOOLCHAINS_DIR)/linux-armhf
+
+linux-i386-url    := https://github.com/musl-cc/musl.cc/releases/download/v0.0.1/i686-linux-musl-cross.tgz
+linux-i386-arch   := $(DOWNLOAD_DIR)/i686-linux-musl-cross.tgz
+linux-i386-dir    := $(TOOLCHAINS_DIR)/linux-i386
+
+linux-ppc64el-url  := https://github.com/musl-cc/musl.cc/releases/download/v0.0.1/powerpc64le-linux-musl-cross.tgz
+linux-ppc64el-arch := $(DOWNLOAD_DIR)/powerpc64le-linux-musl-cross.tgz
+linux-ppc64el-dir  := $(TOOLCHAINS_DIR)/linux-ppc64el
+
+linux-riscv64-url  := https://github.com/musl-cc/musl.cc/releases/download/v0.0.1/riscv64-linux-musl-cross.tgz
+linux-riscv64-arch := $(DOWNLOAD_DIR)/riscv64-linux-musl-cross.tgz
+linux-riscv64-dir  := $(TOOLCHAINS_DIR)/linux-riscv64
+
+linux-s390x-url   := https://github.com/musl-cc/musl.cc/releases/download/v0.0.1/s390x-linux-musl-cross.tgz
+linux-s390x-arch  := $(DOWNLOAD_DIR)/s390x-linux-musl-cross.tgz
+linux-s390x-dir   := $(TOOLCHAINS_DIR)/linux-s390x
+
+# ----- Windows (llvm-mingw, msvcrt runtime) -----
+
+windows-amd64-msvcrt-url  := https://github.com/mstorsjo/llvm-mingw/releases/download/20251216/llvm-mingw-20251216-msvcrt-ubuntu-22.04-x86_64.tar.xz
+windows-amd64-msvcrt-arch := $(DOWNLOAD_DIR)/llvm-mingw-20251216-msvcrt-ubuntu-22.04-x86_64.tar.xz
+windows-amd64-msvcrt-dir  := $(TOOLCHAINS_DIR)/llvm-mingw-msvcrt
+
+windows-i386-msvcrt-url   := https://github.com/mstorsjo/llvm-mingw/releases/download/20251216/llvm-mingw-20251216-msvcrt-ubuntu-22.04-x86_64.tar.xz
+windows-i386-msvcrt-arch  := $(DOWNLOAD_DIR)/llvm-mingw-20251216-msvcrt-ubuntu-22.04-x86_64.tar.xz
+windows-i386-msvcrt-dir   := $(TOOLCHAINS_DIR)/llvm-mingw-msvcrt
+
+windows-arm64-msvcrt-url  := https://github.com/mstorsjo/llvm-mingw/releases/download/20251216/llvm-mingw-20251216-msvcrt-ubuntu-22.04-x86_64.tar.xz
+windows-arm64-msvcrt-arch := $(DOWNLOAD_DIR)/llvm-mingw-20251216-msvcrt-ubuntu-22.04-x86_64.tar.xz
+windows-arm64-msvcrt-dir  := $(TOOLCHAINS_DIR)/llvm-mingw-msvcrt
+
+# ----- Windows (llvm-mingw, ucrt runtime) -----
+
+windows-amd64-ucrt-url    := https://github.com/mstorsjo/llvm-mingw/releases/download/20251216/llvm-mingw-20251216-ucrt-ubuntu-22.04-x86_64.tar.xz
+windows-amd64-ucrt-arch   := $(DOWNLOAD_DIR)/llvm-mingw-20251216-ucrt-ubuntu-22.04-x86_64.tar.xz
+windows-amd64-ucrt-dir    := $(TOOLCHAINS_DIR)/llvm-mingw-ucrt
+
+windows-i386-ucrt-url     := https://github.com/mstorsjo/llvm-mingw/releases/download/20251216/llvm-mingw-20251216-ucrt-ubuntu-22.04-x86_64.tar.xz
+windows-i386-ucrt-arch    := $(DOWNLOAD_DIR)/llvm-mingw-20251216-ucrt-ubuntu-22.04-x86_64.tar.xz
+windows-i386-ucrt-dir     := $(TOOLCHAINS_DIR)/llvm-mingw-ucrt
+
+windows-arm64-ucrt-url    := https://github.com/mstorsjo/llvm-mingw/releases/download/20251216/llvm-mingw-20251216-ucrt-ubuntu-22.04-x86_64.tar.xz
+windows-arm64-ucrt-arch   := $(DOWNLOAD_DIR)/llvm-mingw-20251216-ucrt-ubuntu-22.04-x86_64.tar.xz
+windows-arm64-ucrt-dir    := $(TOOLCHAINS_DIR)/llvm-mingw-ucrt
+
+TOOLCHAINS := linux-amd64 linux-arm64 linux-armel linux-armhf \
+              linux-i386 linux-ppc64el linux-riscv64 linux-s390x \
+              windows-amd64-msvcrt windows-i386-msvcrt windows-arm64-msvcrt \
+              windows-amd64-ucrt windows-i386-ucrt windows-arm64-ucrt
+
+.PHONY: $(TOOLCHAINS)
+
+# ---------------------------------------------------------------------------
+# Pipeline: phony target → .unpacked stamp → .downloaded stamp → curl
+# ---------------------------------------------------------------------------
+
+$(TOOLCHAINS): %: $(TOOLCHAINS_DIR)/%.unpacked
+	@echo "export PATH=\"$($*-dir)/bin:\$$PATH\""
+
+# Extract.  Dispatches on the archive filename suffix so we don't need
+# a separate per-target tar-flag variable.  Add more cases here if we
+# ever ship a toolchain in a different format.
+$(TOOLCHAINS_DIR)/%.unpacked: $(TOOLCHAINS_DIR)/%.downloaded | $(TOOLCHAINS_DIR)
+	@echo "Unpacking $($*-arch)..." >&2
+	@rm -rf "$($*-dir)"
+	@mkdir -p "$($*-dir)"
+	@case "$($*-arch)" in \
+	    *.tgz|*.tar.gz)   tar -xzf "$($*-arch)" -C "$($*-dir)" --strip-components=1 ;; \
+	    *.tbz2|*.tar.bz2) tar -xjf "$($*-arch)" -C "$($*-dir)" --strip-components=1 ;; \
+	    *.txz|*.tar.xz)   tar -xJf "$($*-arch)" -C "$($*-dir)" --strip-components=1 ;; \
+	    *.zip)            unzip -q "$($*-arch)" -d "$($*-dir)" ;; \
+	    *) echo "Unknown archive format: $($*-arch)" >&2; exit 1 ;; \
+	esac
 	@touch $@
 
-# ---------------------------------------------------------------------------
-# Windows — one llvm-mingw tarball, shared by all three windows-* targets.
-# ---------------------------------------------------------------------------
+# Download.  The stamp depends on Makefile.toolchain so editing any URL
+# here auto-invalidates the affected downloads on the next invocation.
+$(TOOLCHAINS_DIR)/%.downloaded: Makefile.toolchain | $(TOOLCHAINS_DIR) $(DOWNLOAD_DIR)
+	@echo "Downloading $($*-url)..." >&2
+	@curl -fL "$($*-url)" -o "$($*-arch)"
+	@touch $@
 
-LLVM_MINGW_URL  := https://github.com/mstorsjo/llvm-mingw/releases/download/20251216/llvm-mingw-20251216-msvcrt-ubuntu-22.04-x86_64.tar.xz
-LLVM_MINGW_DIR  := $(CURDIR)/toolchains/llvm-mingw
-LLVM_MINGW_DONE := $(LLVM_MINGW_DIR)/.done
+$(TOOLCHAINS_DIR):
+	@mkdir -p $@
 
-$(LLVM_MINGW_DONE): Makefile.toolchain
-	@rm -rf $(LLVM_MINGW_DIR)
-	@echo "Downloading and installing llvm-mingw toolchain..." >&2
-	@mkdir -p $(LLVM_MINGW_DIR)
-	@curl -fL $(LLVM_MINGW_URL) | tar -xJ -C $(LLVM_MINGW_DIR) --strip-components=1
-	@touch $(LLVM_MINGW_DONE)
-
-WINDOWS_TARGETS := windows-amd64 windows-i386 windows-arm64
-
-.PHONY: $(WINDOWS_TARGETS)
-
-$(WINDOWS_TARGETS): $(LLVM_MINGW_DONE)
-	@echo "export PATH=\"$(LLVM_MINGW_DIR)/bin:\$$PATH\""
+$(DOWNLOAD_DIR):
+	@mkdir -p $@

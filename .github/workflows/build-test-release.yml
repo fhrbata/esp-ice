@@ -55,74 +55,87 @@ jobs:
           # ----------------------------------------------------------
           - name: linux-amd64
             runner: ubuntu-latest
-            cc: x86_64-linux-musl-gcc
+            toolchain: linux-amd64
             toolchain_dir: linux-amd64
+            cc: x86_64-linux-musl-gcc
             dist: targz-pkg
 
           - name: linux-arm64
             runner: ubuntu-latest
-            cc: aarch64-linux-musl-gcc
+            toolchain: linux-arm64
             toolchain_dir: linux-arm64
+            cc: aarch64-linux-musl-gcc
             dist: targz-pkg
 
           - name: linux-armel
             runner: ubuntu-latest
-            cc: arm-linux-musleabi-gcc
+            toolchain: linux-armel
             toolchain_dir: linux-armel
+            cc: arm-linux-musleabi-gcc
             dist: targz-pkg
 
           - name: linux-armhf
             runner: ubuntu-latest
-            cc: arm-linux-musleabihf-gcc
+            toolchain: linux-armhf
             toolchain_dir: linux-armhf
+            cc: arm-linux-musleabihf-gcc
             dist: targz-pkg
 
           - name: linux-i386
             runner: ubuntu-latest
-            cc: i686-linux-musl-gcc
+            toolchain: linux-i386
             toolchain_dir: linux-i386
+            cc: i686-linux-musl-gcc
             dist: targz-pkg
 
           - name: linux-ppc64el
             runner: ubuntu-latest
-            cc: powerpc64le-linux-musl-gcc
+            toolchain: linux-ppc64el
             toolchain_dir: linux-ppc64el
+            cc: powerpc64le-linux-musl-gcc
             dist: targz-pkg
 
           - name: linux-riscv64
             runner: ubuntu-latest
-            cc: riscv64-linux-musl-gcc
+            toolchain: linux-riscv64
             toolchain_dir: linux-riscv64
+            cc: riscv64-linux-musl-gcc
             dist: targz-pkg
 
           - name: linux-s390x
             runner: ubuntu-latest
-            cc: s390x-linux-musl-gcc
+            toolchain: linux-s390x
             toolchain_dir: linux-s390x
+            cc: s390x-linux-musl-gcc
             dist: targz-pkg
 
           # ----------------------------------------------------------
           # Windows: cross-compiled on ubuntu-latest via llvm-mingw
-          # fetched by Makefile.toolchain.  All three windows-* targets
-          # share the same llvm-mingw install, so they all cache
-          # toolchains/llvm-mingw under one shared key.
+          # (msvcrt runtime, compatible with Windows XP+).  All three
+          # windows-*-msvcrt targets share toolchains/llvm-mingw-msvcrt.
+          # The release artifact name (matrix.name) intentionally drops
+          # the -msvcrt suffix; the runtime flavour is an implementation
+          # detail users don't need to see.
           # ----------------------------------------------------------
           - name: windows-amd64
             runner: ubuntu-latest
+            toolchain: windows-amd64-msvcrt
+            toolchain_dir: llvm-mingw-msvcrt
             cc: x86_64-w64-mingw32-gcc
-            toolchain_dir: llvm-mingw
             dist: zip-pkg
 
           - name: windows-i386
             runner: ubuntu-latest
+            toolchain: windows-i386-msvcrt
+            toolchain_dir: llvm-mingw-msvcrt
             cc: i686-w64-mingw32-gcc
-            toolchain_dir: llvm-mingw
             dist: zip-pkg
 
           - name: windows-arm64
             runner: ubuntu-latest
+            toolchain: windows-arm64-msvcrt
+            toolchain_dir: llvm-mingw-msvcrt
             cc: aarch64-w64-mingw32-gcc
-            toolchain_dir: llvm-mingw
             dist: zip-pkg
 
           # ----------------------------------------------------------
@@ -154,7 +167,7 @@ jobs:
       - name: build (cross)
         if: startsWith(matrix.runner, 'ubuntu')
         run: |
-          TOOLCHAIN_ENV="$(make -f Makefile.toolchain ${{ matrix.name }})" || exit 1
+          TOOLCHAIN_ENV="$(make -f Makefile.toolchain ${{ matrix.toolchain }})" || exit 1
           eval "$TOOLCHAIN_ENV"
           make STATIC=1 CC=${{ matrix.cc }} ${{ matrix.dist }}
 
