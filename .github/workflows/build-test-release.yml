@@ -141,7 +141,8 @@ jobs:
       - name: build (cross)
         if: startsWith(matrix.runner, 'ubuntu')
         run: |
-          eval "$(make -f Makefile.toolchain ${{ matrix.name }})"
+          TOOLCHAIN_ENV="$(make -f Makefile.toolchain ${{ matrix.name }})" || exit 1
+          eval "$TOOLCHAIN_ENV"
           make STATIC=1 CC=${{ matrix.cc }} ${{ matrix.dist }}
 
       # --- macOS: native build ---

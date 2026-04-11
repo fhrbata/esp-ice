@@ -107,7 +107,8 @@ $(1): $$(TOOLCHAINS)/$(1)/.done
 $$(TOOLCHAINS)/$(1)/.done: | $$(TOOLCHAINS)
 	@echo '==> fetching $(2)-cross.tgz from musl.cc' >&2
 	@mkdir -p $$(@D)
-	@curl -fsSL $$(MUSLCC_BASE)/$(2)-cross.tgz -o $$(TOOLCHAINS)/$(1).tgz
+	@curl -fsSL --retry 3 --retry-delay 5 --retry-all-errors \
+		$$(MUSLCC_BASE)/$(2)-cross.tgz -o $$(TOOLCHAINS)/$(1).tgz
 	@echo '==> verifying sha512' >&2
 	@echo '$$(MUSLCC_SHA512_$(3))  $$(TOOLCHAINS)/$(1).tgz' | sha512sum -c - >&2
 	@echo '==> extracting into toolchains/$(1)/' >&2
@@ -143,7 +144,8 @@ LLVM_MINGW_DONE := $(LLVM_MINGW_DIR)/.done
 $(LLVM_MINGW_DONE): | $(TOOLCHAINS)
 	@echo '==> fetching $(LLVM_MINGW_TARBALL)' >&2
 	@mkdir -p $(LLVM_MINGW_DIR)
-	@curl -fsSL $(LLVM_MINGW_URL) -o $(TOOLCHAINS)/$(LLVM_MINGW_TARBALL)
+	@curl -fsSL --retry 3 --retry-delay 5 --retry-all-errors \
+		$(LLVM_MINGW_URL) -o $(TOOLCHAINS)/$(LLVM_MINGW_TARBALL)
 	@echo '==> verifying sha256' >&2
 	@echo '$(LLVM_MINGW_SHA256)  $(TOOLCHAINS)/$(LLVM_MINGW_TARBALL)' | sha256sum -c - >&2
 	@echo '==> extracting into toolchains/llvm-mingw/' >&2
