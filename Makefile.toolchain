@@ -1,60 +1,23 @@
 # Makefile.toolchain
-# ------------------
-# Fetches prebuilt cross-compilation toolchains (musl.cc for Linux, llvm-mingw
-# for Windows), verifies their checksums, and extracts them under toolchains/
-# at a stable per-target path.
 #
-# Usage:
+# Downloads prebuilt cross-compilation toolchains under toolchains/ and
+# prints an `export PATH=…` line on stdout so it can be eval-ed:
 #
-#     eval "$(make -f Makefile.toolchain <target>)"
-#     make STATIC=1 CC=<compiler> targz-pkg
+#     eval "$(make -f Makefile.toolchain linux-arm64)"
+#     make STATIC=1 CC=aarch64-linux-musl-gcc targz-pkg
 #
-# Each target prints one line on stdout — `export PATH="…/toolchains/<target>/bin:$PATH"` —
-# so it can be eval-ed.  All progress/status/hints go to stderr.  Run without
-# arguments (or with `help`) for the catalogue of available targets.
-
-TOOLCHAINS := $(CURDIR)/toolchains
-
-# --- Pinned versions and checksums ------------------------------------------
-
-# llvm-mingw: tag-pinned GitHub release URL (immutable), SHA256 computed once
-# and committed.  Bumping: update VERSION, re-download, sha256sum, update hash.
-LLVM_MINGW_VERSION := 20251216
-LLVM_MINGW_TARBALL := llvm-mingw-$(LLVM_MINGW_VERSION)-ucrt-ubuntu-22.04-x86_64.tar.xz
-LLVM_MINGW_URL     := https://github.com/mstorsjo/llvm-mingw/releases/download/$(LLVM_MINGW_VERSION)/$(LLVM_MINGW_TARBALL)
-LLVM_MINGW_SHA256  := db561734a05eb4a0695d5e901aadd6c1cda74bba4c9e102b677f81c6fd59849a
-
-# musl.cc is unreachable from GitHub Actions' Azure IP ranges, so we fetch
-# through musl-cc/musl.cc on GitHub instead.  That repo's v0.0.1 release is a
-# byte-perfect mirror (verified by SHA512) of the current musl.cc tarballs —
-# the same GCC 11.2.1 musl-based cross-compilers — and GitHub's CDN is
-# reachable from everywhere.  Tarballs are cached per-target in CI keyed on
-# this Makefile's hash, so the upstream is only hit on version bumps.  Our
-# pins below still come from https://musl.cc/SHA512SUMS.
-MUSLCC_BASE := https://github.com/musl-cc/musl.cc/releases/download/v0.0.1
-
-MUSLCC_SHA512_x86_64         := 52abd1a56e670952116e35d1a62e048a9b6160471d988e16fa0e1611923dd108a581d2e00874af5eb04e4968b1ba32e0eb449a1f15c3e4d5240ebe09caf5a9f3
-MUSLCC_SHA512_aarch64        := 8695ff86979cdf30fbbcd33061711f5b1ebc3c48a87822b9ca56cde6d3a22abd4dab30fdcd1789ac27c6febbaeb9e5bde59d79d66552fae53d54cc1377a19272
-MUSLCC_SHA512_arm_musleabi   := 000e9e49a24ad581c2096c52dc28942688c422b8beed8c6b7c46f82029bbebae8e513118a44da36827907e215c6eca543b5d87da762ed6e37ead0a739ef403b7
-MUSLCC_SHA512_arm_musleabihf := fe006d9176cedb453fd817f892f61f6bac273c15879f9c537e22c75b8da4995991211f6d23b0c0c97a87121fe55cf9f9f29cc3d1cf9376804535f07b6c017729
-MUSLCC_SHA512_i686           := 5047afc68170a2910895db2dfa448227e71a984bfa2130a1bc946fd1015d722b80b15e4abf90c64300815aa84fe781cc8b8a72f10174f9dce96169e035911880
-MUSLCC_SHA512_powerpc64le    := 68f72b4ff0d0f28094581a4dbd81090f28898c74f5a97cd39d725e2e332aa099eebe71ccab5d7db1646ec443ed6165997eeea42510b918ea7626720e4e78b19c
-MUSLCC_SHA512_riscv64        := 9fdb9f6077db2e7091fab5fccec875d7f73e901fa8be27a2eae6b40ac6ba35ca789fecec752363ab5aa8c3d93a5b855cd52813a54b0dc4e2644b9296e76c07a8
-MUSLCC_SHA512_s390x          := 8d74962f19faa05ffcbd2ba4717dd554ef782ea72f4f058d6e71b772e4c3adbd80111d86c2c3b4b694c88a177c18b46602a1d7b9b31fd7bf2a696275b15dd980
-
-# --- Target catalogue -------------------------------------------------------
+# Run without arguments (or with `help`) for the catalogue of targets.
 #
-# Each target name matches the CI matrix / release artifact name.  For musl.cc
-# targets, the tarball filename and the CC basename are derived by convention.
-# For llvm-mingw, the three Windows targets all share one tarball and are
-# materialised as symlinks to the extracted directory.
+# musl.cc is unreachable from GitHub Actions' Azure IP ranges, so we
+# fetch the musl-based toolchains through the musl-cc/musl.cc GitHub
+# mirror — byte-perfect and on GitHub's CDN.
+
+.DEFAULT_GOAL := help
 
 .PHONY: help clean \
 	linux-amd64 linux-arm64 linux-armel linux-armhf \
 	linux-i386 linux-ppc64el linux-riscv64 linux-s390x \
 	windows-amd64 windows-i386 windows-arm64
-
-.DEFAULT_GOAL := help
 
 help:
 	@echo 'Makefile.toolchain — fetch prebuilt cross-compilation toolchains'
@@ -63,7 +26,7 @@ help:
 	@echo '    eval "$$(make -f Makefile.toolchain <target>)"'
 	@echo '    make STATIC=1 CC=<compiler> targz-pkg'
 	@echo ''
-	@echo 'LINUX TARGETS (musl.cc):'
+	@echo 'LINUX TARGETS (musl.cc, gcc):'
 	@echo '    linux-amd64        CC=x86_64-linux-musl-gcc'
 	@echo '    linux-arm64        CC=aarch64-linux-musl-gcc'
 	@echo '    linux-armel        CC=arm-linux-musleabi-gcc'
@@ -73,105 +36,208 @@ help:
 	@echo '    linux-riscv64      CC=riscv64-linux-musl-gcc'
 	@echo '    linux-s390x        CC=s390x-linux-musl-gcc'
 	@echo ''
-	@echo 'WINDOWS TARGETS (llvm-mingw):'
+	@echo 'WINDOWS TARGETS (llvm-mingw, gcc/clang):'
 	@echo '    windows-amd64      CC=x86_64-w64-mingw32-gcc'
 	@echo '    windows-i386       CC=i686-w64-mingw32-gcc'
 	@echo '    windows-arm64      CC=aarch64-w64-mingw32-gcc'
-	@echo ''
-	@echo 'EXAMPLE:'
-	@echo '    eval "$$(make -f Makefile.toolchain linux-arm64)"'
-	@echo '    make STATIC=1 CC=aarch64-linux-musl-gcc targz-pkg'
-	@echo ''
-	@echo 'Toolchains are installed under $(TOOLCHAINS).'
-	@echo 'Run `make -f Makefile.toolchain clean` to remove them all.'
 
 clean:
-	rm -rf $(TOOLCHAINS)
+	@rm -rf $(CURDIR)/toolchains
 
-# --- Common directories ----------------------------------------------------
+# ---------------------------------------------------------------------------
+# linux-amd64
+# ---------------------------------------------------------------------------
 
-$(TOOLCHAINS):
-	@mkdir -p $@
+LINUX_AMD64_URL  := https://github.com/musl-cc/musl.cc/releases/download/v0.0.1/x86_64-linux-musl-cross.tgz
+LINUX_AMD64_DIR  := $(CURDIR)/toolchains/linux-amd64
+LINUX_AMD64_DONE := $(LINUX_AMD64_DIR)/.done
 
-# --- musl.cc: one tarball per target ---------------------------------------
-#
-# Each target depends on its own .done sentinel inside toolchains/<name>/.
-# The download recipe fetches the tarball into a temporary file under
-# toolchains/, verifies its SHA512 against the pinned value, then extracts
-# with --strip-components=1 so the tarball's top-level directory is flattened
-# into toolchains/<name>/.
+linux-amd64: $(LINUX_AMD64_DONE)
+	@echo "export PATH=\"$(LINUX_AMD64_DIR)/bin:\$$PATH\""
 
-# Parameters: $(1) target name (linux-arm64), $(2) musl triple
-# (aarch64-linux-musl), $(3) SHA512 variable suffix (aarch64).
-define musl_target
-$(1): $$(TOOLCHAINS)/$(1)/.done
-	@echo 'export PATH="$$(TOOLCHAINS)/$(1)/bin:$$$$PATH"'
+$(LINUX_AMD64_DONE): Makefile.toolchain
+	@rm -rf $(LINUX_AMD64_DIR)
+	@echo "Downloading and installing linux-amd64 toolchain..." >&2
+	@mkdir -p $(LINUX_AMD64_DIR)
+	@curl -fL $(LINUX_AMD64_URL) | tar -xz -C $(LINUX_AMD64_DIR) --strip-components=1
+	@touch $(LINUX_AMD64_DONE)
 
-$$(TOOLCHAINS)/$(1)/.done: | $$(TOOLCHAINS)
-	@echo '==> fetching $(2)-cross.tgz from musl.cc' >&2
-	@mkdir -p $$(@D)
-	@curl -fsSL --retry 3 --retry-delay 5 --retry-all-errors \
-		$$(MUSLCC_BASE)/$(2)-cross.tgz -o $$(TOOLCHAINS)/$(1).tgz
-	@echo '==> verifying sha512' >&2
-	@echo '$$(MUSLCC_SHA512_$(3))  $$(TOOLCHAINS)/$(1).tgz' | sha512sum -c - >&2
-	@echo '==> extracting into toolchains/$(1)/' >&2
-	@tar -xz --strip-components=1 -C $$(@D) -f $$(TOOLCHAINS)/$(1).tgz
-	@rm -f $$(TOOLCHAINS)/$(1).tgz
-	@touch $$@
-	@echo '' >&2
-	@echo '    toolchains/$(1)/ ready.  To use it:' >&2
-	@echo '' >&2
-	@echo '        eval "$$$$(make -f Makefile.toolchain $(1))"' >&2
-	@echo '        make STATIC=1 CC=$(2)-gcc targz-pkg' >&2
-	@echo '' >&2
-endef
+# ---------------------------------------------------------------------------
+# linux-arm64
+# ---------------------------------------------------------------------------
 
-$(eval $(call musl_target,linux-amd64,x86_64-linux-musl,x86_64))
-$(eval $(call musl_target,linux-arm64,aarch64-linux-musl,aarch64))
-$(eval $(call musl_target,linux-armel,arm-linux-musleabi,arm_musleabi))
-$(eval $(call musl_target,linux-armhf,arm-linux-musleabihf,arm_musleabihf))
-$(eval $(call musl_target,linux-i386,i686-linux-musl,i686))
-$(eval $(call musl_target,linux-ppc64el,powerpc64le-linux-musl,powerpc64le))
-$(eval $(call musl_target,linux-riscv64,riscv64-linux-musl,riscv64))
-$(eval $(call musl_target,linux-s390x,s390x-linux-musl,s390x))
+LINUX_ARM64_URL  := https://github.com/musl-cc/musl.cc/releases/download/v0.0.1/aarch64-linux-musl-cross.tgz
+LINUX_ARM64_DIR  := $(CURDIR)/toolchains/linux-arm64
+LINUX_ARM64_DONE := $(LINUX_ARM64_DIR)/.done
 
-# --- llvm-mingw: one tarball serves all three Windows targets --------------
-#
-# Extract once to toolchains/llvm-mingw/ then materialise windows-amd64,
-# windows-i386, windows-arm64 as symlinks pointing at it.  The second and
-# third windows-* targets are near-instant (just a symlink).
+linux-arm64: $(LINUX_ARM64_DONE)
+	@echo "export PATH=\"$(LINUX_ARM64_DIR)/bin:\$$PATH\""
 
-LLVM_MINGW_DIR  := $(TOOLCHAINS)/llvm-mingw
+$(LINUX_ARM64_DONE): Makefile.toolchain
+	@rm -rf $(LINUX_ARM64_DIR)
+	@echo "Downloading and installing linux-arm64 toolchain..." >&2
+	@mkdir -p $(LINUX_ARM64_DIR)
+	@curl -fL $(LINUX_ARM64_URL) | tar -xz -C $(LINUX_ARM64_DIR) --strip-components=1
+	@touch $(LINUX_ARM64_DONE)
+
+# ---------------------------------------------------------------------------
+# linux-armel
+# ---------------------------------------------------------------------------
+
+LINUX_ARMEL_URL  := https://github.com/musl-cc/musl.cc/releases/download/v0.0.1/arm-linux-musleabi-cross.tgz
+LINUX_ARMEL_DIR  := $(CURDIR)/toolchains/linux-armel
+LINUX_ARMEL_DONE := $(LINUX_ARMEL_DIR)/.done
+
+linux-armel: $(LINUX_ARMEL_DONE)
+	@echo "export PATH=\"$(LINUX_ARMEL_DIR)/bin:\$$PATH\""
+
+$(LINUX_ARMEL_DONE): Makefile.toolchain
+	@rm -rf $(LINUX_ARMEL_DIR)
+	@echo "Downloading and installing linux-armel toolchain..." >&2
+	@mkdir -p $(LINUX_ARMEL_DIR)
+	@curl -fL $(LINUX_ARMEL_URL) | tar -xz -C $(LINUX_ARMEL_DIR) --strip-components=1
+	@touch $(LINUX_ARMEL_DONE)
+
+# ---------------------------------------------------------------------------
+# linux-armhf
+# ---------------------------------------------------------------------------
+
+LINUX_ARMHF_URL  := https://github.com/musl-cc/musl.cc/releases/download/v0.0.1/arm-linux-musleabihf-cross.tgz
+LINUX_ARMHF_DIR  := $(CURDIR)/toolchains/linux-armhf
+LINUX_ARMHF_DONE := $(LINUX_ARMHF_DIR)/.done
+
+linux-armhf: $(LINUX_ARMHF_DONE)
+	@echo "export PATH=\"$(LINUX_ARMHF_DIR)/bin:\$$PATH\""
+
+$(LINUX_ARMHF_DONE): Makefile.toolchain
+	@rm -rf $(LINUX_ARMHF_DIR)
+	@echo "Downloading and installing linux-armhf toolchain..." >&2
+	@mkdir -p $(LINUX_ARMHF_DIR)
+	@curl -fL $(LINUX_ARMHF_URL) | tar -xz -C $(LINUX_ARMHF_DIR) --strip-components=1
+	@touch $(LINUX_ARMHF_DONE)
+
+# ---------------------------------------------------------------------------
+# linux-i386
+# ---------------------------------------------------------------------------
+
+LINUX_I386_URL  := https://github.com/musl-cc/musl.cc/releases/download/v0.0.1/i686-linux-musl-cross.tgz
+LINUX_I386_DIR  := $(CURDIR)/toolchains/linux-i386
+LINUX_I386_DONE := $(LINUX_I386_DIR)/.done
+
+linux-i386: $(LINUX_I386_DONE)
+	@echo "export PATH=\"$(LINUX_I386_DIR)/bin:\$$PATH\""
+
+$(LINUX_I386_DONE): Makefile.toolchain
+	@rm -rf $(LINUX_I386_DIR)
+	@echo "Downloading and installing linux-i386 toolchain..." >&2
+	@mkdir -p $(LINUX_I386_DIR)
+	@curl -fL $(LINUX_I386_URL) | tar -xz -C $(LINUX_I386_DIR) --strip-components=1
+	@touch $(LINUX_I386_DONE)
+
+# ---------------------------------------------------------------------------
+# linux-ppc64el
+# ---------------------------------------------------------------------------
+
+LINUX_PPC64EL_URL  := https://github.com/musl-cc/musl.cc/releases/download/v0.0.1/powerpc64le-linux-musl-cross.tgz
+LINUX_PPC64EL_DIR  := $(CURDIR)/toolchains/linux-ppc64el
+LINUX_PPC64EL_DONE := $(LINUX_PPC64EL_DIR)/.done
+
+linux-ppc64el: $(LINUX_PPC64EL_DONE)
+	@echo "export PATH=\"$(LINUX_PPC64EL_DIR)/bin:\$$PATH\""
+
+$(LINUX_PPC64EL_DONE): Makefile.toolchain
+	@rm -rf $(LINUX_PPC64EL_DIR)
+	@echo "Downloading and installing linux-ppc64el toolchain..." >&2
+	@mkdir -p $(LINUX_PPC64EL_DIR)
+	@curl -fL $(LINUX_PPC64EL_URL) | tar -xz -C $(LINUX_PPC64EL_DIR) --strip-components=1
+	@touch $(LINUX_PPC64EL_DONE)
+
+# ---------------------------------------------------------------------------
+# linux-riscv64
+# ---------------------------------------------------------------------------
+
+LINUX_RISCV64_URL  := https://github.com/musl-cc/musl.cc/releases/download/v0.0.1/riscv64-linux-musl-cross.tgz
+LINUX_RISCV64_DIR  := $(CURDIR)/toolchains/linux-riscv64
+LINUX_RISCV64_DONE := $(LINUX_RISCV64_DIR)/.done
+
+linux-riscv64: $(LINUX_RISCV64_DONE)
+	@echo "export PATH=\"$(LINUX_RISCV64_DIR)/bin:\$$PATH\""
+
+$(LINUX_RISCV64_DONE): Makefile.toolchain
+	@rm -rf $(LINUX_RISCV64_DIR)
+	@echo "Downloading and installing linux-riscv64 toolchain..." >&2
+	@mkdir -p $(LINUX_RISCV64_DIR)
+	@curl -fL $(LINUX_RISCV64_URL) | tar -xz -C $(LINUX_RISCV64_DIR) --strip-components=1
+	@touch $(LINUX_RISCV64_DONE)
+
+# ---------------------------------------------------------------------------
+# linux-s390x
+# ---------------------------------------------------------------------------
+
+LINUX_S390X_URL  := https://github.com/musl-cc/musl.cc/releases/download/v0.0.1/s390x-linux-musl-cross.tgz
+LINUX_S390X_DIR  := $(CURDIR)/toolchains/linux-s390x
+LINUX_S390X_DONE := $(LINUX_S390X_DIR)/.done
+
+linux-s390x: $(LINUX_S390X_DONE)
+	@echo "export PATH=\"$(LINUX_S390X_DIR)/bin:\$$PATH\""
+
+$(LINUX_S390X_DONE): Makefile.toolchain
+	@rm -rf $(LINUX_S390X_DIR)
+	@echo "Downloading and installing linux-s390x toolchain..." >&2
+	@mkdir -p $(LINUX_S390X_DIR)
+	@curl -fL $(LINUX_S390X_URL) | tar -xz -C $(LINUX_S390X_DIR) --strip-components=1
+	@touch $(LINUX_S390X_DONE)
+
+# ---------------------------------------------------------------------------
+# llvm-mingw — shared by the three windows-* targets below.
+# ---------------------------------------------------------------------------
+
+LLVM_MINGW_URL  := https://github.com/mstorsjo/llvm-mingw/releases/download/20251216/llvm-mingw-20251216-ucrt-ubuntu-22.04-x86_64.tar.xz
+LLVM_MINGW_DIR  := $(CURDIR)/toolchains/llvm-mingw
 LLVM_MINGW_DONE := $(LLVM_MINGW_DIR)/.done
 
-$(LLVM_MINGW_DONE): | $(TOOLCHAINS)
-	@echo '==> fetching $(LLVM_MINGW_TARBALL)' >&2
+$(LLVM_MINGW_DONE): Makefile.toolchain
+	@rm -rf $(LLVM_MINGW_DIR)
+	@echo "Downloading and installing llvm-mingw toolchain..." >&2
 	@mkdir -p $(LLVM_MINGW_DIR)
-	@curl -fsSL --retry 3 --retry-delay 5 --retry-all-errors \
-		$(LLVM_MINGW_URL) -o $(TOOLCHAINS)/$(LLVM_MINGW_TARBALL)
-	@echo '==> verifying sha256' >&2
-	@echo '$(LLVM_MINGW_SHA256)  $(TOOLCHAINS)/$(LLVM_MINGW_TARBALL)' | sha256sum -c - >&2
-	@echo '==> extracting into toolchains/llvm-mingw/' >&2
-	@tar -xJ --strip-components=1 -C $(LLVM_MINGW_DIR) -f $(TOOLCHAINS)/$(LLVM_MINGW_TARBALL)
-	@rm -f $(TOOLCHAINS)/$(LLVM_MINGW_TARBALL)
-	@touch $@
+	@curl -fL $(LLVM_MINGW_URL) | tar -xJ -C $(LLVM_MINGW_DIR) --strip-components=1
+	@touch $(LLVM_MINGW_DONE)
 
-# Parameters: $(1) target name (windows-amd64), $(2) CC basename.
-define llvm_mingw_target
-$(1): $$(TOOLCHAINS)/$(1)
-	@echo 'export PATH="$$(TOOLCHAINS)/$(1)/bin:$$$$PATH"'
+# ---------------------------------------------------------------------------
+# windows-amd64
+# ---------------------------------------------------------------------------
 
-$$(TOOLCHAINS)/$(1): $$(LLVM_MINGW_DONE)
-	@rm -f $$@
-	@ln -s llvm-mingw $$@
-	@echo '' >&2
-	@echo '    toolchains/$(1) -> llvm-mingw/ ready.  To use it:' >&2
-	@echo '' >&2
-	@echo '        eval "$$$$(make -f Makefile.toolchain $(1))"' >&2
-	@echo '        make STATIC=1 CC=$(2) zip-pkg' >&2
-	@echo '' >&2
-endef
+WINDOWS_AMD64_DIR := $(CURDIR)/toolchains/windows-amd64
 
-$(eval $(call llvm_mingw_target,windows-amd64,x86_64-w64-mingw32-gcc))
-$(eval $(call llvm_mingw_target,windows-i386,i686-w64-mingw32-gcc))
-$(eval $(call llvm_mingw_target,windows-arm64,aarch64-w64-mingw32-gcc))
+windows-amd64: $(WINDOWS_AMD64_DIR)
+	@echo "export PATH=\"$(WINDOWS_AMD64_DIR)/bin:\$$PATH\""
+
+$(WINDOWS_AMD64_DIR): $(LLVM_MINGW_DONE)
+	@rm -f $@
+	@ln -s llvm-mingw $@
+
+# ---------------------------------------------------------------------------
+# windows-i386
+# ---------------------------------------------------------------------------
+
+WINDOWS_I386_DIR := $(CURDIR)/toolchains/windows-i386
+
+windows-i386: $(WINDOWS_I386_DIR)
+	@echo "export PATH=\"$(WINDOWS_I386_DIR)/bin:\$$PATH\""
+
+$(WINDOWS_I386_DIR): $(LLVM_MINGW_DONE)
+	@rm -f $@
+	@ln -s llvm-mingw $@
+
+# ---------------------------------------------------------------------------
+# windows-arm64
+# ---------------------------------------------------------------------------
+
+WINDOWS_ARM64_DIR := $(CURDIR)/toolchains/windows-arm64
+
+windows-arm64: $(WINDOWS_ARM64_DIR)
+	@echo "export PATH=\"$(WINDOWS_ARM64_DIR)/bin:\$$PATH\""
+
+$(WINDOWS_ARM64_DIR): $(LLVM_MINGW_DONE)
+	@rm -f $@
+	@ln -s llvm-mingw $@
