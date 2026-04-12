@@ -31,6 +31,50 @@
 /*  Entry-level AST                                                   */
 /* ------------------------------------------------------------------ */
 
+/* ---- Flags (mapping entries only) ------------------------------- */
+
+enum lf_flag_kind {
+	LF_FLAG_KEEP,
+	LF_FLAG_ALIGN,
+	LF_FLAG_SORT,
+	LF_FLAG_SURROUND,
+};
+
+/**
+ * A single flag attached to a section->target override.
+ *
+ * KEEP()                        kind=KEEP
+ * ALIGN(n [,pre] [,post])      kind=ALIGN, alignment, pre, post
+ * SORT([key [,key]])            kind=SORT, sort_first, sort_second
+ * SURROUND(sym)                 kind=SURROUND, symbol
+ */
+struct lf_flag {
+	enum lf_flag_kind kind;
+	int alignment;		/**< ALIGN: alignment value */
+	int pre;		/**< ALIGN: align before (default true) */
+	int post;		/**< ALIGN: align after (default false) */
+	char *sort_first;	/**< SORT: first key (NULL = default) */
+	char *sort_second;	/**< SORT: second key (NULL = none) */
+	char *symbol;		/**< SURROUND: symbol name */
+};
+
+/**
+ * One section->target override with attached flags.
+ *
+ * Produced by the ';' syntax on mapping entries:
+ *   obj (scheme);
+ *       sections -> target KEEP() SURROUND(sym),
+ *       sections2 -> target2 ALIGN(4)
+ */
+struct lf_flag_item {
+	char *sections;		/**< sections reference */
+	char *target;		/**< target name */
+	struct lf_flag *flags;
+	int n_flags;
+};
+
+/* ---- Entries ---------------------------------------------------- */
+
 /**
  * A single entry in an entries block.
  *
@@ -42,12 +86,17 @@
  *               name = "*" for wildcard; target = symbol or NULL
  *   archive:    name only             ("libfoo.a", "*")
  *
+ * For mapping entries with flags (';' syntax), @p flag_items holds the
+ * section->target overrides.
+ *
  * All strings are owned (heap-allocated) and freed by lf_file_free().
  */
 struct lf_entry {
 	char *name;
 	char *target;
 	char *scheme;
+	struct lf_flag_item *flag_items;  /**< mapping: flag overrides (NULL otherwise) */
+	int n_flag_items;
 };
 
 /**

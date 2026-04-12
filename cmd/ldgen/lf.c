@@ -542,18 +542,151 @@ static void parse_sch_stmts(struct lexer *l,
 }
 
 /**
- * Skip over a flag block (the ';' and following indented flag list).
- * TODO: parse flags into the AST.
+ * Parse a single flag: KEEP() | ALIGN(...) | SORT(...) | SURROUND(...).
+ *
+ * Called when the current token is a NAME that should be a flag keyword.
  */
-static void skip_flag_block(struct lexer *l)
+static void parse_flag(struct lexer *l, struct lf_flag *f)
 {
-	lf_next(l);
-	expect(l, TOK_NL);
-	if (l->tok == TOK_INDENT) {
+	memset(f, 0, sizeof(*f));
+
+	if (is_kw(l, "KEEP")) {
+		f->kind = LF_FLAG_KEEP;
+		f->pre = 1;
 		lf_next(l);
-		while (l->tok != TOK_DEDENT && l->tok != TOK_EOF)
+		expect(l, TOK_LPAREN);
+		expect(l, TOK_RPAREN);
+	} else if (is_kw(l, "ALIGN")) {
+		f->kind = LF_FLAG_ALIGN;
+		f->pre = 1;
+		lf_next(l);
+		expect(l, TOK_LPAREN);
+		if (l->tok != TOK_NUM)
+			die("%s:%d: expected number in ALIGN()",
+			    l->path, l->line);
+		f->alignment = l->num;
+		lf_next(l);
+		/* optional ', pre' */
+		if (l->tok == TOK_COMMA && l->pos[0] != ' '
+		    ? 0 : l->tok == TOK_COMMA) {
+			/* peek: is the next name 'pre' or 'post'? */
+			if (l->tok == TOK_COMMA) {
+				lf_next(l);
+				if (is_kw(l, "pre")) {
+					lf_next(l);
+					/* optional ', post' */
+					if (l->tok == TOK_COMMA) {
+						lf_next(l);
+						if (is_kw(l, "post")) {
+							f->post = 1;
+							lf_next(l);
+						}
+					}
+				} else if (is_kw(l, "post")) {
+					f->pre = 0;
+					f->post = 1;
+					lf_next(l);
+				}
+			}
+		}
+		expect(l, TOK_RPAREN);
+	} else if (is_kw(l, "SORT")) {
+		f->kind = LF_FLAG_SORT;
+		lf_next(l);
+		expect(l, TOK_LPAREN);
+		if (l->tok == TOK_NAME && l->tok != TOK_RPAREN) {
+			f->sort_first = expect_name(l);
+			if (l->tok == TOK_COMMA) {
+				lf_next(l);
+				f->sort_second = expect_name(l);
+			}
+		}
+		expect(l, TOK_RPAREN);
+	} else if (is_kw(l, "SURROUND")) {
+		f->kind = LF_FLAG_SURROUND;
+		lf_next(l);
+		expect(l, TOK_LPAREN);
+		f->symbol = expect_name(l);
+		expect(l, TOK_RPAREN);
+	} else {
+		die("%s:%d: expected flag keyword (KEEP/ALIGN/SORT/SURROUND), got '%s'",
+		    l->path, l->line,
+		    l->tok == TOK_NAME ? l->val : tok_str(l->tok));
+	}
+}
+
+/**
+ * Parse a flag item: IDENT '->' IDENT flag { flag }.
+ */
+static void parse_flag_item(struct lexer *l, struct lf_flag_item *item)
+{
+	memset(item, 0, sizeof(*item));
+	item->sections = expect_name(l);
+	expect(l, TOK_ARROW);
+	item->target = expect_name(l);
+
+	int fcap = 0;
+	while (l->tok == TOK_NAME
+	       && (is_kw(l, "KEEP") || is_kw(l, "ALIGN")
+		   || is_kw(l, "SORT") || is_kw(l, "SURROUND"))) {
+		ALLOC_GROW(item->flags, item->n_flags + 1, fcap);
+		parse_flag(l, &item->flags[item->n_flags++]);
+	}
+
+	if (item->n_flags == 0)
+		die("%s:%d: expected at least one flag after section->target",
+		    l->path, l->line);
+}
+
+/**
+ * Parse a flag list after ';' on a mapping entry.
+ *
+ * Grammar:
+ *   ';' flag_list
+ *   flag_list = flag_item { ',' [NL] flag_item }
+ *
+ * The flag list may be on the same line or span an indented block
+ * separated by commas.
+ */
+static void parse_flag_list(struct lexer *l, struct lf_entry *entry)
+{
+	lf_next(l); /* consume ';' */
+
+	/*
+	 * The flag list can be either:
+	 *   1. Inline on the same line (single flag_item, no indent)
+	 *   2. Indented block with comma-separated flag_items across lines
+	 *
+	 * In case 2 the ';' is followed by NL INDENT.
+	 */
+	int in_block = 0;
+	if (l->tok == TOK_NL) {
+		lf_next(l);
+		if (l->tok == TOK_INDENT) {
+			in_block = 1;
+			lf_next(l);
+		}
+	}
+
+	int cap = 0;
+
+	ALLOC_GROW(entry->flag_items, entry->n_flag_items + 1, cap);
+	parse_flag_item(l, &entry->flag_items[entry->n_flag_items++]);
+
+	while (l->tok == TOK_COMMA) {
+		lf_next(l); /* consume ',' */
+		if (l->tok == TOK_NL)
+			lf_next(l); /* optional NL after comma */
+		ALLOC_GROW(entry->flag_items, entry->n_flag_items + 1, cap);
+		parse_flag_item(l, &entry->flag_items[entry->n_flag_items++]);
+	}
+
+	if (in_block) {
+		if (l->tok == TOK_NL)
 			lf_next(l);
 		expect(l, TOK_DEDENT);
+	} else {
+		expect(l, TOK_NL);
 	}
 }
 
@@ -600,7 +733,7 @@ static void parse_map_stmts(struct lexer *l,
 		s->u.entry.scheme = scheme;
 
 		if (l->tok == TOK_SEMI)
-			skip_flag_block(l);
+			parse_flag_list(l, &s->u.entry);
 		else
 			expect(l, TOK_NL);
 	}
@@ -915,11 +1048,30 @@ struct lf_file *lf_parse(const char *src, const char *path)
 /*  Free                                                              */
 /* ================================================================== */
 
+static void free_flag(struct lf_flag *f)
+{
+	free(f->sort_first);
+	free(f->sort_second);
+	free(f->symbol);
+}
+
+static void free_flag_item(struct lf_flag_item *item)
+{
+	free(item->sections);
+	free(item->target);
+	for (int i = 0; i < item->n_flags; i++)
+		free_flag(&item->flags[i]);
+	free(item->flags);
+}
+
 static void free_entry(struct lf_entry *e)
 {
 	free(e->name);
 	free(e->target);
 	free(e->scheme);
+	for (int i = 0; i < e->n_flag_items; i++)
+		free_flag_item(&e->flag_items[i]);
+	free(e->flag_items);
 }
 
 static void free_stmts(struct lf_stmt *v, int n);
@@ -1003,6 +1155,35 @@ static void pr_indent(int depth)
 		printf("    ");
 }
 
+static void dump_flag(const struct lf_flag *f)
+{
+	switch (f->kind) {
+	case LF_FLAG_KEEP:
+		printf(" KEEP()");
+		break;
+	case LF_FLAG_ALIGN:
+		printf(" ALIGN(%d", f->alignment);
+		if (f->pre && f->post)
+			printf(", pre, post");
+		else if (f->post)
+			printf(", post");
+		printf(")");
+		break;
+	case LF_FLAG_SORT:
+		printf(" SORT(");
+		if (f->sort_first) {
+			printf("%s", f->sort_first);
+			if (f->sort_second)
+				printf(", %s", f->sort_second);
+		}
+		printf(")");
+		break;
+	case LF_FLAG_SURROUND:
+		printf(" SURROUND(%s)", f->symbol);
+		break;
+	}
+}
+
 static void dump_entry(const struct lf_entry *e, enum lf_frag_kind ctx,
 		       int depth)
 {
@@ -1016,9 +1197,25 @@ static void dump_entry(const struct lf_entry *e, enum lf_frag_kind ctx,
 		break;
 	case LF_MAPPING:
 		if (e->target)
-			printf("%s:%s (%s)\n", e->name, e->target, e->scheme);
+			printf("%s:%s (%s)", e->name, e->target, e->scheme);
 		else
-			printf("%s (%s)\n", e->name, e->scheme);
+			printf("%s (%s)", e->name, e->scheme);
+		if (e->n_flag_items > 0) {
+			printf(";\n");
+			for (int i = 0; i < e->n_flag_items; i++) {
+				const struct lf_flag_item *fi =
+					&e->flag_items[i];
+				pr_indent(depth + 1);
+				printf("%s -> %s", fi->sections, fi->target);
+				for (int j = 0; j < fi->n_flags; j++)
+					dump_flag(&fi->flags[j]);
+				if (i + 1 < e->n_flag_items)
+					printf(",");
+				printf("\n");
+			}
+		} else {
+			printf("\n");
+		}
 		break;
 	default:
 		printf("%s\n", e->name);
