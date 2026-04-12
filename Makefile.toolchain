@@ -56,6 +56,10 @@ help:
 	@echo '    llvm-mingw-ucrt          CC=x86_64-w64-mingw32-gcc    (ucrt runtime, Win10+)'
 	@echo '                             CC=i686-w64-mingw32-gcc'
 	@echo '                             CC=aarch64-w64-mingw32-gcc'
+	@echo ''
+	@echo 'SPECIAL TARGETS:'
+	@echo '    all                      fetch all toolchains, export all PATHs'
+	@echo '    clean                    remove all fetched toolchains'
 
 clean:
 	@rm -rf $(CURDIR)/toolchains
@@ -101,7 +105,9 @@ TOOLCHAINS := linux-amd64 linux-arm64 linux-armel linux-armhf \
               linux-i386 linux-ppc64el linux-riscv64 linux-s390x \
               llvm-mingw-msvcrt llvm-mingw-ucrt
 
-.PHONY: $(TOOLCHAINS)
+.PHONY: all $(TOOLCHAINS)
+
+all: $(TOOLCHAINS)
 
 $(TOOLCHAINS_DIR):
 	@mkdir -p $@
