@@ -23,7 +23,9 @@
 #include <string.h>
 
 #include "alloc.h"
+#include "ar.h"
 #include "color.h"
+#include "elf.h"
 #include "error.h"
 #include "http.h"
 #include "options.h"
@@ -34,6 +36,7 @@
 
 /* Subcommands */
 int cmd_build(int argc, const char **argv);
+int cmd_configdep(int argc, const char **argv);
 int cmd_ldgen(int argc, const char **argv);
 
 #endif /* ICE_H */

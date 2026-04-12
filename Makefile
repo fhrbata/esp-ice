@@ -73,10 +73,13 @@ endif
 PKG_NAME := $(NAME)-$(VERSION)-$(S)-$(ARCH)$(PKG_SUFFIX)
 
 SRCS := ice.c \
+	ar.c \
 	cmd/build/build.c \
+	cmd/configdep/configdep.c \
 	cmd/ldgen/ldgen.c \
 	cmd/ldgen/lf.c \
 	color.c \
+	elf.c \
 	error.c \
 	options.c \
 	sbuf.c \
@@ -176,6 +179,9 @@ $(O)/%.o: platform/win/%.c Makefile $(O)/context | $(O)
 	$(CC) $(BUILD_DEFINES) $(BUILD_CFLAGS) -MD -MP -o $@ -c $<
 
 $(O)/%.o: cmd/build/%.c Makefile $(O)/context | $(O)
+	$(CC) $(BUILD_DEFINES) $(BUILD_CFLAGS) -MD -MP -o $@ -c $<
+
+$(O)/%.o: cmd/configdep/%.c Makefile $(O)/context | $(O)
 	$(CC) $(BUILD_DEFINES) $(BUILD_CFLAGS) -MD -MP -o $@ -c $<
 
 $(O)/%.o: cmd/ldgen/%.c Makefile $(O)/context | $(O)

@@ -171,6 +171,7 @@ int parse_options(int argc, const char **argv, const struct option *opts,
 	/* Pack remaining args to the front. */
 	for (; i < argc; i++)
 		argv[out++] = argv[i];
+	argv[out] = NULL;
 
 	return out;
 }
