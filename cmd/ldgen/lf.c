@@ -9,67 +9,114 @@
  * @brief Linker fragment (.lf) parser -- hand-written LL(1).
  *
  * Two-layer design:
- *   1. Lexer  -- character stream to token stream, with INDENT/DEDENT
- *   2. Parser -- recursive descent consuming the token stream
+ *
+ *   Lexer   Scans the input character-by-character, emitting a stream
+ *           of tokens.  Indentation is tracked with a stack; the lexer
+ *           emits synthetic INDENT/DEDENT tokens so the parser sees a
+ *           flat, context-free token stream.
+ *
+ *   Parser  Recursive descent driven by the LL(1) grammar in README.md.
+ *           Each grammar production maps to one static function.
+ *           Conditionals (if/elif/else) are shared across all entry
+ *           types through a function-pointer callback (@c stmt_parser_fn).
  */
 #include "../../ice.h"
 #include "lf.h"
 
 /* ================================================================== */
-/*  Helpers                                                           */
+/*  Character classification                                          */
 /* ================================================================== */
 
+/**
+ * True for characters that may start a NAME token.
+ * Covers IDENT, SEC_NAME, and OBJ_NAME first-char classes from the
+ * grammar (letters, underscore, dot).
+ */
 static int is_name_start(int c)
 {
 	return isalpha(c) || c == '_' || c == '.';
 }
 
+/**
+ * True for characters that may continue a NAME token (after the first).
+ * Union of continuation classes: [a-zA-Z0-9._$+].
+ * Hyphens are handled separately in the name-matching loop to avoid
+ * consuming the '-' in '->'.
+ */
 static int is_name_cont(int c)
 {
 	return isalnum(c) || c == '_' || c == '.' || c == '$' || c == '+';
 }
 
 /* ================================================================== */
-/*  Lexer                                                             */
+/*  Lexer -- token types                                              */
 /* ================================================================== */
 
 enum lf_tok {
 	TOK_EOF = 0,
-	TOK_NL,
-	TOK_INDENT,
-	TOK_DEDENT,
-	TOK_LBRACK,
-	TOK_RBRACK,
-	TOK_LPAREN,
-	TOK_RPAREN,
-	TOK_COLON,
-	TOK_SEMI,
-	TOK_COMMA,
-	TOK_ARROW,
-	TOK_STAR,
-	TOK_NAME,
-	TOK_NUM,
+	TOK_NL,		/**< end of a content line */
+	TOK_INDENT,		/**< indentation deeper than current level */
+	TOK_DEDENT,		/**< indentation shallower than current level */
+	TOK_LBRACK,		/**< '[' */
+	TOK_RBRACK,		/**< ']' */
+	TOK_LPAREN,		/**< '(' */
+	TOK_RPAREN,		/**< ')' */
+	TOK_COLON,		/**< ':' */
+	TOK_SEMI,		/**< ';' */
+	TOK_COMMA,		/**< ',' */
+	TOK_ARROW,		/**< '->' */
+	TOK_STAR,		/**< '*' */
+	TOK_NAME,		/**< identifier / section name / entity name */
+	TOK_NUM,		/**< integer literal */
 };
 
+/* ================================================================== */
+/*  Lexer -- state                                                    */
+/* ================================================================== */
+
+/**
+ * Lexer state.
+ *
+ * The lexer scans a NUL-terminated input buffer and produces one token
+ * per lf_next() call.  It tracks:
+ *
+ *  - An indentation stack (@c indent / @c depth) for emitting
+ *    INDENT/DEDENT tokens at block boundaries.
+ *
+ *  - A small ring buffer (@c pending) for cases where a single scan
+ *    position produces multiple tokens (e.g. dedenting several levels
+ *    at once, or flushing remaining DEDENTs at EOF).
+ *
+ *  - The current token value: @c tok (type), @c val (string, owned),
+ *    @c num (integer).
+ */
 struct lexer {
-	const char *pos;
-	const char *path;
-	int line;
+	const char *pos;	/**< current scan position in input */
+	const char *path;	/**< source file path (for diagnostics) */
+	int line;		/**< current line number (1-based) */
 
+	/** Indentation stack.  indent[0] is always 0 (column 0). */
 	int indent[64];
-	int depth;
+	int depth;		/**< top-of-stack index */
 
+	/**
+	 * Pending-token ring buffer.  Used when a single scan position
+	 * must emit multiple tokens (multi-level dedent, EOF cleanup).
+	 * Indices wrap with & 63.
+	 */
 	int pending[64];
-	int qh, qt;
+	int qh;			/**< head (next to dequeue) */
+	int qt;			/**< tail (next slot to enqueue) */
 
-	int tok;
-	char *val;
-	int num;
+	int tok;		/**< current token type */
+	char *val;		/**< string value for TOK_NAME (owned) */
+	int num;		/**< numeric value for TOK_NUM */
 
-	int bol;
-	int eof;
+	int bol;		/**< true when next scan starts a new line */
+	int eof;		/**< true after end-of-input was processed */
 };
 
+/** Return a human-readable name for a token type (for diagnostics). */
 static const char *tok_str(int t)
 {
 	switch (t) {
@@ -92,10 +139,23 @@ static const char *tok_str(int t)
 	}
 }
 
+/* ---- pending-token ring buffer ---------------------------------- */
+
 static void q_push(struct lexer *l, int t) { l->pending[l->qt++ & 63] = t; }
 static int  q_pop(struct lexer *l)         { return l->pending[l->qh++ & 63]; }
 static int  q_any(struct lexer *l)         { return l->qh < l->qt; }
 
+/* ================================================================== */
+/*  Lexer -- indentation                                              */
+/* ================================================================== */
+
+/**
+ * Compare @p indent with the current stack top and emit INDENT or
+ * DEDENT tokens as needed.  Same-level produces no token.
+ *
+ * On dedent, one DEDENT is queued per popped level.  If the new indent
+ * does not match any level on the stack, die with an error.
+ */
 static void process_indent(struct lexer *l, int indent)
 {
 	int top = l->indent[l->depth];
@@ -115,14 +175,33 @@ static void process_indent(struct lexer *l, int indent)
 	}
 }
 
+/* ================================================================== */
+/*  Lexer -- main entry point                                         */
+/* ================================================================== */
+
+/**
+ * Advance the lexer to the next token, returning its type.
+ *
+ * The token type is also stored in @c l->tok.  For TOK_NAME the string
+ * value is in @c l->val (owned by the lexer, freed on the next call or
+ * when taken by expect_name()).  For TOK_NUM the value is in @c l->num.
+ *
+ * At the beginning of each line (bol flag set), the lexer:
+ *  1. Skips blank and comment-only lines.
+ *  2. Measures the leading whitespace and calls process_indent().
+ *  3. Returns any queued INDENT/DEDENT before scanning content.
+ *
+ * At EOF, remaining DEDENT tokens are flushed from the indent stack.
+ */
 static int lf_next(struct lexer *l)
 {
+	/* drain pending queue first */
 	if (q_any(l))
 		return l->tok = q_pop(l);
 	if (l->eof)
 		return l->tok = TOK_EOF;
 
-	/* BOL: skip blank/comment lines, emit INDENT/DEDENT */
+	/* beginning of line: indentation analysis */
 	if (l->bol) {
 		l->bol = 0;
 		for (;;) {
@@ -131,11 +210,13 @@ static int lf_next(struct lexer *l)
 				indent++;
 				l->pos++;
 			}
+			/* blank line — skip, stay in BOL loop */
 			if (*l->pos == '\n') {
 				l->pos++;
 				l->line++;
 				continue;
 			}
+			/* comment-only line — skip */
 			if (*l->pos == '#') {
 				while (*l->pos && *l->pos != '\n')
 					l->pos++;
@@ -145,6 +226,7 @@ static int lf_next(struct lexer *l)
 				}
 				continue;
 			}
+			/* EOF at BOL — flush remaining indent levels */
 			if (*l->pos == '\0') {
 				while (l->depth > 0) {
 					q_push(l, TOK_DEDENT);
@@ -154,6 +236,7 @@ static int lf_next(struct lexer *l)
 				return l->tok = q_any(l)
 					? q_pop(l) : TOK_EOF;
 			}
+			/* content line — process indent, then scan */
 			process_indent(l, indent);
 			if (q_any(l))
 				return l->tok = q_pop(l);
@@ -161,9 +244,11 @@ static int lf_next(struct lexer *l)
 		}
 	}
 
+	/* skip inline whitespace */
 	while (*l->pos == ' ' || *l->pos == '\t')
 		l->pos++;
 
+	/* newline → end current line, enter BOL */
 	if (*l->pos == '\n') {
 		l->pos++;
 		l->line++;
@@ -171,6 +256,7 @@ static int lf_next(struct lexer *l)
 		return l->tok = TOK_NL;
 	}
 
+	/* inline comment → treat as end of line */
 	if (*l->pos == '#') {
 		while (*l->pos && *l->pos != '\n')
 			l->pos++;
@@ -182,6 +268,7 @@ static int lf_next(struct lexer *l)
 		return l->tok = TOK_NL;
 	}
 
+	/* EOF mid-line — synthesise NL + remaining DEDENTs */
 	if (*l->pos == '\0') {
 		q_push(l, TOK_NL);
 		while (l->depth > 0) {
@@ -192,11 +279,13 @@ static int lf_next(struct lexer *l)
 		return l->tok = q_pop(l);
 	}
 
+	/* '->' (must precede single-char '-' check) */
 	if (l->pos[0] == '-' && l->pos[1] == '>') {
 		l->pos += 2;
 		return l->tok = TOK_ARROW;
 	}
 
+	/* single-character tokens */
 	switch (*l->pos) {
 	case '[': l->pos++; return l->tok = TOK_LBRACK;
 	case ']': l->pos++; return l->tok = TOK_RBRACK;
@@ -208,6 +297,11 @@ static int lf_next(struct lexer *l)
 	case '*': l->pos++; return l->tok = TOK_STAR;
 	}
 
+	/*
+	 * NAME — covers IDENT, SEC_NAME, OBJ_NAME and ENTITY from the
+	 * grammar.  Hyphens are consumed mid-name only when the next
+	 * character is NOT '>' (to avoid eating '->').
+	 */
 	if (is_name_start(*l->pos)) {
 		const char *start = l->pos++;
 		while (is_name_cont(*l->pos))
@@ -223,6 +317,7 @@ static int lf_next(struct lexer *l)
 		return l->tok = TOK_NAME;
 	}
 
+	/* NUM */
 	if (isdigit((unsigned char)*l->pos)) {
 		l->num = 0;
 		while (isdigit((unsigned char)*l->pos))
@@ -239,11 +334,13 @@ static int lf_next(struct lexer *l)
 /*  Parser helpers                                                    */
 /* ================================================================== */
 
+/** True if the current token is NAME with value @p kw. */
 static int is_kw(struct lexer *l, const char *kw)
 {
 	return l->tok == TOK_NAME && !strcmp(l->val, kw);
 }
 
+/** Consume the current token if it matches @p tok, otherwise die. */
 static void expect(struct lexer *l, int tok)
 {
 	if (l->tok != tok)
@@ -252,6 +349,11 @@ static void expect(struct lexer *l, int tok)
 	lf_next(l);
 }
 
+/**
+ * Consume a NAME token: take ownership of its string value (caller
+ * must free) and advance to the next token.  Dies if the current
+ * token is not NAME.
+ */
 static char *expect_name(struct lexer *l)
 {
 	if (l->tok != TOK_NAME)
@@ -264,8 +366,14 @@ static char *expect_name(struct lexer *l)
 }
 
 /**
- * Read condition expression after "if" / "elif".
- * l->pos is right after the keyword.  Reads up to ':', trims, advances.
+ * Read a condition expression after "if" or "elif".
+ *
+ * Called right after the lexer produced the keyword NAME token, so
+ * l->pos points just past "if"/"elif".  Reads raw characters up to
+ * ':', trims surrounding whitespace, consumes the ':', then advances
+ * the lexer (the next token will normally be NL).
+ *
+ * @return  heap-allocated expression string (caller must free)
  */
 static char *read_cond(struct lexer *l)
 {
@@ -293,9 +401,29 @@ static char *read_cond(struct lexer *l)
 /*  Parser -- entry-level conditionals                                */
 /* ================================================================== */
 
+/**
+ * Callback type for parsing entry statements within a block.
+ *
+ * Each entry type (section, scheme, mapping, archive) provides its own
+ * parser function matching this signature.  The conditional parser
+ * calls the appropriate one to parse the body of each branch, allowing
+ * a single parse_cond() to handle all entry types.
+ */
 typedef void (*stmt_parser_fn)(struct lexer *l,
 			       struct lf_stmt **v, int *n, int *cap);
 
+/**
+ * Parse an if/elif/else conditional block and append it as a
+ * single LF_STMT_COND entry to the statement list.
+ *
+ * Called when the current token is NAME("if").  The @p inner callback
+ * parses the entry statements inside each branch's indented body.
+ *
+ * Grammar:
+ *   cond(S) = "if" EXPR ":" NL INDENT {S} DEDENT
+ *             {"elif" EXPR ":" NL INDENT {S} DEDENT}
+ *             ["else:" NL INDENT {S} DEDENT]
+ */
 static void parse_cond(struct lexer *l,
 		       struct lf_stmt **v, int *n, int *cap,
 		       stmt_parser_fn inner)
@@ -309,7 +437,7 @@ static void parse_cond(struct lexer *l,
 	struct lf_branch *branches = NULL;
 	int nb = 0;
 
-	/* if */
+	/* if branch */
 	char *expr = read_cond(l);
 	expect(l, TOK_NL);
 
@@ -324,7 +452,7 @@ static void parse_cond(struct lexer *l,
 		inner(l, &b->stmts, &b->n_stmts, &scap);
 	expect(l, TOK_DEDENT);
 
-	/* elif */
+	/* elif branches */
 	while (is_kw(l, "elif")) {
 		expr = read_cond(l);
 		expect(l, TOK_NL);
@@ -341,7 +469,7 @@ static void parse_cond(struct lexer *l,
 		expect(l, TOK_DEDENT);
 	}
 
-	/* else */
+	/* else branch */
 	if (is_kw(l, "else")) {
 		lf_next(l);
 		expect(l, TOK_COLON);
@@ -364,8 +492,14 @@ static void parse_cond(struct lexer *l,
 
 /* ================================================================== */
 /*  Parser -- entry types                                             */
+/*                                                                    */
+/*  Each function parses statements of one type until a token is seen */
+/*  that cannot start a statement (typically DEDENT or EOF).          */
+/*  "elif" and "else" break the loop so the caller (parse_cond) can  */
+/*  handle them.                                                      */
 /* ================================================================== */
 
+/** Parse section entries: SEC_NAME NL | cond(sec_stmt). */
 static void parse_sec_stmts(struct lexer *l,
 			     struct lf_stmt **v, int *n, int *cap)
 {
@@ -385,6 +519,7 @@ static void parse_sec_stmts(struct lexer *l,
 	}
 }
 
+/** Parse scheme entries: IDENT '->' IDENT NL | cond(sch_stmt). */
 static void parse_sch_stmts(struct lexer *l,
 			     struct lf_stmt **v, int *n, int *cap)
 {
@@ -406,9 +541,12 @@ static void parse_sch_stmts(struct lexer *l,
 	}
 }
 
+/**
+ * Skip over a flag block (the ';' and following indented flag list).
+ * TODO: parse flags into the AST.
+ */
 static void skip_flag_block(struct lexer *l)
 {
-	/* TODO: parse flags into AST */
 	lf_next(l);
 	expect(l, TOK_NL);
 	if (l->tok == TOK_INDENT) {
@@ -419,6 +557,13 @@ static void skip_flag_block(struct lexer *l)
 	}
 }
 
+/**
+ * Parse mapping entries.
+ *
+ * Grammar:
+ *   map_stmt  = map_entry NL | map_entry ';' flag_list | cond(map_stmt)
+ *   map_entry = ('*' | OBJ_NAME [':' IDENT]) '(' IDENT ')'
+ */
 static void parse_map_stmts(struct lexer *l,
 			     struct lf_stmt **v, int *n, int *cap)
 {
@@ -461,6 +606,36 @@ static void parse_map_stmts(struct lexer *l,
 	}
 }
 
+/**
+ * Parse archive entries: (ENTITY | '*') NL | cond(archive_stmt).
+ *
+ * Used for the indented-block form of "archive:", where the archive
+ * name is selected by a conditional.
+ */
+static void parse_archive_stmts(struct lexer *l,
+				struct lf_stmt **v, int *n, int *cap)
+{
+	while (l->tok == TOK_NAME || l->tok == TOK_STAR) {
+		if (is_kw(l, "if")) {
+			parse_cond(l, v, n, cap, parse_archive_stmts);
+			continue;
+		}
+		if (is_kw(l, "elif") || is_kw(l, "else"))
+			break;
+
+		ALLOC_GROW(*v, *n + 1, *cap);
+		struct lf_stmt *s = &(*v)[(*n)++];
+		memset(s, 0, sizeof(*s));
+		if (l->tok == TOK_STAR) {
+			s->u.entry.name = sbuf_strdup("*");
+			lf_next(l);
+		} else {
+			s->u.entry.name = expect_name(l);
+		}
+		expect(l, TOK_NL);
+	}
+}
+
 /* ================================================================== */
 /*  Parser -- fragments                                               */
 /* ================================================================== */
@@ -468,6 +643,11 @@ static void parse_map_stmts(struct lexer *l,
 static void parse_frags(struct lexer *l,
 			struct lf_frag **v, int *n, int *cap);
 
+/**
+ * Parse a fragment-level conditional (if/elif/else wrapping whole
+ * fragments).  Same structure as entry-level conditionals but the
+ * body contains fragments instead of entry statements.
+ */
 static void parse_frag_cond(struct lexer *l,
 			    struct lf_frag **v, int *n, int *cap)
 {
@@ -529,6 +709,13 @@ static void parse_frag_cond(struct lexer *l,
 	f->u.cond.n = nb;
 }
 
+/**
+ * Parse the "entries:" key and its indented body.
+ *
+ * Handles both the standard form (INDENT stmts DEDENT) and the
+ * same-level form where entries appear at the same indent as the key.
+ * The @p fn callback determines which entry type is parsed.
+ */
 static void parse_entries(struct lexer *l, stmt_parser_fn fn,
 			  struct lf_stmt **v, int *n, int *cap)
 {
@@ -544,10 +731,12 @@ static void parse_entries(struct lexer *l, stmt_parser_fn fn,
 			fn(l, v, n, cap);
 		expect(l, TOK_DEDENT);
 	} else {
+		/* same-level: entries at same indent as "entries:" key */
 		fn(l, v, n, cap);
 	}
 }
 
+/** Parse a [sections:NAME] fragment (header already consumed up to "sections"). */
 static void parse_sections(struct lexer *l,
 			   struct lf_frag **v, int *n, int *cap)
 {
@@ -570,6 +759,7 @@ static void parse_sections(struct lexer *l,
 	f->u.sec.n = ns;
 }
 
+/** Parse a [scheme:NAME] fragment. */
 static void parse_scheme(struct lexer *l,
 			 struct lf_frag **v, int *n, int *cap)
 {
@@ -592,30 +782,13 @@ static void parse_scheme(struct lexer *l,
 	f->u.sch.n = ns;
 }
 
-static void parse_archive_stmts(struct lexer *l,
-				struct lf_stmt **v, int *n, int *cap)
-{
-	while (l->tok == TOK_NAME || l->tok == TOK_STAR) {
-		if (is_kw(l, "if")) {
-			parse_cond(l, v, n, cap, parse_archive_stmts);
-			continue;
-		}
-		if (is_kw(l, "elif") || is_kw(l, "else"))
-			break;
-
-		ALLOC_GROW(*v, *n + 1, *cap);
-		struct lf_stmt *s = &(*v)[(*n)++];
-		memset(s, 0, sizeof(*s));
-		if (l->tok == TOK_STAR) {
-			s->u.entry.name = sbuf_strdup("*");
-			lf_next(l);
-		} else {
-			s->u.entry.name = expect_name(l);
-		}
-		expect(l, TOK_NL);
-	}
-}
-
+/**
+ * Parse a [mapping:NAME] fragment.
+ *
+ * The archive value can appear inline ("archive: libfoo.a") or in an
+ * indented conditional block.  Both forms are stored as a statement
+ * list in the AST.
+ */
 static void parse_mapping(struct lexer *l,
 			  struct lf_frag **v, int *n, int *cap)
 {
@@ -625,7 +798,7 @@ static void parse_mapping(struct lexer *l,
 	expect(l, TOK_RBRACK);
 	expect(l, TOK_NL);
 
-	/* archive: VALUE NL  or  archive: NL INDENT stmts DEDENT */
+	/* archive: VALUE NL  or  archive: NL INDENT archive_stmts DEDENT */
 	if (!is_kw(l, "archive"))
 		die("%s:%d: expected 'archive'", l->path, l->line);
 	lf_next(l);
@@ -635,7 +808,7 @@ static void parse_mapping(struct lexer *l,
 	int na = 0, acap = 0;
 
 	if (l->tok == TOK_NAME || l->tok == TOK_STAR) {
-		/* inline value */
+		/* inline: archive value on the same line */
 		ALLOC_GROW(archive, na + 1, acap);
 		struct lf_stmt *s = &archive[na++];
 		memset(s, 0, sizeof(*s));
@@ -647,7 +820,7 @@ static void parse_mapping(struct lexer *l,
 		}
 		expect(l, TOK_NL);
 	} else {
-		/* conditional block */
+		/* conditional: archive value in indented block */
 		expect(l, TOK_NL);
 		expect(l, TOK_INDENT);
 		while (l->tok != TOK_DEDENT && l->tok != TOK_EOF)
@@ -671,6 +844,12 @@ static void parse_mapping(struct lexer *l,
 	f->u.map.n_entries = ne;
 }
 
+/**
+ * Parse a sequence of fragments until EOF or DEDENT.
+ *
+ * This is the top-level loop and also the body of fragment-level
+ * conditionals.  Stray newlines between fragments are skipped.
+ */
 static void parse_frags(struct lexer *l,
 			struct lf_frag **v, int *n, int *cap)
 {
@@ -714,7 +893,7 @@ struct lf_file *lf_parse(const char *src, const char *path)
 	l.line = 1;
 	l.bol = 1;
 
-	lf_next(&l);
+	lf_next(&l); /* prime the first token */
 
 	struct lf_file *f = calloc(1, sizeof(*f));
 	if (!f)
