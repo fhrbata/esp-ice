@@ -50,8 +50,10 @@ build will error if `CC` does not target musl.
 
 ### Cross-compilation
 
-Release binaries for all supported platforms are cross-compiled from a
-Linux host.  `Makefile.toolchain` manages prebuilt toolchains — it
+Linux and Windows release binaries are cross-compiled from a Linux
+host.  macOS binaries are built natively (cross-compiling for macOS
+from Linux would require the Apple SDK).  `Makefile.toolchain`
+manages the prebuilt cross-compilation toolchains — it
 downloads them on first use and prints `export PATH=…` on stdout.
 Wrapping the call in `eval "$(…)"` executes that output in the
 current shell, adding the toolchain's `bin/` directory to `PATH` so
