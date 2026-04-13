@@ -35,8 +35,20 @@
 #include "sbuf.h"
 #include "svec.h"
 
-/* Subcommands */
+/* Global options used by cmake target commands */
+extern const char *opt_build_dir;
+extern const char *opt_generator;
+extern struct svec opt_define;
+extern int opt_verbose;
+
+/* Subcommands -- cmake targets (cmd/cmake/) */
 int cmd_build(int argc, const char **argv);
+int cmd_clean(int argc, const char **argv);
+int cmd_flash(int argc, const char **argv);
+int cmd_menuconfig(int argc, const char **argv);
+int cmd_reconfigure(int argc, const char **argv);
+
+/* Subcommands -- standalone */
 int cmd_configdep(int argc, const char **argv);
 int cmd_ldgen(int argc, const char **argv);
 int cmd_size(int argc, const char **argv);

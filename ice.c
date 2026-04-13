@@ -13,6 +13,11 @@
  */
 #include "ice.h"
 
+const char *opt_build_dir = "build";
+const char *opt_generator = "Ninja";
+struct svec opt_define = SVEC_INIT;
+int opt_verbose;
+
 struct cmd_struct {
 	const char *name;
 	int (*fn)(int argc, const char **argv);
@@ -20,8 +25,12 @@ struct cmd_struct {
 
 static struct cmd_struct commands[] = {
 	{"build", cmd_build},
+	{"clean", cmd_clean},
 	{"configdep", cmd_configdep},
+	{"flash", cmd_flash},
 	{"ldgen", cmd_ldgen},
+	{"menuconfig", cmd_menuconfig},
+	{"reconfigure", cmd_reconfigure},
 	{"size", cmd_size},
 };
 
@@ -42,7 +51,7 @@ static void list_commands(void)
 }
 
 static const char *global_usage[] = {
-	"ice [-C <dir>] [--no-color] <command> [<args>]",
+	"ice [-B <path>] [-G <name>] [-D <key=val>] [-v] [-C <dir>] [--no-color] <command> [<args>]",
 	NULL,
 };
 
@@ -55,10 +64,18 @@ int main(int argc, const char **argv)
 	int version = 0;
 
 	struct option global_opts[] = {
+		OPT_STRING('B', "build-dir", &opt_build_dir, "path",
+			   "build directory (default: build)"),
 		OPT_STRING('C', NULL, &dir, "dir",
 			   "change to directory before doing anything"),
+		OPT_STRING_LIST('D', "define", &opt_define, "key=val",
+			   "cmake cache entry (repeatable)"),
+		OPT_STRING('G', "generator", &opt_generator, "name",
+			   "cmake generator (default: Ninja)"),
 		OPT_BOOL(0, "no-color", &no_color,
 			 "disable colored output"),
+		OPT_BOOL('v', "verbose", &opt_verbose,
+			 "show full command output"),
 		OPT_BOOL(0, "version", &version,
 			 "show version"),
 		OPT_END(),

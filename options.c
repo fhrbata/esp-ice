@@ -92,6 +92,9 @@ static int set_value(const struct option *o, const char *val)
 	case OPTION_STRING:
 		*(const char **)o->value = val;
 		return 0;
+	case OPTION_STRING_LIST:
+		svec_push((struct svec *)o->value, val);
+		return 0;
 	case OPTION_INT:
 		*(int *)o->value = atoi(val);
 		return 0;

@@ -74,7 +74,7 @@ PKG_NAME := $(NAME)-$(VERSION)-$(S)-$(ARCH)$(PKG_SUFFIX)
 
 SRCS := ice.c \
 	ar.c \
-	cmd/build/build.c \
+	cmd/cmake/cmake.c \
 	cmd/configdep/configdep.c \
 	cmd/ldgen/ldgen.c \
 	cmd/ldgen/lf.c \
@@ -181,7 +181,7 @@ $(O)/%.o: platform/posix/%.c Makefile $(O)/context  | $(O)
 $(O)/%.o: platform/win/%.c Makefile $(O)/context | $(O)
 	$(CC) $(BUILD_DEFINES) $(BUILD_CFLAGS) -MD -MP -o $@ -c $<
 
-$(O)/%.o: cmd/build/%.c Makefile $(O)/context | $(O)
+$(O)/%.o: cmd/cmake/%.c Makefile $(O)/context | $(O)
 	$(CC) $(BUILD_DEFINES) $(BUILD_CFLAGS) -MD -MP -o $@ -c $<
 
 $(O)/%.o: cmd/configdep/%.c Makefile $(O)/context | $(O)
@@ -262,12 +262,14 @@ test: $(BINARY)
 	T_OUT=$(T_OUT) BINARY=$(BINARY_ABS) CC=${CC} S=$(S) prove $(PFLAGS) $(T)
 
 
+TAG_DIRS := cmd platform
+
 cscope:
-	find . \( -name "*.c" -o -name "*.h" \) >cscope.files
+	{ find . -maxdepth 1 -name "*.[ch]"; find $(TAG_DIRS) -name "*.[ch]"; } >cscope.files
 	cscope -b
 
 ctags:
-	find . \( -name "*.c" -o -name "*.h" \) | ctags -L -
+	{ find . -maxdepth 1 -name "*.[ch]"; find $(TAG_DIRS) -name "*.[ch]"; } | ctags -L -
 
 tags: cscope ctags
 

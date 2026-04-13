@@ -36,6 +36,7 @@
 enum option_type {
 	OPTION_BOOL,
 	OPTION_STRING,
+	OPTION_STRING_LIST,
 	OPTION_INT,
 	OPTION_END,
 };
@@ -54,6 +55,9 @@ struct option {
 
 #define OPT_STRING(s, l, v, a, h)                                             \
 	{ OPTION_STRING, (s), (l), (v), (a), (h) }
+
+#define OPT_STRING_LIST(s, l, v, a, h)                                        \
+	{ OPTION_STRING_LIST, (s), (l), (v), (a), (h) }
 
 #define OPT_INT(s, l, v, a, h)                                                \
 	{ OPTION_INT, (s), (l), (v), (a), (h) }
