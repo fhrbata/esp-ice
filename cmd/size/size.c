@@ -361,20 +361,17 @@ static void memmap_build(struct memmap *mm, const char *target,
 	free(regions);
 }
 
-static void memmap_dump(const struct memmap *mm)
+/**
+ * Abbreviate a section name to its last dot-segment.
+ * ".iram0.text" -> ".text", ".iram1.0.literal" -> ".literal".
+ * Names without a second dot (e.g. ".noinit") are unchanged.
+ */
+static const char *abbrev_section(const char *name)
 {
-	for (int i = 0; i < mm->nr_entries; i++) {
-		const struct memmap_entry *e = &mm->entries[i];
-		if (!e->size && !e->used)
-			continue;
-		printf("%-14s %llu / %llu\n", e->name,
-		       (unsigned long long)e->used,
-		       (unsigned long long)e->size);
-		for (int j = 0; j < e->nr_sections; j++)
-			printf("  %-30s %llu\n",
-			       e->sections[j].name,
-			       (unsigned long long)e->sections[j].size);
-	}
+	const char *last = strrchr(name, '.');
+	if (last && last != name)
+		return last;
+	return name;
 }
 
 static void memmap_release(struct memmap *mm)
@@ -384,25 +381,172 @@ static void memmap_release(struct memmap *mm)
 	free(mm->entries);
 }
 
+/* ---- output: table -------------------------------------------------- */
+
+/* Column inner widths (content + 1-space padding each side). */
+static const int col_w[] = {21, 14, 10, 16, 15};
+
+static void table_hline(const char *l, const char *m, const char *r,
+			const char *fill)
+{
+	struct sbuf sb = SBUF_INIT;
+
+	sbuf_addstr(&sb, l);
+	for (int i = 0; i < 5; i++) {
+		for (int j = 0; j < col_w[i]; j++)
+			sbuf_addstr(&sb, fill);
+		sbuf_addstr(&sb, i < 4 ? m : r);
+	}
+	printf("%s\n", sb.buf);
+	sbuf_release(&sb);
+}
+
+static int cmp_entry_used(const void *a, const void *b)
+{
+	uint64_t ua = (*(const struct memmap_entry **)a)->used;
+	uint64_t ub = (*(const struct memmap_entry **)b)->used;
+	return ua < ub ? 1 : ua > ub ? -1 : 0;
+}
+
+static int cmp_section_size(const void *a, const void *b)
+{
+	uint64_t sa = ((const struct memmap_section *)a)->size;
+	uint64_t sb = ((const struct memmap_section *)b)->size;
+	return sa < sb ? 1 : sa > sb ? -1 : 0;
+}
+
+/**
+ * Format a percentage, stripping trailing zeros but keeping at
+ * least one decimal place: 100.00 -> "100.0", 15.63 -> "15.63".
+ */
+static const char *fmt_pct(char *buf, size_t sz, double pct)
+{
+	int len = snprintf(buf, sz, "%.2f", pct);
+	while (len > 1 && buf[len - 1] == '0' && buf[len - 2] != '.')
+		buf[--len] = '\0';
+	return buf;
+}
+
+/**
+ * Flash/cache types have huge totals (cache window size, not real
+ * available memory), so we hide %, Remain, and Total for them.
+ */
+static int is_cache_type(const char *name)
+{
+	return strncmp(name, "Flash", 5) == 0 ||
+	       strncmp(name, "SPI", 3) == 0 ||
+	       strncmp(name, "CACHE", 5) == 0 ||
+	       strncmp(name, "External", 8) == 0;
+}
+
+static void output_table(struct memmap *mm)
+{
+	/* Collect non-empty entries and sort by used (descending). */
+	struct memmap_entry *sorted[32];
+	int n = 0;
+
+	for (int i = 0; i < mm->nr_entries; i++) {
+		struct memmap_entry *e = &mm->entries[i];
+		if (!e->size && !e->used)
+			continue;
+		qsort(e->sections, e->nr_sections,
+		      sizeof(e->sections[0]), cmp_section_size);
+		sorted[n++] = e;
+	}
+	qsort(sorted, n, sizeof(sorted[0]), cmp_entry_used);
+
+	/* Title, centered over the 82-char table. */
+	printf("%*s\n", (82 + 25) / 2, "Memory Type Usage Summary");
+
+	/* ┏━━━┳━━━┓ */
+	table_hline(TL, TM, TR, HH);
+
+	/* ┃ header ┃ */
+	printf(VH " @b{%-19s} " VH " @b{%12s} " VH " @b{%8s} "
+	       VH " @b{%14s} " VH " @b{%13s} " VH "\n",
+	       "Memory Type/Section", "Used [bytes]", "Used [%]",
+	       "Remain [bytes]", "Total [bytes]");
+
+	/* ┡━━━╇━━━┩ */
+	table_hline(ML, MM, MR, HH);
+
+	for (int i = 0; i < n; i++) {
+		const struct memmap_entry *e = sorted[i];
+		int show_total = e->size && !is_cache_type(e->name);
+		char pctbuf[16];
+
+		/* Memory type row (yellow). */
+		if (show_total) {
+			uint64_t remain = e->size - e->used;
+			fmt_pct(pctbuf, sizeof(pctbuf),
+				(double)e->used * 100.0 / (double)e->size);
+			printf(VL " @y{%-19s} " VL " %12llu "
+			       VL " %8s " VL " %14llu "
+			       VL " %13llu " VL "\n",
+			       e->name,
+			       (unsigned long long)e->used, pctbuf,
+			       (unsigned long long)remain,
+			       (unsigned long long)e->size);
+		} else {
+			printf(VL " @y{%-19s} " VL " %12llu "
+			       VL " %8s " VL " %14s "
+			       VL " %13s " VL "\n",
+			       e->name,
+			       (unsigned long long)e->used,
+			       "", "", "");
+		}
+
+		/* Section rows (cyan, indented). */
+		for (int j = 0; j < e->nr_sections; j++) {
+			const char *name = abbrev_section(
+				e->sections[j].name);
+			uint64_t sz = e->sections[j].size;
+
+			if (show_total) {
+				fmt_pct(pctbuf, sizeof(pctbuf),
+					(double)sz * 100.0 /
+						(double)e->size);
+				printf(VL " @c{   %-16s} " VL " %12llu "
+				       VL " %8s " VL " %14s "
+				       VL " %13s " VL "\n",
+				       name,
+				       (unsigned long long)sz, pctbuf,
+				       "", "");
+			} else {
+				printf(VL " @c{   %-16s} " VL " %12llu "
+				       VL " %8s " VL " %14s "
+				       VL " %13s " VL "\n",
+				       name,
+				       (unsigned long long)sz,
+				       "", "", "");
+			}
+		}
+	}
+
+	/* └───┴───┘ */
+	table_hline(BL, BM, BR, HL);
+}
+
 /* ---- command -------------------------------------------------------- */
 
 int cmd_size(int argc, const char **argv)
 {
 	const char *target = NULL;
+	const char *format = "table";
 
 	struct option opts[] = {
 		OPT_STRING('t', "target", &target, "chip",
 			   "target chip (e.g. esp32s3)"),
+		OPT_STRING(0, "format", &format, "fmt",
+			   "output format (table)"),
 		OPT_END(),
 	};
 	const char *usage[] = {
-		"ice size --target <chip> <map-file>",
+		"ice size [--format <fmt>] [--target <chip>] <map-file>",
 		NULL,
 	};
 
 	argc = parse_options(argc, argv, opts, usage);
-	if (!target)
-		die("--target is required; see 'ice size --help'");
 	if (argc < 1)
 		die("no map file; see 'ice size --help'");
 
@@ -413,9 +557,19 @@ int cmd_size(int argc, const char **argv)
 	struct map_file mf;
 	map_read(sb.buf, sb.len, &mf);
 
+	if (!target) {
+		target = mf.target;
+		if (!target)
+			die("cannot detect target; use --target");
+	}
+
 	struct memmap mm;
 	memmap_build(&mm, target, &mf);
-	memmap_dump(&mm);
+
+	if (!strcmp(format, "table"))
+		output_table(&mm);
+	else
+		die("unknown format '%s'", format);
 
 	memmap_release(&mm);
 	map_release(&mf);

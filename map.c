@@ -370,6 +370,26 @@ static void parse_sections(char *buf, size_t len, size_t *pos,
 		}
 
 		/*
+		 * Detect IDF_TARGET_<CHIP> symbol for chip target.
+		 * Appears as a top-level symbol assignment before
+		 * any output sections, e.g.:
+		 *   0x00000000  IDF_TARGET_ESP32S3 = 0x0
+		 */
+		if (!out->target) {
+			const char *t = strstr(line, "IDF_TARGET_");
+			if (t) {
+				t += 11; /* skip "IDF_TARGET_" */
+				out->target = t;
+				/* Lowercase in-place and NUL-terminate
+				 * at the first non-alnum character. */
+				for (p = (char *)t; (*p >= 'A' && *p <= 'Z') ||
+				     (*p >= '0' && *p <= '9'); p++)
+					*p |= 0x20;
+				*p = '\0';
+			}
+		}
+
+		/*
 		 * Top level: detect new output section.  Any non-whitespace
 		 * at column 0 that isn't a recognized keyword is a section.
 		 */
@@ -414,6 +434,7 @@ void map_read(char *buf, size_t len, struct map_file *out)
 {
 	size_t pos = 0;
 
+	out->target = NULL;
 	out->regions = NULL;
 	out->nr_regions = 0;
 	out->sections = NULL;
