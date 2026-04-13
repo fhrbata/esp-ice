@@ -339,8 +339,10 @@ int ensure_build_directory(int force)
 		svec_clear(&args);
 	}
 
-	/* On failure, remove CMakeCache.txt to prevent half-valid state. */
-	if (rc && has_cache)
+	/* On failure, remove CMakeCache.txt to prevent half-valid state.
+	 * cmake may create a partial cache even when configure fails the
+	 * first time (has_cache == 0), so always unlink on failure. */
+	if (rc)
 		unlink(cache_path.buf);
 
 out:
