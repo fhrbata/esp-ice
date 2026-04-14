@@ -84,10 +84,13 @@ tap_result () {
 
 # tap_setup
 #
-# Common boilerplate: set O to the per-test output directory, create it,
-# and cd into it.
+# Common boilerplate: set O to the per-test output directory, wipe any
+# leftover state from a prior run, recreate it, and cd into it.  The
+# directory survives the test so its contents are inspectable while
+# debugging a failure.
 tap_setup () {
 	O="$T_OUT/$(basename "$0" .t)"
+	rm -rf "$O"
 	mkdir -p "$O"
 	cd "$O" || exit 1
 }
