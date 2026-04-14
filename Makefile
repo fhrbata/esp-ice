@@ -76,6 +76,7 @@ SRCS := ice.c \
 	ar.c \
 	cmakecache.c \
 	cmd/cmake/cmake.c \
+	cmd/config/config.c \
 	cmd/configdep/configdep.c \
 	cmd/ldgen/ldgen.c \
 	cmd/ldgen/lf.c \
@@ -133,10 +134,12 @@ BINARY := $(O)/$(NAME)
 
 endif
 
-OBJS := $(patsubst %.c,$(O)/%.o,$(notdir $(SRCS)))
+OBJS := $(patsubst %.c,$(O)/%.o,$(SRCS))
 ifeq ($(S), win)
 	OBJS += $(O)/manifest.o
 endif
+
+OBJDIRS := $(sort $(patsubst %/,%,$(dir $(OBJS))))
 
 all: $(BINARY)
 
@@ -166,7 +169,7 @@ $(O)/manifest.rc: $(O)/manifest.xml
 $(O)/manifest.o: $(O)/manifest.rc $(O)/context
 	$(WINDRES) --input=$< --output=$@
 
-$(O):
+$(OBJDIRS):
 	mkdir -p $@
 
 $(DIST):
@@ -175,25 +178,7 @@ $(DIST):
 $(O)/context: FORCE | $(O)
 	@echo $(CONTEXT) | md5sum | cmp -s - $@ || echo $(CONTEXT) | md5sum > $@
 
-$(O)/%.o: %.c Makefile $(O)/context | $(O)
-	$(CC) $(BUILD_DEFINES) $(BUILD_CFLAGS) -MD -MP -o $@ -c $<
-
-$(O)/%.o: platform/posix/%.c Makefile $(O)/context  | $(O)
-	$(CC) $(BUILD_DEFINES) $(BUILD_CFLAGS) -MD -MP -o $@ -c $<
-
-$(O)/%.o: platform/win/%.c Makefile $(O)/context | $(O)
-	$(CC) $(BUILD_DEFINES) $(BUILD_CFLAGS) -MD -MP -o $@ -c $<
-
-$(O)/%.o: cmd/cmake/%.c Makefile $(O)/context | $(O)
-	$(CC) $(BUILD_DEFINES) $(BUILD_CFLAGS) -MD -MP -o $@ -c $<
-
-$(O)/%.o: cmd/configdep/%.c Makefile $(O)/context | $(O)
-	$(CC) $(BUILD_DEFINES) $(BUILD_CFLAGS) -MD -MP -o $@ -c $<
-
-$(O)/%.o: cmd/ldgen/%.c Makefile $(O)/context | $(O)
-	$(CC) $(BUILD_DEFINES) $(BUILD_CFLAGS) -MD -MP -o $@ -c $<
-
-$(O)/%.o: cmd/size/%.c Makefile $(O)/context | $(O)
+$(O)/%.o: %.c Makefile $(O)/context | $(OBJDIRS)
 	$(CC) $(BUILD_DEFINES) $(BUILD_CFLAGS) -MD -MP -o $@ -c $<
 
 ifdef STATIC

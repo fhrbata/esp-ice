@@ -50,6 +50,13 @@ void config_add(struct config *c, const char *key, const char *value,
 void config_set(struct config *c, const char *key, const char *value,
 		enum config_scope scope)
 {
+	config_unset(c, key, scope);
+	append_entry(c, key, value, scope);
+}
+
+int config_unset(struct config *c, const char *key, enum config_scope scope)
+{
+	int removed = 0;
 	int dst = 0;
 
 	for (int i = 0; i < c->nr; i++) {
@@ -57,6 +64,7 @@ void config_set(struct config *c, const char *key, const char *value,
 		    !strcmp(c->entries[i].key, key)) {
 			free(c->entries[i].key);
 			free(c->entries[i].value);
+			removed++;
 			continue;
 		}
 		if (dst != i)
@@ -64,8 +72,7 @@ void config_set(struct config *c, const char *key, const char *value,
 		dst++;
 	}
 	c->nr = dst;
-
-	append_entry(c, key, value, scope);
+	return removed;
 }
 
 const char *config_get(const char *key)
@@ -422,6 +429,123 @@ void config_load_defaults(struct config *c)
 	config_set(c, "core.build-dir", "build", CONFIG_SCOPE_DEFAULT);
 	config_set(c, "core.generator", "Ninja", CONFIG_SCOPE_DEFAULT);
 	config_set(c, "core.verbose",   "false", CONFIG_SCOPE_DEFAULT);
+}
+
+static int value_needs_quoting(const char *v)
+{
+	size_t len;
+
+	if (!*v)
+		return 1;
+	if (*v == ' ' || *v == '\t')
+		return 1;
+
+	len = strlen(v);
+	if (v[len - 1] == ' ' || v[len - 1] == '\t')
+		return 1;
+
+	for (const char *p = v; *p; p++) {
+		if (*p == '#' || *p == ';' || *p == '"' || *p == '\\' ||
+		    *p == '\n' || *p == '\r')
+			return 1;
+	}
+	return 0;
+}
+
+static void write_value(const char *v, struct sbuf *out)
+{
+	if (!value_needs_quoting(v)) {
+		sbuf_addstr(out, v);
+		return;
+	}
+
+	for (const char *p = v; *p; p++) {
+		if (*p == '"' || *p == '\\' || *p == '\n' || *p == '\r')
+			die("cannot serialise value containing '%c' "
+			    "(escape support not implemented)", *p);
+	}
+
+	sbuf_addch(out, '"');
+	sbuf_addstr(out, v);
+	sbuf_addch(out, '"');
+}
+
+int config_write_file(const struct config *c, enum config_scope scope,
+		      const char *path)
+{
+	struct sbuf out = SBUF_INIT;
+	struct svec sections = SVEC_INIT;
+	FILE *fp;
+	size_t written;
+
+	/* Collect unique section names (order of first appearance). */
+	for (int i = 0; i < c->nr; i++) {
+		const char *dot;
+		char *sec;
+		int already;
+
+		if (c->entries[i].scope != scope)
+			continue;
+
+		dot = strchr(c->entries[i].key, '.');
+		if (!dot)
+			continue;	/* section-less keys are not written */
+
+		sec = sbuf_strndup(c->entries[i].key,
+				   (size_t)(dot - c->entries[i].key));
+
+		already = 0;
+		for (size_t j = 0; j < sections.nr; j++) {
+			if (!strcmp(sections.v[j], sec)) {
+				already = 1;
+				break;
+			}
+		}
+		if (!already)
+			svec_push(&sections, sec);
+		free(sec);
+	}
+
+	for (size_t s = 0; s < sections.nr; s++) {
+		const char *section = sections.v[s];
+		size_t sec_len = strlen(section);
+
+		if (s > 0)
+			sbuf_addch(&out, '\n');
+		sbuf_addf(&out, "[%s]\n", section);
+
+		for (int i = 0; i < c->nr; i++) {
+			const char *key = c->entries[i].key;
+
+			if (c->entries[i].scope != scope)
+				continue;
+			if (strncmp(key, section, sec_len) != 0 ||
+			    key[sec_len] != '.')
+				continue;
+
+			sbuf_addf(&out, "\t%s = ", key + sec_len + 1);
+			write_value(c->entries[i].value, &out);
+			sbuf_addch(&out, '\n');
+		}
+	}
+
+	svec_clear(&sections);
+
+	fp = fopen(path, "w");
+	if (!fp) {
+		sbuf_release(&out);
+		return -1;
+	}
+	written = fwrite(out.buf, 1, out.len, fp);
+	fclose(fp);
+
+	if (written != out.len) {
+		sbuf_release(&out);
+		errno = EIO;
+		return -1;
+	}
+	sbuf_release(&out);
+	return 0;
 }
 
 void config_load_env(struct config *c)

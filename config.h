@@ -88,6 +88,13 @@ void config_add(struct config *c, const char *key, const char *value,
 		enum config_scope scope);
 
 /**
+ * @brief Remove every entry for @p key at @p scope.
+ *
+ * @return The number of entries removed (0 if none matched).
+ */
+int config_unset(struct config *c, const char *key, enum config_scope scope);
+
+/**
  * @brief Return the value of @p key from the highest-precedence scope.
  *
  * If multiple entries exist in the winning scope (from config_add),
@@ -197,6 +204,23 @@ void config_load_defaults(struct config *c);
  * Empty or unset variables are ignored.
  */
 void config_load_env(struct config *c);
+
+/**
+ * @brief Write all entries at @p scope to @p path as an INI file.
+ *
+ * Entries are grouped by section (the part of the key before the
+ * first '.') and emitted in that order.  Values are double-quoted
+ * only when needed (empty, edged with whitespace, or containing a
+ * comment character).  Keys without a section prefix are skipped.
+ *
+ * This is a whole-file rewrite -- comments and blank lines in the
+ * existing file are NOT preserved.  Callers that need to preserve
+ * user formatting should edit the file by hand.
+ *
+ * @return 0 on success, -1 on I/O error (errno is set).
+ */
+int config_write_file(const struct config *c, enum config_scope scope,
+		      const char *path);
 
 /**
  * @brief Derive project-scope values from build-directory artifacts.

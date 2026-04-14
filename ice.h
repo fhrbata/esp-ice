@@ -46,6 +46,7 @@ int cmd_menuconfig(int argc, const char **argv);
 int cmd_reconfigure(int argc, const char **argv);
 
 /* Subcommands -- standalone */
+int cmd_config(int argc, const char **argv);
 int cmd_configdep(int argc, const char **argv);
 int cmd_ldgen(int argc, const char **argv);
 int cmd_size(int argc, const char **argv);
