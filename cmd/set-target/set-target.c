@@ -12,13 +12,14 @@
 
 /*
  * Mirrors esp-idf/tools/idf_py_actions/constants.py.  Preview targets
- * require --preview to match idf.py's behaviour.
+ * require --preview to match idf.py's behaviour.  Exposed via ice.h
+ * so the completion backend can reuse the same lists.
  */
-static const char *const SUPPORTED_TARGETS[] = {
+const char *const ice_supported_targets[] = {
     "esp32",   "esp32s2", "esp32c3", "esp32s3",	 "esp32c2", "esp32c6",
     "esp32h2", "esp32p4", "esp32c5", "esp32c61", NULL,
 };
-static const char *const PREVIEW_TARGETS[] = {
+const char *const ice_preview_targets[] = {
     "linux", "esp32h21", "esp32h4", "esp32s31", NULL,
 };
 
@@ -61,6 +62,14 @@ static const struct cmd_manual manual = {
 };
 /* clang-format on */
 
+/* File-scope so the table can be const and reachable via cmd_struct.opts. */
+static int opt_preview;
+
+const struct option cmd_set_target_opts[] = {
+    OPT_BOOL(0, "preview", &opt_preview, "allow preview targets"),
+    OPT_END(),
+};
+
 static int in_list(const char *target, const char *const *list)
 {
 	for (; *list; list++)
@@ -81,20 +90,16 @@ int cmd_set_target(int argc, const char **argv)
 	 * outlive the call -- a function-static array provides that.
 	 */
 	static char envstr[] = "_IDF_PY_SET_TARGET_ACTION=1";
-	int preview = 0;
 	const char *usage[] = {
 	    "ice set-target [--preview] <target>",
 	    NULL,
-	};
-	struct option opts[] = {
-	    OPT_BOOL(0, "preview", &preview, "allow preview targets"),
-	    OPT_END(),
 	};
 	const char *target;
 	struct sbuf define = SBUF_INIT;
 	int rc;
 
-	argc = parse_options_manual(argc, argv, opts, usage, &manual);
+	argc = parse_options_manual(argc, argv, cmd_set_target_opts, usage,
+				    &manual);
 
 	if (argc < 1)
 		die("missing <target> argument");
@@ -102,9 +107,9 @@ int cmd_set_target(int argc, const char **argv)
 		die("too many arguments");
 	target = argv[0];
 
-	if (!in_list(target, SUPPORTED_TARGETS)) {
-		if (in_list(target, PREVIEW_TARGETS)) {
-			if (!preview)
+	if (!in_list(target, ice_supported_targets)) {
+		if (in_list(target, ice_preview_targets)) {
+			if (!opt_preview)
 				die("'%s' is a preview target; "
 				    "pass --preview to use it",
 				    target);

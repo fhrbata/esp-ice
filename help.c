@@ -301,12 +301,17 @@ static void print_commands_body(void)
 	size_t maxlen = 0;
 
 	for (const struct cmd_struct *c = ice_commands; c->name; c++) {
-		size_t l = strlen(c->name);
+		size_t l;
+		if (c->hidden)
+			continue;
+		l = strlen(c->name);
 		if (l > maxlen)
 			maxlen = l;
 	}
 
 	for (const struct cmd_struct *c = ice_commands; c->name; c++) {
+		if (c->hidden)
+			continue;
 		printf(INDENT "@b{%-*s}   %s\n", (int)maxlen, c->name,
 		       c->summary ? c->summary : "");
 	}

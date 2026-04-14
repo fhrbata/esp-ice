@@ -146,6 +146,28 @@ static const struct cmd_manual manual = {
 };
 /* clang-format on */
 
+/*
+ * Option storage at file scope lets the table itself be const and
+ * reachable from the completion backend via cmd_struct.opts.  Each
+ * subcommand runs at most once per process, so file-scope statics
+ * behave the same as the old function-local variables.
+ */
+static int opt_list;
+static int opt_add;
+static int opt_unset;
+static int opt_user;
+static int opt_local;
+
+const struct option cmd_config_opts[] = {
+    OPT_BOOL('l', "list", &opt_list, "list entries with scope"),
+    OPT_BOOL(0, "add", &opt_add, "append a value (multi-value keys)"),
+    OPT_BOOL(0, "unset", &opt_unset, "remove all entries for a key"),
+    OPT_BOOL(0, "user", &opt_user, "act on the user config (~/.iceconfig)"),
+    OPT_BOOL(0, "local", &opt_local,
+	     "act on the local config (./.iceconfig) [default]"),
+    OPT_END(),
+};
+
 static enum config_scope target_scope(int user, int local)
 {
 	if (user && local)
@@ -243,42 +265,31 @@ static int do_unset(enum config_scope scope, const char *key)
 
 int cmd_config(int argc, const char **argv)
 {
-	int list = 0, add = 0, unset = 0;
-	int user = 0, local = 0;
 	int modes;
 	enum config_scope scope;
 
-	struct option opts[] = {
-	    OPT_BOOL('l', "list", &list, "list entries with scope"),
-	    OPT_BOOL(0, "add", &add, "append a value (multi-value keys)"),
-	    OPT_BOOL(0, "unset", &unset, "remove all entries for a key"),
-	    OPT_BOOL(0, "user", &user, "act on the user config (~/.iceconfig)"),
-	    OPT_BOOL(0, "local", &local,
-		     "act on the local config (./.iceconfig) [default]"),
-	    OPT_END(),
-	};
+	argc =
+	    parse_options_manual(argc, argv, cmd_config_opts, usage, &manual);
 
-	argc = parse_options_manual(argc, argv, opts, usage, &manual);
-
-	modes = list + add + unset;
+	modes = opt_list + opt_add + opt_unset;
 	if (modes > 1)
 		die("cannot combine --list, --add, --unset");
 
-	if (list) {
+	if (opt_list) {
 		if (argc > 0)
 			die("--list takes no positional arguments");
 		return do_list();
 	}
 
-	scope = target_scope(user, local);
+	scope = target_scope(opt_user, opt_local);
 
-	if (unset) {
+	if (opt_unset) {
 		if (argc != 1)
 			die("--unset takes <key>");
 		return do_unset(scope, argv[0]);
 	}
 
-	if (add) {
+	if (opt_add) {
 		if (argc != 2)
 			die("--add takes <key> <value>");
 		return do_add(scope, argv[0], argv[1]);

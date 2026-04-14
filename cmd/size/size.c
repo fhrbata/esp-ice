@@ -60,6 +60,17 @@ static const struct cmd_manual manual = {
 };
 /* clang-format on */
 
+/* File-scope so the table can be const and reachable via cmd_struct.opts. */
+static const char *opt_target;
+static const char *opt_format = "table";
+
+const struct option cmd_size_opts[] = {
+    OPT_STRING('t', "target", &opt_target, "chip",
+	       "target chip (e.g. esp32s3)"),
+    OPT_STRING(0, "format", &opt_format, "fmt", "output format (table)"),
+    OPT_END(),
+};
+
 /* ---- helpers -------------------------------------------------------- */
 
 static int has_suffix(const char *s, size_t len, const char *suffix)
@@ -562,21 +573,12 @@ static void output_table(struct memmap *mm)
 
 int cmd_size(int argc, const char **argv)
 {
-	const char *target = NULL;
-	const char *format = "table";
-
-	struct option opts[] = {
-	    OPT_STRING('t', "target", &target, "chip",
-		       "target chip (e.g. esp32s3)"),
-	    OPT_STRING(0, "format", &format, "fmt", "output format (table)"),
-	    OPT_END(),
-	};
 	const char *usage[] = {
 	    "ice size [--format <fmt>] [--target <chip>] <map-file>",
 	    NULL,
 	};
 
-	argc = parse_options_manual(argc, argv, opts, usage, &manual);
+	argc = parse_options_manual(argc, argv, cmd_size_opts, usage, &manual);
 	if (argc < 1)
 		die("no map file; see 'ice size --help'");
 
@@ -587,19 +589,19 @@ int cmd_size(int argc, const char **argv)
 	struct map_file mf;
 	map_read(sb.buf, sb.len, &mf);
 
-	if (!target) {
-		target = mf.target;
-		if (!target)
+	if (!opt_target) {
+		opt_target = mf.target;
+		if (!opt_target)
 			die("cannot detect target; use --target");
 	}
 
 	struct memmap mm;
-	memmap_build(&mm, target, &mf);
+	memmap_build(&mm, opt_target, &mf);
 
-	if (!strcmp(format, "table"))
+	if (!strcmp(opt_format, "table"))
 		output_table(&mm);
 	else
-		die("unknown format '%s'", format);
+		die("unknown format '%s'", opt_format);
 
 	memmap_release(&mm);
 	map_release(&mf);
