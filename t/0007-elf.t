@@ -9,11 +9,11 @@
 O="$T_OUT/$(basename "$0" .t)"
 rm -rf "$O" && mkdir -p "$O"
 
-# MinGW $CC produces COFF object files, not ELF, so the parser has
-# nothing real to chew on.  Skip the test when targeting Windows,
-# regardless of whether we're running natively or cross-compiling.
-if [ "$S" = "win" ]; then
-	echo "1..0 # SKIP elf test requires an ELF-producing toolchain"
+# $CC -c produces an object in the host's native format: ELF on Linux,
+# Mach-O on macOS, COFF on MinGW/Windows.  Only the first gives the
+# elf parser something real to chew on, so run only on S=linux.
+if [ "$S" != "linux" ]; then
+	echo "1..0 # SKIP elf test requires an ELF-producing toolchain (S=$S)"
 	exit 0
 fi
 
