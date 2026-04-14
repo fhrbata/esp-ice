@@ -7,7 +7,12 @@ STAGE ?= stage
 CFLAGS ?= -Wall -Werror -std=c99 -pedantic
 LDFLAGS ?=
 
-T ?= t/
+# Tests live per-command under cmd/<name>/t/, with shared TAP helpers
+# (tap.sh, tap.h) and any cross-cutting tests in the top-level t/.
+# Override T on the command line to run a subset, e.g.
+#   make test T=cmd/completion/t
+#   make test T=cmd/completion/t/0001-completion.t
+T ?= $(wildcard cmd/*/t) t
 PFLAGS ?=
 T_OUT ?= t_out
 
@@ -293,7 +298,9 @@ help:
 	@echo ' LDFLAGS_APPEND   - additional linker options to append after LDFLAGS'
 	@echo ''
 	@echo 'test variables:'
-	@echo ' T                - directory with tests using TAP(default: $(T))'
+	@echo ' T                - test path(s) passed to prove; override to run a subset,'
+	@echo '                    e.g. T=cmd/completion/t or T=cmd/completion/t/0001.t'
+	@echo '                    (default: $(T))'
 	@echo ' T_OUT            - directory with test artifacts (default: $(T_OUT))'
 	@echo ' PFLAGS           - prove options for running tests through TAP harness  (default: $(PFLAGS))'
 	@echo ''

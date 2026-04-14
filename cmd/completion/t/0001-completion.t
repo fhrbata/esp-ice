@@ -1,0 +1,89 @@
+#!/usr/bin/env bash
+#
+# SPDX-FileCopyrightText: 2026 Espressif Systems (Shanghai) CO LTD
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+# End-to-end tests for `ice completion <shell>` and the hidden
+# `ice __complete` backend that drives TAB candidates.
+
+. t/tap.sh
+tap_setup
+
+# ---- `ice completion <shell>` prints the expected init script ----
+
+"$BINARY" completion bash >bash.out
+tap_check grep -q 'complete -o default -F _ice_complete ice' bash.out
+tap_done "ice completion bash emits complete registration"
+
+"$BINARY" completion zsh >zsh.out
+tap_check grep -q 'compdef _ice ice' zsh.out
+tap_done "ice completion zsh emits compdef registration"
+
+"$BINARY" completion fish >fish.out
+tap_check grep -q 'complete -c ice -f -a' fish.out
+tap_done "ice completion fish emits complete registration"
+
+tap_check ! "$BINARY" completion powershell 2>/dev/null
+tap_done "unknown shell is rejected with non-zero exit"
+
+# ---- `ice __complete`: subcommand-name candidates ----
+
+"$BINARY" __complete 1 ice "" >cmds.out
+tap_check grep -qx 'build'      cmds.out
+tap_check grep -qx 'config'     cmds.out
+tap_check grep -qx 'completion' cmds.out
+tap_check grep -qx 'set-target' cmds.out
+tap_check ! grep -qx '__complete' cmds.out
+tap_done "subcommand list includes visible commands and hides __complete"
+
+"$BINARY" __complete 1 ice "co" >pref.out
+tap_check grep -qx 'completion' pref.out
+tap_check grep -qx 'config'     pref.out
+tap_check grep -qx 'configdep'  pref.out
+tap_check ! grep -qx 'build'    pref.out
+tap_done "prefix filtering matches subcommands starting with 'co'"
+
+# ---- `ice __complete`: per-subcommand flag candidates ----
+
+"$BINARY" __complete 2 ice config "--" >cfgflags.out
+tap_check grep -qx -- '--list'  cfgflags.out
+tap_check grep -qx -- '--add'   cfgflags.out
+tap_check grep -qx -- '--unset' cfgflags.out
+tap_check grep -qx -- '--user'  cfgflags.out
+tap_check grep -qx -- '--local' cfgflags.out
+tap_done "config --<TAB> walks cmd_struct.opts"
+
+"$BINARY" __complete 1 ice "-" >globflags.out
+tap_check grep -qx -- '--build-dir' globflags.out
+tap_check grep -qx -- '-B'          globflags.out
+tap_check grep -qx -- '--verbose'   globflags.out
+tap_done "global flag completion walks ice_global_opts"
+
+# ---- `ice __complete`: positional candidates ----
+
+"$BINARY" __complete 2 ice set-target "" >targets.out
+tap_check grep -qx 'esp32'    targets.out
+tap_check grep -qx 'esp32s3'  targets.out
+tap_check grep -qx 'linux'    targets.out
+tap_done "set-target <TAB> uses shared chip list"
+
+"$BINARY" __complete 2 ice help "" >helpcmds.out
+tap_check grep -qx 'build'       helpcmds.out
+tap_check grep -qx 'completion'  helpcmds.out
+tap_check ! grep -qx '__complete' helpcmds.out
+tap_done "help <TAB> lists visible subcommands"
+
+"$BINARY" __complete 2 ice completion "" >shells.out
+tap_check grep -qx 'bash' shells.out
+tap_check grep -qx 'zsh'  shells.out
+tap_check grep -qx 'fish' shells.out
+tap_done "completion <TAB> lists supported shells"
+
+# ---- `ice __complete`: option value falls through to file completion ----
+
+"$BINARY" __complete 2 ice -B "" >bval.out
+tap_check test ! -s bval.out
+tap_done "-B <TAB> emits nothing (shell handles file completion)"
+
+tap_result

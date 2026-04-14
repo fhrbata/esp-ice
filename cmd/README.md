@@ -146,6 +146,55 @@ Set `.hidden = 1` in the `ice_commands[]` entry to keep the command
 dispatchable but out of `ice --help` and `ice <TAB>` listings.  Used
 today for the `__complete` backend; handy for other internal helpers.
 
+## Testing
+
+Tests live alongside the command they exercise, in `cmd/<name>/t/`.
+`make test` walks `cmd/*/t/` (plus the top-level `t/` for cross-cutting
+tests) through `prove`; each `.t` file is an executable that prints
+[TAP](https://testanything.org/).
+
+Shared helpers live at the project root:
+
+- [`../t/tap.sh`](../t/tap.sh) -- bash: `tap_setup`, `tap_check`,
+  `tap_done`, `tap_result`.
+- [`../t/tap.h`](../t/tap.h) -- C: same surface as macros, for unit
+  tests that compile against project sources.
+
+A minimal bash test (`cmd/greet/t/0001-basic.t`):
+
+```bash
+#!/usr/bin/env bash
+. t/tap.sh
+tap_setup
+
+"$BINARY" greet world >out
+tap_check grep -qx 'Hello, world.' out
+tap_done "default greeting"
+
+"$BINARY" greet --loud world >out
+tap_check grep -qx 'HELLO, WORLD!' out
+tap_done "--loud uppercases"
+
+tap_result
+```
+
+Remember to `chmod +x` the `.t` file -- `prove` runs executables
+directly.  `tap_setup` creates a scratch directory at
+`$T_OUT/$(basename $0 .t)` and `cd`s into it, so tests don't pollute
+the working tree.
+
+Run a subset via the `T` variable:
+
+```bash
+make test                                        # every cmd/*/t/ + t/
+make test T=cmd/greet/t                          # one command's tests
+make test T=cmd/greet/t/0001-basic.t             # a single file
+```
+
+[`completion/t/0001-completion.t`](completion/t/0001-completion.t) is
+a real end-to-end example exercising `ice completion <shell>` and the
+hidden `__complete` backend.
+
 ## Templates to copy
 
 - [`build/build.c`](build/build.c) / [`flash/flash.c`](flash/flash.c) --
