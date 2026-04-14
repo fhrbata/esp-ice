@@ -27,13 +27,20 @@ int main(void)
 
 	while (ar_reader_next(&r, &m)) {
 		n_members++;
+		/*
+		 * BSD ar (macOS) pads each member's payload to an alignment
+		 * boundary with 0x0a bytes and counts the padding in the
+		 * header size field, so m.size is >= the actual content
+		 * length but not equal.  Verify the content with a prefix
+		 * memcmp to stay portable across BSD and GNU archives.
+		 */
 		if (!strcmp(m.name, "foo.txt")) {
 			seen_foo = 1;
-			tap_check(m.size == 15); /* "contents of foo" */
+			tap_check(m.size >= 15);
 			tap_check(memcmp(m.data, "contents of foo", 15) == 0);
 		} else if (!strcmp(m.name, "bar.txt")) {
 			seen_bar = 1;
-			tap_check(m.size == 17); /* "file bar contents" */
+			tap_check(m.size >= 17);
 			tap_check(memcmp(m.data, "file bar contents", 17) == 0);
 		}
 		free(m.name);
