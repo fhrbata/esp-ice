@@ -100,13 +100,4 @@ void print_manual(const char *cmd_name,
 		  const struct option *opts,
 		  const char **usage);
 
-/**
- * @brief Render a short usage page: @c usage: line plus COMMANDS
- * and (optional) ALIASES, skipping prose sections.
- *
- * Mirrors the concise git-style output shown by bare @c git or
- * @c git help.  Used for bare @c ice and @c ice help.
- */
-void print_short_usage(const struct cmd_manual *m, const char **usage);
-
 #endif /* HELP_H */

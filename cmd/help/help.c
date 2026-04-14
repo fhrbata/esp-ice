@@ -24,9 +24,10 @@ int cmd_help(int argc, const char **argv)
 
 	argc = parse_options(argc, argv, opts, usage);
 
-	/* `ice help` -> git-style short usage + COMMANDS + ALIASES. */
+	/* `ice help` -> identical to `ice --help`. */
 	if (argc == 0) {
-		print_short_usage(&ice_root_manual, ice_global_usage);
+		print_manual("ice", &ice_root_manual, ice_global_opts,
+			     ice_global_usage);
 		return EXIT_SUCCESS;
 	}
 

@@ -443,30 +443,3 @@ void print_manual(const char *cmd_name,
 	if (m && m->extras)
 		print_body(m->extras);
 }
-
-void print_short_usage(const struct cmd_manual *m, const char **usage)
-{
-	/* usage: / or: lines, git-style. */
-	if (usage && usage[0]) {
-		printf("@b{usage}: %s\n", usage[0]);
-		for (int i = 1; usage[i]; i++)
-			printf("   @b{or}: %s\n", usage[i]);
-		fputs("\n", stdout);
-	}
-
-	if (m && m->list_commands) {
-		fputs("@b{COMMANDS}\n", stdout);
-		print_commands_body();
-	}
-
-	if (m && m->list_aliases) {
-		struct svec names = SVEC_INIT;
-
-		collect_aliases(&names);
-		if (names.nr > 0) {
-			fputs("@b{ALIASES}\n", stdout);
-			print_aliases_body(&names);
-		}
-		svec_clear(&names);
-	}
-}

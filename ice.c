@@ -49,6 +49,30 @@ const char *ice_global_usage[] = {
 	NULL,
 };
 
+/*
+ * Written to by parse_options_manual(); checked in main() after
+ * parsing.  File scope so that the option table below (shared with
+ * cmd_help and print_manual) has stable addresses to reference.
+ */
+static int global_no_color;
+static int global_version;
+
+const struct option ice_global_opts[] = {
+	OPT_CONFIG('B', "build-dir", "core.build-dir", "path",
+		   "build directory (default: build)"),
+	OPT_CONFIG_LIST('D', "define", "cmake.define", "key=val",
+			"cmake cache entry (repeatable)"),
+	OPT_CONFIG('G', "generator", "core.generator", "name",
+		   "cmake generator (default: Ninja)"),
+	OPT_BOOL(0, "no-color", &global_no_color,
+		 "disable colored output"),
+	OPT_CONFIG_BOOL('v', "verbose", "core.verbose",
+			"show full command output"),
+	OPT_BOOL(0, "version", &global_version,
+		 "show version"),
+	OPT_END(),
+};
+
 const struct cmd_manual ice_root_manual = {
 	.summary = "frontend for ESP-IDF projects",
 
@@ -241,25 +265,7 @@ int main(int argc, const char **argv)
 {
 	const char *chdir_to = NULL;
 	const char *build_override = NULL;
-	int no_color = 0;
-	int version = 0;
 	const struct cmd_struct *cmd;
-
-	struct option global_opts[] = {
-		OPT_CONFIG('B', "build-dir", "core.build-dir", "path",
-			   "build directory (default: build)"),
-		OPT_CONFIG_LIST('D', "define", "cmake.define", "key=val",
-				"cmake cache entry (repeatable)"),
-		OPT_CONFIG('G', "generator", "core.generator", "name",
-			   "cmake generator (default: Ninja)"),
-		OPT_BOOL(0, "no-color", &no_color,
-			 "disable colored output"),
-		OPT_CONFIG_BOOL('v', "verbose", "core.verbose",
-				"show full command output"),
-		OPT_BOOL(0, "version", &version,
-			 "show version"),
-		OPT_END(),
-	};
 
 	/* Enable color early so die() in parse_options is colored. */
 	color_init(STDERR_FILENO);
@@ -277,20 +283,22 @@ int main(int argc, const char **argv)
 					   : config_get("core.build-dir"));
 	config_load_env(&config);
 
-	argc = parse_options_manual(argc, argv, global_opts,
+	argc = parse_options_manual(argc, argv, ice_global_opts,
 				    ice_global_usage, &ice_root_manual);
 
-	if (no_color)
+	if (global_no_color)
 		use_color = 0;
 
-	if (version) {
+	if (global_version) {
 		printf("%sice %s\n", use_vt ? "\xf0\x9f\xa7\x8a " : "",
 		       VERSION);
 		return EXIT_SUCCESS;
 	}
 
+	/* Bare 'ice': show the same manual as 'ice --help', exit 1. */
 	if (argc < 1) {
-		print_short_usage(&ice_root_manual, ice_global_usage);
+		print_manual(argv[0], &ice_root_manual, ice_global_opts,
+			     ice_global_usage);
 		return EXIT_FAILURE;
 	}
 
@@ -299,7 +307,8 @@ int main(int argc, const char **argv)
 		if (!try_expand_alias(&argc, &argv))
 			break;
 		if (argc < 1) {
-			print_short_usage(&ice_root_manual, ice_global_usage);
+			print_manual(argv[0], &ice_root_manual,
+				     ice_global_opts, ice_global_usage);
 			return EXIT_FAILURE;
 		}
 	}

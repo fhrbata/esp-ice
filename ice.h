@@ -72,8 +72,9 @@ struct cmd_struct {
 /** NULL-terminated (last entry has name == NULL). */
 extern const struct cmd_struct ice_commands[];
 
-/** Usage lines and manual for the top-level `ice` command. */
+/** Usage lines, option table, and manual for the top-level `ice`. */
 extern const char *ice_global_usage[];
+extern const struct option ice_global_opts[];
 extern const struct cmd_manual ice_root_manual;
 
 /**
