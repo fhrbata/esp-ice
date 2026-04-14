@@ -37,8 +37,8 @@ tap_done "after --local --unset, get falls through to user"
 
 # env beats local.  ESPPORT maps to serial.port at env scope.
 "$BINARY" config --local serial.port local_port
-ESPPORT=/dev/from_env "$BINARY" config serial.port >got
-tap_check grep -qx '/dev/from_env' got
+ESPPORT=env_value "$BINARY" config serial.port >got
+tap_check grep -qx 'env_value' got
 tap_done "env scope wins over local (ESPPORT -> serial.port)"
 
 # cli beats local.  Global -B sets core.build-dir at CLI scope.
@@ -47,10 +47,10 @@ tap_check grep -qx 'from_cli' got
 tap_done "cli scope wins over local (-B sets core.build-dir)"
 
 # --list tags each entry with the scope it came from.
-ESPPORT=/dev/from_env "$BINARY" -B from_cli config --list >list
+ESPPORT=env_value "$BINARY" -B from_cli config --list >list
 tap_check grep -qE '^default[[:space:]]+core\.build-dir=build$'   list
 tap_check grep -qE '^user[[:space:]]+core\.build-dir=user_value$' list
-tap_check grep -qE '^env[[:space:]]+serial\.port=/dev/from_env$'  list
+tap_check grep -qE '^env[[:space:]]+serial\.port=env_value$'  list
 tap_check grep -qE '^cli[[:space:]]+core\.build-dir=from_cli$'    list
 tap_done "--list reports default/user/env/cli scope tags"
 
