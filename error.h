@@ -29,16 +29,14 @@
 /**
  * @brief Print an error with source location (not called directly).
  */
-void err_msg(char *file, int line, const char *func, int add_errno,
-	     char *fmt, ...);
+void err_msg(char *file, int line, const char *func, int add_errno, char *fmt,
+	     ...);
 
 /** Log an error message with source location (no errno). */
-#define err(...)                                                               \
-	err_msg(__FILE__, __LINE__, __func__, 0, __VA_ARGS__)
+#define err(...) err_msg(__FILE__, __LINE__, __func__, 0, __VA_ARGS__)
 
 /** Log an error message with source location and errno description. */
-#define err_errno(...)                                                         \
-	err_msg(__FILE__, __LINE__, __func__, 1, __VA_ARGS__)
+#define err_errno(...) err_msg(__FILE__, __LINE__, __func__, 1, __VA_ARGS__)
 
 /**
  * @brief Print "warning: ..." to stderr (not called directly).

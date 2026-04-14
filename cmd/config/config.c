@@ -22,14 +22,15 @@
 #include "../../ice.h"
 
 static const char *usage[] = {
-	"ice config [--list]",
-	"ice config [--user | --local] <key>",
-	"ice config [--user | --local] <key> <value>",
-	"ice config [--user | --local] --add <key> <value>",
-	"ice config [--user | --local] --unset <key>",
-	NULL,
+    "ice config [--list]",
+    "ice config [--user | --local] <key>",
+    "ice config [--user | --local] <key> <value>",
+    "ice config [--user | --local] --add <key> <value>",
+    "ice config [--user | --local] --unset <key>",
+    NULL,
 };
 
+/* clang-format off */
 static const struct cmd_manual manual = {
 	.description =
 	H_PARA("@b{ice config} reads and writes configuration entries "
@@ -143,6 +144,7 @@ static const struct cmd_manual manual = {
 	H_EXAMPLE("ice ll                   # runs: /bin/sh -c 'ls -la'")
 	H_LINE(""),
 };
+/* clang-format on */
 
 static enum config_scope target_scope(int user, int local)
 {
@@ -154,19 +156,20 @@ static enum config_scope target_scope(int user, int local)
 static const char *scope_path(enum config_scope scope)
 {
 	switch (scope) {
-	case CONFIG_SCOPE_USER:		return user_config_path();
-	case CONFIG_SCOPE_LOCAL:	return local_config_path();
-	default:			return NULL;
+	case CONFIG_SCOPE_USER:
+		return user_config_path();
+	case CONFIG_SCOPE_LOCAL:
+		return local_config_path();
+	default:
+		return NULL;
 	}
 }
 
 static int do_list(void)
 {
 	for (int i = 0; i < config.nr; i++)
-		printf("%-8s %s=%s\n",
-		       scope_name(config.entries[i].scope),
-		       config.entries[i].key,
-		       config.entries[i].value);
+		printf("%-8s %s=%s\n", scope_name(config.entries[i].scope),
+		       config.entries[i].key, config.entries[i].value);
 	return EXIT_SUCCESS;
 }
 
@@ -246,15 +249,13 @@ int cmd_config(int argc, const char **argv)
 	enum config_scope scope;
 
 	struct option opts[] = {
-		OPT_BOOL('l', "list",  &list,  "list entries with scope"),
-		OPT_BOOL(0,   "add",   &add,
-			 "append a value (multi-value keys)"),
-		OPT_BOOL(0,   "unset", &unset, "remove all entries for a key"),
-		OPT_BOOL(0,   "user",  &user,
-			 "act on the user config (~/.iceconfig)"),
-		OPT_BOOL(0,   "local", &local,
-			 "act on the local config (./.iceconfig) [default]"),
-		OPT_END(),
+	    OPT_BOOL('l', "list", &list, "list entries with scope"),
+	    OPT_BOOL(0, "add", &add, "append a value (multi-value keys)"),
+	    OPT_BOOL(0, "unset", &unset, "remove all entries for a key"),
+	    OPT_BOOL(0, "user", &user, "act on the user config (~/.iceconfig)"),
+	    OPT_BOOL(0, "local", &local,
+		     "act on the local config (./.iceconfig) [default]"),
+	    OPT_END(),
 	};
 
 	argc = parse_options_manual(argc, argv, opts, usage, &manual);

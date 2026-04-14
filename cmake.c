@@ -37,19 +37,19 @@ static const char *fmt_time(time_t start, struct sbuf *buf)
 
 /** Keyword -> color rules for compiler/build output. */
 static const struct color_rule color_rules[] = {
-	COLOR_RULE("fatal error:",           "COLOR_BOLD_RED"),
-	COLOR_RULE("undefined reference to", "COLOR_RED"),
-	COLOR_RULE("multiple definition of", "COLOR_RED"),
-	COLOR_RULE("In file included from",  "COLOR_CYAN"),
-	COLOR_RULE("In function",            "COLOR_CYAN"),
-	COLOR_RULE("CMake Error",            "COLOR_RED"),
-	COLOR_RULE("CMake Warning",          "COLOR_YELLOW"),
-	COLOR_RULE("FAILED:",                "COLOR_BOLD_RED"),
-	COLOR_RULE("warning:",               "COLOR_BOLD_YELLOW"),
-	COLOR_RULE("error:",                 "COLOR_BOLD_RED"),
-	COLOR_RULE("note:",                  "COLOR_CYAN"),
-	COLOR_RULE("***",                    "COLOR_RED"),
-	{ NULL },
+    COLOR_RULE("fatal error:", "COLOR_BOLD_RED"),
+    COLOR_RULE("undefined reference to", "COLOR_RED"),
+    COLOR_RULE("multiple definition of", "COLOR_RED"),
+    COLOR_RULE("In file included from", "COLOR_CYAN"),
+    COLOR_RULE("In function", "COLOR_CYAN"),
+    COLOR_RULE("CMake Error", "COLOR_RED"),
+    COLOR_RULE("CMake Warning", "COLOR_YELLOW"),
+    COLOR_RULE("FAILED:", "COLOR_BOLD_RED"),
+    COLOR_RULE("warning:", "COLOR_BOLD_YELLOW"),
+    COLOR_RULE("error:", "COLOR_BOLD_RED"),
+    COLOR_RULE("note:", "COLOR_CYAN"),
+    COLOR_RULE("***", "COLOR_RED"),
+    {NULL},
 };
 
 /**
@@ -182,14 +182,14 @@ static int run_with_log(const char **argv, const char *label,
 
 	fprintf(stderr, "\r\033[K");
 	if (rc == 0) {
-		fprintf(stderr, " @g{*} @b{%s} (%s)\n",
-			label, fmt_time(start, &tsb));
+		fprintf(stderr, " @g{*} @b{%s} (%s)\n", label,
+			fmt_time(start, &tsb));
 	} else {
 		show_tail(logpath);
 		fprintf(stderr,
-			"\n @r{*} @b{%s failed (%s) -- last %d lines above, full log: %s}\n",
-			label, fmt_time(start, &tsb),
-			TAIL_LINES, logpath);
+			"\n @r{*} @b{%s failed (%s) -- last %d lines above, "
+			"full log: %s}\n",
+			label, fmt_time(start, &tsb), TAIL_LINES, logpath);
 	}
 
 	sbuf_release(&tsb);
@@ -294,13 +294,14 @@ int ensure_build_directory(int force)
 	sbuf_addf(&cache_path, "%s/CMakeCache.txt", build_dir);
 	has_cache = (cmakecache_load(&cache, cache_path.buf) == 0);
 
-	needs_configure = force || !has_cache ||
-		(defines.nr && cache_needs_configure(&cache, &defines));
+	needs_configure =
+	    force || !has_cache ||
+	    (defines.nr && cache_needs_configure(&cache, &defines));
 
 	/* Validate generator against existing cache. */
 	if (has_cache) {
-		const char *cached_gen = cmakecache_get(&cache,
-							"CMAKE_GENERATOR");
+		const char *cached_gen =
+		    cmakecache_get(&cache, "CMAKE_GENERATOR");
 
 		if (cached_gen && strcmp(cached_gen, generator) != 0)
 			die("build is configured for generator '%s' "
@@ -364,9 +365,8 @@ int run_cmake_target(const char *target, const char *label, int interactive)
 	build_dir = config_get("core.build-dir");
 	config_get_bool("core.verbose", &verbose);
 
-	const char *argv[] = {
-		"cmake", "--build", build_dir, "--target", target, NULL
-	};
+	const char *argv[] = {"cmake",	  "--build", build_dir,
+			      "--target", target,    NULL};
 
 	if (interactive || verbose) {
 		struct process proc = PROCESS_INIT;

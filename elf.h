@@ -53,10 +53,10 @@
  * (not a copy); the caller must keep the buffer alive while using it.
  */
 struct elf_section {
-	const char *name;	/**< Section name (points into buffer). */
-	uint32_t type;		/**< Section type (SHT_*). */
-	uint64_t flags;		/**< Section flags (SHF_*). */
-	uint64_t size;		/**< Section size in bytes. */
+	const char *name; /**< Section name (points into buffer). */
+	uint32_t type;	  /**< Section type (SHT_*). */
+	uint64_t flags;	  /**< Section flags (SHF_*). */
+	uint64_t size;	  /**< Section size in bytes. */
 };
 
 /**
@@ -65,8 +65,8 @@ struct elf_section {
  * Allocated by elf_read_sections(); freed by elf_sections_release().
  */
 struct elf_sections {
-	struct elf_section *s;	/**< Array of section headers. */
-	int nr;			/**< Number of entries. */
+	struct elf_section *s; /**< Array of section headers. */
+	int nr;		       /**< Number of entries. */
 };
 
 /**
@@ -82,8 +82,7 @@ struct elf_sections {
  * @param len  length of @p buf
  * @param out  output structure (caller provides; filled in)
  */
-void elf_read_sections(const void *buf, size_t len,
-		       struct elf_sections *out);
+void elf_read_sections(const void *buf, size_t len, struct elf_sections *out);
 
 /**
  * @brief Free memory allocated by elf_read_sections().

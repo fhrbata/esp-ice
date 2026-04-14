@@ -25,13 +25,13 @@
 #include "ice.h"
 
 /* ELF identification indices. */
-#define EI_MAG0    0
-#define EI_MAG1    1
-#define EI_MAG2    2
-#define EI_MAG3    3
-#define EI_CLASS   4
-#define EI_DATA    5
-#define EI_NIDENT  16
+#define EI_MAG0 0
+#define EI_MAG1 1
+#define EI_MAG2 2
+#define EI_MAG3 3
+#define EI_CLASS 4
+#define EI_DATA 5
+#define EI_NIDENT 16
 
 /* ELF class values. */
 #define ELFCLASS32 1
@@ -75,14 +75,10 @@ static uint32_t rd32(const struct elf_reader *r, size_t off)
 	const unsigned char *p = r->buf + off;
 
 	if (r->ei_data == ELFDATA2LSB)
-		return (uint32_t)p[0] |
-		       (uint32_t)p[1] << 8 |
-		       (uint32_t)p[2] << 16 |
-		       (uint32_t)p[3] << 24;
-	return (uint32_t)p[0] << 24 |
-	       (uint32_t)p[1] << 16 |
-	       (uint32_t)p[2] << 8 |
-	       (uint32_t)p[3];
+		return (uint32_t)p[0] | (uint32_t)p[1] << 8 |
+		       (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24;
+	return (uint32_t)p[0] << 24 | (uint32_t)p[1] << 16 |
+	       (uint32_t)p[2] << 8 | (uint32_t)p[3];
 }
 
 static uint64_t rd64(const struct elf_reader *r, size_t off)
@@ -101,8 +97,7 @@ static uint64_t rd64(const struct elf_reader *r, size_t off)
 
 /* ------------------------------------------------------------------ */
 
-void elf_read_sections(const void *buf, size_t len,
-		       struct elf_sections *out)
+void elf_read_sections(const void *buf, size_t len, struct elf_sections *out)
 {
 	struct elf_reader r;
 	uint64_t shoff;
@@ -120,10 +115,8 @@ void elf_read_sections(const void *buf, size_t len,
 	out->nr = 0;
 
 	/* Validate ELF magic: 0x7f 'E' 'L' 'F'. */
-	if (len < EI_NIDENT ||
-	    r.buf[EI_MAG0] != 0x7f ||
-	    r.buf[EI_MAG1] != 'E' ||
-	    r.buf[EI_MAG2] != 'L' ||
+	if (len < EI_NIDENT || r.buf[EI_MAG0] != 0x7f ||
+	    r.buf[EI_MAG1] != 'E' || r.buf[EI_MAG2] != 'L' ||
 	    r.buf[EI_MAG3] != 'F')
 		die("not an ELF file (bad magic)");
 
@@ -146,17 +139,17 @@ void elf_read_sections(const void *buf, size_t len,
 	if (r.ei_class == ELFCLASS32) {
 		if (len < ELF32_EHDR_SIZE)
 			die("ELF32 header truncated");
-		shoff      = rd32(&r, 32);
-		shentsize  = rd16(&r, 46);
-		shnum      = rd16(&r, 48);
-		shstrndx   = rd16(&r, 50);
+		shoff = rd32(&r, 32);
+		shentsize = rd16(&r, 46);
+		shnum = rd16(&r, 48);
+		shstrndx = rd16(&r, 50);
 	} else {
 		if (len < ELF64_EHDR_SIZE)
 			die("ELF64 header truncated");
-		shoff      = rd64(&r, 40);
-		shentsize  = rd16(&r, 58);
-		shnum      = rd16(&r, 60);
-		shstrndx   = rd16(&r, 62);
+		shoff = rd64(&r, 40);
+		shentsize = rd16(&r, 58);
+		shnum = rd16(&r, 60);
+		shstrndx = rd16(&r, 62);
 	}
 
 	if (shnum == 0)
@@ -167,7 +160,8 @@ void elf_read_sections(const void *buf, size_t len,
 
 	if (shstrndx >= shnum)
 		die("ELF: section string table index %u "
-		    "out of range (shnum=%u)", shstrndx, shnum);
+		    "out of range (shnum=%u)",
+		    shstrndx, shnum);
 
 	/*
 	 * Locate the section header string table (.shstrtab).
@@ -178,10 +172,10 @@ void elf_read_sections(const void *buf, size_t len,
 	 */
 	str_hdr = (size_t)(shoff + (uint64_t)shstrndx * shentsize);
 	if (r.ei_class == ELFCLASS32) {
-		str_off  = rd32(&r, str_hdr + 16);
+		str_off = rd32(&r, str_hdr + 16);
 		str_size = rd32(&r, str_hdr + 20);
 	} else {
-		str_off  = rd64(&r, str_hdr + 24);
+		str_off = rd64(&r, str_hdr + 24);
 		str_size = rd64(&r, str_hdr + 32);
 	}
 
@@ -211,16 +205,15 @@ void elf_read_sections(const void *buf, size_t len,
 
 		if (r.ei_class == ELFCLASS32) {
 			sh_flags = rd32(&r, hoff + 8);
-			sh_size  = rd32(&r, hoff + 20);
+			sh_size = rd32(&r, hoff + 20);
 		} else {
 			sh_flags = rd64(&r, hoff + 8);
-			sh_size  = rd64(&r, hoff + 32);
+			sh_size = rd64(&r, hoff + 32);
 		}
 
 		ALLOC_GROW(out->s, out->nr + 1, alloc);
-		out->s[out->nr].name = (sh_name < str_size)
-			? strtab + sh_name
-			: "";
+		out->s[out->nr].name =
+		    (sh_name < str_size) ? strtab + sh_name : "";
 		out->s[out->nr].type = sh_type;
 		out->s[out->nr].flags = sh_flags;
 		out->s[out->nr].size = sh_size;

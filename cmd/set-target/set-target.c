@@ -15,15 +15,14 @@
  * require --preview to match idf.py's behaviour.
  */
 static const char *const SUPPORTED_TARGETS[] = {
-	"esp32", "esp32s2", "esp32c3", "esp32s3", "esp32c2",
-	"esp32c6", "esp32h2", "esp32p4", "esp32c5", "esp32c61",
-	NULL,
+    "esp32",   "esp32s2", "esp32c3", "esp32s3",	 "esp32c2", "esp32c6",
+    "esp32h2", "esp32p4", "esp32c5", "esp32c61", NULL,
 };
 static const char *const PREVIEW_TARGETS[] = {
-	"linux", "esp32h21", "esp32h4", "esp32s31",
-	NULL,
+    "linux", "esp32h21", "esp32h4", "esp32s31", NULL,
 };
 
+/* clang-format off */
 static const struct cmd_manual manual = {
 	.description =
 	H_PARA("Switches the project to build for chip @b{<target>} "
@@ -60,6 +59,7 @@ static const struct cmd_manual manual = {
 	H_ITEM("ice build",
 	       "Build the project after switching target."),
 };
+/* clang-format on */
 
 static int in_list(const char *target, const char *const *list)
 {
@@ -83,13 +83,12 @@ int cmd_set_target(int argc, const char **argv)
 	static char envstr[] = "_IDF_PY_SET_TARGET_ACTION=1";
 	int preview = 0;
 	const char *usage[] = {
-		"ice set-target [--preview] <target>",
-		NULL,
+	    "ice set-target [--preview] <target>",
+	    NULL,
 	};
 	struct option opts[] = {
-		OPT_BOOL(0, "preview", &preview,
-			 "allow preview targets"),
-		OPT_END(),
+	    OPT_BOOL(0, "preview", &preview, "allow preview targets"),
+	    OPT_END(),
 	};
 	const char *target;
 	struct sbuf define = SBUF_INIT;
@@ -107,7 +106,8 @@ int cmd_set_target(int argc, const char **argv)
 		if (in_list(target, PREVIEW_TARGETS)) {
 			if (!preview)
 				die("'%s' is a preview target; "
-				    "pass --preview to use it", target);
+				    "pass --preview to use it",
+				    target);
 		} else {
 			die("'%s' is not a supported target", target);
 		}

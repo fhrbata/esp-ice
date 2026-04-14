@@ -27,10 +27,10 @@
  * and data bus addresses.
  */
 struct chip_mem_range {
-	const char *name;         /**< Display name (e.g. "IRAM", "DIRAM"). */
-	uint64_t primary_addr;    /**< Primary start address. */
-	uint64_t length;          /**< Size in bytes. */
-	uint64_t secondary_addr;  /**< Alias start address (0 = no alias). */
+	const char *name;	 /**< Display name (e.g. "IRAM", "DIRAM"). */
+	uint64_t primary_addr;	 /**< Primary start address. */
+	uint64_t length;	 /**< Size in bytes. */
+	uint64_t secondary_addr; /**< Alias start address (0 = no alias). */
 };
 
 /**
@@ -39,7 +39,7 @@ struct chip_mem_range {
  * The ranges array is NULL-terminated (name == NULL marks the end).
  */
 struct chip_info {
-	const char *name;                    /**< Chip name (e.g. "esp32s3"). */
+	const char *name;		     /**< Chip name (e.g. "esp32s3"). */
 	const struct chip_mem_range *ranges; /**< NULL-terminated array. */
 };
 

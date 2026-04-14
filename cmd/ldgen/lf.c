@@ -20,8 +20,8 @@
  *           Conditionals (if/elif/else) are shared across all entry
  *           types through a function-pointer callback (@c stmt_parser_fn).
  */
-#include "../../ice.h"
 #include "lf.h"
+#include "../../ice.h"
 
 /* ================================================================== */
 /*  Character classification                                          */
@@ -32,10 +32,7 @@
  * Covers IDENT, SEC_NAME, and OBJ_NAME first-char classes from the
  * grammar (letters, underscore, dot).
  */
-static int is_name_start(int c)
-{
-	return isalpha(c) || c == '_' || c == '.';
-}
+static int is_name_start(int c) { return isalpha(c) || c == '_' || c == '.'; }
 
 /**
  * True for characters that may continue a NAME token (after the first).
@@ -54,20 +51,20 @@ static int is_name_cont(int c)
 
 enum lf_tok {
 	TOK_EOF = 0,
-	TOK_NL,		/**< end of a content line */
-	TOK_INDENT,		/**< indentation deeper than current level */
-	TOK_DEDENT,		/**< indentation shallower than current level */
-	TOK_LBRACK,		/**< '[' */
-	TOK_RBRACK,		/**< ']' */
-	TOK_LPAREN,		/**< '(' */
-	TOK_RPAREN,		/**< ')' */
-	TOK_COLON,		/**< ':' */
-	TOK_SEMI,		/**< ';' */
-	TOK_COMMA,		/**< ',' */
-	TOK_ARROW,		/**< '->' */
-	TOK_STAR,		/**< '*' */
-	TOK_NAME,		/**< identifier / section name / entity name */
-	TOK_NUM,		/**< integer literal */
+	TOK_NL,	    /**< end of a content line */
+	TOK_INDENT, /**< indentation deeper than current level */
+	TOK_DEDENT, /**< indentation shallower than current level */
+	TOK_LBRACK, /**< '[' */
+	TOK_RBRACK, /**< ']' */
+	TOK_LPAREN, /**< '(' */
+	TOK_RPAREN, /**< ')' */
+	TOK_COLON,  /**< ':' */
+	TOK_SEMI,   /**< ';' */
+	TOK_COMMA,  /**< ',' */
+	TOK_ARROW,  /**< '->' */
+	TOK_STAR,   /**< '*' */
+	TOK_NAME,   /**< identifier / section name / entity name */
+	TOK_NUM,    /**< integer literal */
 };
 
 /* ================================================================== */
@@ -91,13 +88,13 @@ enum lf_tok {
  *    @c num (integer).
  */
 struct lexer {
-	const char *pos;	/**< current scan position in input */
-	const char *path;	/**< source file path (for diagnostics) */
-	int line;		/**< current line number (1-based) */
+	const char *pos;  /**< current scan position in input */
+	const char *path; /**< source file path (for diagnostics) */
+	int line;	  /**< current line number (1-based) */
 
 	/** Indentation stack.  indent[0] is always 0 (column 0). */
 	int indent[64];
-	int depth;		/**< top-of-stack index */
+	int depth; /**< top-of-stack index */
 
 	/**
 	 * Pending-token ring buffer.  Used when a single scan position
@@ -105,45 +102,61 @@ struct lexer {
 	 * Indices wrap with & 63.
 	 */
 	int pending[64];
-	int qh;			/**< head (next to dequeue) */
-	int qt;			/**< tail (next slot to enqueue) */
+	int qh; /**< head (next to dequeue) */
+	int qt; /**< tail (next slot to enqueue) */
 
-	int tok;		/**< current token type */
-	char *val;		/**< string value for TOK_NAME (owned) */
-	int num;		/**< numeric value for TOK_NUM */
+	int tok;   /**< current token type */
+	char *val; /**< string value for TOK_NAME (owned) */
+	int num;   /**< numeric value for TOK_NUM */
 
-	int bol;		/**< true when next scan starts a new line */
-	int eof;		/**< true after end-of-input was processed */
+	int bol; /**< true when next scan starts a new line */
+	int eof; /**< true after end-of-input was processed */
 };
 
 /** Return a human-readable name for a token type (for diagnostics). */
 static const char *tok_str(int t)
 {
 	switch (t) {
-	case TOK_EOF:    return "EOF";
-	case TOK_NL:     return "newline";
-	case TOK_INDENT: return "INDENT";
-	case TOK_DEDENT: return "DEDENT";
-	case TOK_LBRACK: return "'['";
-	case TOK_RBRACK: return "']'";
-	case TOK_LPAREN: return "'('";
-	case TOK_RPAREN: return "')'";
-	case TOK_COLON:  return "':'";
-	case TOK_SEMI:   return "';'";
-	case TOK_COMMA:  return "','";
-	case TOK_ARROW:  return "'->'";
-	case TOK_STAR:   return "'*'";
-	case TOK_NAME:   return "name";
-	case TOK_NUM:    return "number";
-	default:         return "?";
+	case TOK_EOF:
+		return "EOF";
+	case TOK_NL:
+		return "newline";
+	case TOK_INDENT:
+		return "INDENT";
+	case TOK_DEDENT:
+		return "DEDENT";
+	case TOK_LBRACK:
+		return "'['";
+	case TOK_RBRACK:
+		return "']'";
+	case TOK_LPAREN:
+		return "'('";
+	case TOK_RPAREN:
+		return "')'";
+	case TOK_COLON:
+		return "':'";
+	case TOK_SEMI:
+		return "';'";
+	case TOK_COMMA:
+		return "','";
+	case TOK_ARROW:
+		return "'->'";
+	case TOK_STAR:
+		return "'*'";
+	case TOK_NAME:
+		return "name";
+	case TOK_NUM:
+		return "number";
+	default:
+		return "?";
 	}
 }
 
 /* ---- pending-token ring buffer ---------------------------------- */
 
 static void q_push(struct lexer *l, int t) { l->pending[l->qt++ & 63] = t; }
-static int  q_pop(struct lexer *l)         { return l->pending[l->qh++ & 63]; }
-static int  q_any(struct lexer *l)         { return l->qh < l->qt; }
+static int q_pop(struct lexer *l) { return l->pending[l->qh++ & 63]; }
+static int q_any(struct lexer *l) { return l->qh < l->qt; }
 
 /* ================================================================== */
 /*  Lexer -- indentation                                              */
@@ -233,8 +246,7 @@ static int lf_next(struct lexer *l)
 					l->depth--;
 				}
 				l->eof = 1;
-				return l->tok = q_any(l)
-					? q_pop(l) : TOK_EOF;
+				return l->tok = q_any(l) ? q_pop(l) : TOK_EOF;
 			}
 			/* content line — process indent, then scan */
 			process_indent(l, indent);
@@ -287,14 +299,30 @@ static int lf_next(struct lexer *l)
 
 	/* single-character tokens */
 	switch (*l->pos) {
-	case '[': l->pos++; return l->tok = TOK_LBRACK;
-	case ']': l->pos++; return l->tok = TOK_RBRACK;
-	case '(': l->pos++; return l->tok = TOK_LPAREN;
-	case ')': l->pos++; return l->tok = TOK_RPAREN;
-	case ':': l->pos++; return l->tok = TOK_COLON;
-	case ';': l->pos++; return l->tok = TOK_SEMI;
-	case ',': l->pos++; return l->tok = TOK_COMMA;
-	case '*': l->pos++; return l->tok = TOK_STAR;
+	case '[':
+		l->pos++;
+		return l->tok = TOK_LBRACK;
+	case ']':
+		l->pos++;
+		return l->tok = TOK_RBRACK;
+	case '(':
+		l->pos++;
+		return l->tok = TOK_LPAREN;
+	case ')':
+		l->pos++;
+		return l->tok = TOK_RPAREN;
+	case ':':
+		l->pos++;
+		return l->tok = TOK_COLON;
+	case ';':
+		l->pos++;
+		return l->tok = TOK_SEMI;
+	case ',':
+		l->pos++;
+		return l->tok = TOK_COMMA;
+	case '*':
+		l->pos++;
+		return l->tok = TOK_STAR;
 	}
 
 	/*
@@ -306,8 +334,8 @@ static int lf_next(struct lexer *l)
 		const char *start = l->pos++;
 		while (is_name_cont(*l->pos))
 			l->pos++;
-		while (*l->pos == '-' && l->pos[1] != '>'
-		       && is_name_cont(l->pos[1])) {
+		while (*l->pos == '-' && l->pos[1] != '>' &&
+		       is_name_cont(l->pos[1])) {
 			l->pos++;
 			while (is_name_cont(*l->pos))
 				l->pos++;
@@ -325,8 +353,8 @@ static int lf_next(struct lexer *l)
 		return l->tok = TOK_NUM;
 	}
 
-	die("%s:%d: unexpected character '%c' (0x%02x)",
-	    l->path, l->line, *l->pos, (unsigned char)*l->pos);
+	die("%s:%d: unexpected character '%c' (0x%02x)", l->path, l->line,
+	    *l->pos, (unsigned char)*l->pos);
 	return TOK_EOF;
 }
 
@@ -344,8 +372,8 @@ static int is_kw(struct lexer *l, const char *kw)
 static void expect(struct lexer *l, int tok)
 {
 	if (l->tok != tok)
-		die("%s:%d: expected %s, got %s",
-		    l->path, l->line, tok_str(tok), tok_str(l->tok));
+		die("%s:%d: expected %s, got %s", l->path, l->line,
+		    tok_str(tok), tok_str(l->tok));
 	lf_next(l);
 }
 
@@ -357,8 +385,8 @@ static void expect(struct lexer *l, int tok)
 static char *expect_name(struct lexer *l)
 {
 	if (l->tok != TOK_NAME)
-		die("%s:%d: expected name, got %s",
-		    l->path, l->line, tok_str(l->tok));
+		die("%s:%d: expected name, got %s", l->path, l->line,
+		    tok_str(l->tok));
 	char *s = l->val;
 	l->val = NULL;
 	lf_next(l);
@@ -409,8 +437,8 @@ static char *read_cond(struct lexer *l)
  * calls the appropriate one to parse the body of each branch, allowing
  * a single parse_cond() to handle all entry types.
  */
-typedef void (*stmt_parser_fn)(struct lexer *l,
-			       struct lf_stmt **v, int *n, int *cap);
+typedef void (*stmt_parser_fn)(struct lexer *l, struct lf_stmt **v, int *n,
+			       int *cap);
 
 /**
  * Parse an if/elif/else conditional block and append it as a
@@ -424,8 +452,7 @@ typedef void (*stmt_parser_fn)(struct lexer *l,
  *             {"elif" EXPR ":" NL INDENT {S} DEDENT}
  *             ["else:" NL INDENT {S} DEDENT]
  */
-static void parse_cond(struct lexer *l,
-		       struct lf_stmt **v, int *n, int *cap,
+static void parse_cond(struct lexer *l, struct lf_stmt **v, int *n, int *cap,
 		       stmt_parser_fn inner)
 {
 	ALLOC_GROW(*v, *n + 1, *cap);
@@ -500,8 +527,8 @@ static void parse_cond(struct lexer *l,
 /* ================================================================== */
 
 /** Parse section entries: SEC_NAME NL | cond(sec_stmt). */
-static void parse_sec_stmts(struct lexer *l,
-			     struct lf_stmt **v, int *n, int *cap)
+static void parse_sec_stmts(struct lexer *l, struct lf_stmt **v, int *n,
+			    int *cap)
 {
 	while (l->tok == TOK_NAME) {
 		if (is_kw(l, "if")) {
@@ -520,8 +547,8 @@ static void parse_sec_stmts(struct lexer *l,
 }
 
 /** Parse scheme entries: IDENT '->' IDENT NL | cond(sch_stmt). */
-static void parse_sch_stmts(struct lexer *l,
-			     struct lf_stmt **v, int *n, int *cap)
+static void parse_sch_stmts(struct lexer *l, struct lf_stmt **v, int *n,
+			    int *cap)
 {
 	while (l->tok == TOK_NAME) {
 		if (is_kw(l, "if")) {
@@ -562,13 +589,14 @@ static void parse_flag(struct lexer *l, struct lf_flag *f)
 		lf_next(l);
 		expect(l, TOK_LPAREN);
 		if (l->tok != TOK_NUM)
-			die("%s:%d: expected number in ALIGN()",
-			    l->path, l->line);
+			die("%s:%d: expected number in ALIGN()", l->path,
+			    l->line);
 		f->alignment = l->num;
 		lf_next(l);
 		/* optional ', pre' */
 		if (l->tok == TOK_COMMA && l->pos[0] != ' '
-		    ? 0 : l->tok == TOK_COMMA) {
+			? 0
+			: l->tok == TOK_COMMA) {
 			/* peek: is the next name 'pre' or 'post'? */
 			if (l->tok == TOK_COMMA) {
 				lf_next(l);
@@ -609,7 +637,8 @@ static void parse_flag(struct lexer *l, struct lf_flag *f)
 		f->symbol = expect_name(l);
 		expect(l, TOK_RPAREN);
 	} else {
-		die("%s:%d: expected flag keyword (KEEP/ALIGN/SORT/SURROUND), got '%s'",
+		die("%s:%d: expected flag keyword (KEEP/ALIGN/SORT/SURROUND), "
+		    "got '%s'",
 		    l->path, l->line,
 		    l->tok == TOK_NAME ? l->val : tok_str(l->tok));
 	}
@@ -626,9 +655,9 @@ static void parse_flag_item(struct lexer *l, struct lf_flag_item *item)
 	item->target = expect_name(l);
 
 	int fcap = 0;
-	while (l->tok == TOK_NAME
-	       && (is_kw(l, "KEEP") || is_kw(l, "ALIGN")
-		   || is_kw(l, "SORT") || is_kw(l, "SURROUND"))) {
+	while (l->tok == TOK_NAME &&
+	       (is_kw(l, "KEEP") || is_kw(l, "ALIGN") || is_kw(l, "SORT") ||
+		is_kw(l, "SURROUND"))) {
 		ALLOC_GROW(item->flags, item->n_flags + 1, fcap);
 		parse_flag(l, &item->flags[item->n_flags++]);
 	}
@@ -697,8 +726,8 @@ static void parse_flag_list(struct lexer *l, struct lf_entry *entry)
  *   map_stmt  = map_entry NL | map_entry ';' flag_list | cond(map_stmt)
  *   map_entry = ('*' | OBJ_NAME [':' IDENT]) '(' IDENT ')'
  */
-static void parse_map_stmts(struct lexer *l,
-			     struct lf_stmt **v, int *n, int *cap)
+static void parse_map_stmts(struct lexer *l, struct lf_stmt **v, int *n,
+			    int *cap)
 {
 	while (l->tok == TOK_NAME || l->tok == TOK_STAR) {
 		if (is_kw(l, "if")) {
@@ -745,8 +774,8 @@ static void parse_map_stmts(struct lexer *l,
  * Used for the indented-block form of "archive:", where the archive
  * name is selected by a conditional.
  */
-static void parse_archive_stmts(struct lexer *l,
-				struct lf_stmt **v, int *n, int *cap)
+static void parse_archive_stmts(struct lexer *l, struct lf_stmt **v, int *n,
+				int *cap)
 {
 	while (l->tok == TOK_NAME || l->tok == TOK_STAR) {
 		if (is_kw(l, "if")) {
@@ -773,16 +802,15 @@ static void parse_archive_stmts(struct lexer *l,
 /*  Parser -- fragments                                               */
 /* ================================================================== */
 
-static void parse_frags(struct lexer *l,
-			struct lf_frag **v, int *n, int *cap);
+static void parse_frags(struct lexer *l, struct lf_frag **v, int *n, int *cap);
 
 /**
  * Parse a fragment-level conditional (if/elif/else wrapping whole
  * fragments).  Same structure as entry-level conditionals but the
  * body contains fragments instead of entry statements.
  */
-static void parse_frag_cond(struct lexer *l,
-			    struct lf_frag **v, int *n, int *cap)
+static void parse_frag_cond(struct lexer *l, struct lf_frag **v, int *n,
+			    int *cap)
 {
 	ALLOC_GROW(*v, *n + 1, *cap);
 	struct lf_frag *f = &(*v)[(*n)++];
@@ -869,9 +897,10 @@ static void parse_entries(struct lexer *l, stmt_parser_fn fn,
 	}
 }
 
-/** Parse a [sections:NAME] fragment (header already consumed up to "sections"). */
-static void parse_sections(struct lexer *l,
-			   struct lf_frag **v, int *n, int *cap)
+/** Parse a [sections:NAME] fragment (header already consumed up to "sections").
+ */
+static void parse_sections(struct lexer *l, struct lf_frag **v, int *n,
+			   int *cap)
 {
 	lf_next(l);
 	expect(l, TOK_COLON);
@@ -893,8 +922,7 @@ static void parse_sections(struct lexer *l,
 }
 
 /** Parse a [scheme:NAME] fragment. */
-static void parse_scheme(struct lexer *l,
-			 struct lf_frag **v, int *n, int *cap)
+static void parse_scheme(struct lexer *l, struct lf_frag **v, int *n, int *cap)
 {
 	lf_next(l);
 	expect(l, TOK_COLON);
@@ -922,8 +950,7 @@ static void parse_scheme(struct lexer *l,
  * indented conditional block.  Both forms are stored as a statement
  * list in the AST.
  */
-static void parse_mapping(struct lexer *l,
-			  struct lf_frag **v, int *n, int *cap)
+static void parse_mapping(struct lexer *l, struct lf_frag **v, int *n, int *cap)
 {
 	lf_next(l);
 	expect(l, TOK_COLON);
@@ -983,8 +1010,7 @@ static void parse_mapping(struct lexer *l,
  * This is the top-level loop and also the body of fragment-level
  * conditionals.  Stray newlines between fragments are skipped.
  */
-static void parse_frags(struct lexer *l,
-			struct lf_frag **v, int *n, int *cap)
+static void parse_frags(struct lexer *l, struct lf_frag **v, int *n, int *cap)
 {
 	while (l->tok != TOK_EOF && l->tok != TOK_DEDENT) {
 		if (l->tok == TOK_NL) {
@@ -996,8 +1022,8 @@ static void parse_frags(struct lexer *l,
 			continue;
 		}
 		if (l->tok != TOK_LBRACK)
-			die("%s:%d: expected '[' or 'if', got %s",
-			    l->path, l->line, tok_str(l->tok));
+			die("%s:%d: expected '[' or 'if', got %s", l->path,
+			    l->line, tok_str(l->tok));
 		lf_next(l);
 
 		if (is_kw(l, "sections"))
@@ -1007,8 +1033,8 @@ static void parse_frags(struct lexer *l,
 		else if (is_kw(l, "mapping"))
 			parse_mapping(l, v, n, cap);
 		else
-			die("%s:%d: unknown fragment type '%s'",
-			    l->path, l->line,
+			die("%s:%d: unknown fragment type '%s'", l->path,
+			    l->line,
 			    l->tok == TOK_NAME ? l->val : tok_str(l->tok));
 	}
 }
@@ -1037,8 +1063,7 @@ struct lf_file *lf_parse(const char *src, const char *path)
 	parse_frags(&l, &f->frags, &f->n_frags, &cap);
 
 	if (l.tok != TOK_EOF)
-		die("%s:%d: trailing content after fragments",
-		    l.path, l.line);
+		die("%s:%d: trailing content after fragments", l.path, l.line);
 
 	free(l.val);
 	return f;
@@ -1146,8 +1171,8 @@ void lf_file_free(struct lf_file *f)
 /*  Dump (debugging)                                                  */
 /* ================================================================== */
 
-static void dump_stmts(const struct lf_stmt *v, int n,
-		       enum lf_frag_kind ctx, int depth);
+static void dump_stmts(const struct lf_stmt *v, int n, enum lf_frag_kind ctx,
+		       int depth);
 
 static void pr_indent(int depth)
 {
@@ -1204,7 +1229,7 @@ static void dump_entry(const struct lf_entry *e, enum lf_frag_kind ctx,
 			printf(";\n");
 			for (int i = 0; i < e->n_flag_items; i++) {
 				const struct lf_flag_item *fi =
-					&e->flag_items[i];
+				    &e->flag_items[i];
 				pr_indent(depth + 1);
 				printf("%s -> %s", fi->sections, fi->target);
 				for (int j = 0; j < fi->n_flags; j++)
@@ -1233,18 +1258,18 @@ static void dump_cond(const struct lf_branch *branches, int nb,
 			       branches[i].expr);
 		else
 			printf("else:\n");
-		dump_stmts(branches[i].stmts, branches[i].n_stmts,
-			   ctx, depth + 1);
+		dump_stmts(branches[i].stmts, branches[i].n_stmts, ctx,
+			   depth + 1);
 	}
 }
 
-static void dump_stmts(const struct lf_stmt *v, int n,
-		       enum lf_frag_kind ctx, int depth)
+static void dump_stmts(const struct lf_stmt *v, int n, enum lf_frag_kind ctx,
+		       int depth)
 {
 	for (int i = 0; i < n; i++) {
 		if (v[i].is_cond)
-			dump_cond(v[i].u.cond.branches,
-				  v[i].u.cond.n_branches, ctx, depth);
+			dump_cond(v[i].u.cond.branches, v[i].u.cond.n_branches,
+				  ctx, depth);
 		else
 			dump_entry(&v[i].u.entry, ctx, depth);
 	}
@@ -1273,24 +1298,22 @@ static void dump_frag(const struct lf_frag *f, int depth)
 	case LF_SECTIONS:
 		pr_indent(depth);
 		printf("[sections:%s]\n", f->u.sec.name);
-		dump_stmts(f->u.sec.stmts, f->u.sec.n, LF_SECTIONS,
-			   depth + 1);
+		dump_stmts(f->u.sec.stmts, f->u.sec.n, LF_SECTIONS, depth + 1);
 		break;
 	case LF_SCHEME:
 		pr_indent(depth);
 		printf("[scheme:%s]\n", f->u.sch.name);
-		dump_stmts(f->u.sch.stmts, f->u.sch.n, LF_SCHEME,
-			   depth + 1);
+		dump_stmts(f->u.sch.stmts, f->u.sch.n, LF_SCHEME, depth + 1);
 		break;
 	case LF_MAPPING:
 		pr_indent(depth);
 		printf("[mapping:%s]\n", f->u.map.name);
 		pr_indent(depth + 1);
 		printf("archive:\n");
-		dump_stmts(f->u.map.archive, f->u.map.n_archive,
-			   LF_FRAG_COND, depth + 2);
-		dump_stmts(f->u.map.entries, f->u.map.n_entries,
-			   LF_MAPPING, depth + 1);
+		dump_stmts(f->u.map.archive, f->u.map.n_archive, LF_FRAG_COND,
+			   depth + 2);
+		dump_stmts(f->u.map.entries, f->u.map.n_entries, LF_MAPPING,
+			   depth + 1);
 		break;
 	case LF_FRAG_COND:
 		dump_frag_cond(f->u.cond.branches, f->u.cond.n, depth);

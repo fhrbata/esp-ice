@@ -24,8 +24,8 @@ static struct json_value *make(enum json_type t)
 	return j;
 }
 
-struct json_value *json_new_null(void)	 { return make(JSON_NULL); }
-struct json_value *json_new_array(void)	 { return make(JSON_ARRAY); }
+struct json_value *json_new_null(void) { return make(JSON_NULL); }
+struct json_value *json_new_array(void) { return make(JSON_ARRAY); }
 struct json_value *json_new_object(void) { return make(JSON_OBJECT); }
 
 struct json_value *json_new_bool(int b)
@@ -177,9 +177,8 @@ static struct json_value *parse_value(struct parser *ps);
 
 static void skip_ws(struct parser *ps)
 {
-	while (ps->cur < ps->end &&
-	       (*ps->cur == ' ' || *ps->cur == '\t' ||
-		*ps->cur == '\n' || *ps->cur == '\r'))
+	while (ps->cur < ps->end && (*ps->cur == ' ' || *ps->cur == '\t' ||
+				     *ps->cur == '\n' || *ps->cur == '\r'))
 		ps->cur++;
 }
 
@@ -199,14 +198,30 @@ static struct json_value *parse_string(struct parser *ps)
 				goto fail;
 
 			switch (*ps->cur++) {
-			case '"':  sbuf_addch(&sb, '"');  break;
-			case '\\': sbuf_addch(&sb, '\\'); break;
-			case '/':  sbuf_addch(&sb, '/');  break;
-			case 'b':  sbuf_addch(&sb, '\b'); break;
-			case 'f':  sbuf_addch(&sb, '\f'); break;
-			case 'n':  sbuf_addch(&sb, '\n'); break;
-			case 'r':  sbuf_addch(&sb, '\r'); break;
-			case 't':  sbuf_addch(&sb, '\t'); break;
+			case '"':
+				sbuf_addch(&sb, '"');
+				break;
+			case '\\':
+				sbuf_addch(&sb, '\\');
+				break;
+			case '/':
+				sbuf_addch(&sb, '/');
+				break;
+			case 'b':
+				sbuf_addch(&sb, '\b');
+				break;
+			case 'f':
+				sbuf_addch(&sb, '\f');
+				break;
+			case 'n':
+				sbuf_addch(&sb, '\n');
+				break;
+			case 'r':
+				sbuf_addch(&sb, '\r');
+				break;
+			case 't':
+				sbuf_addch(&sb, '\t');
+				break;
 			default:
 				/* \uXXXX and unknown escapes not supported. */
 				goto fail;
@@ -373,19 +388,22 @@ static struct json_value *parse_value(struct parser *ps)
 		return NULL;
 
 	c = *ps->cur;
-	if (c == '{')                   return parse_object(ps);
-	if (c == '[')                   return parse_array(ps);
-	if (c == '"')                   return parse_string(ps);
+	if (c == '{')
+		return parse_object(ps);
+	if (c == '[')
+		return parse_array(ps);
+	if (c == '"')
+		return parse_string(ps);
 	if (c == '-' || (c >= '0' && c <= '9'))
-					return parse_number(ps);
+		return parse_number(ps);
 	if (c == 't' || c == 'f' || c == 'n')
-					return parse_literal(ps);
+		return parse_literal(ps);
 	return NULL;
 }
 
 struct json_value *json_parse(const char *buf, size_t len)
 {
-	struct parser ps = { .cur = buf, .end = buf + len };
+	struct parser ps = {.cur = buf, .end = buf + len};
 	struct json_value *root;
 
 	root = parse_value(&ps);
@@ -409,17 +427,30 @@ static void write_string(const char *s, struct sbuf *out)
 	sbuf_addch(out, '"');
 	for (; *s; s++) {
 		switch (*s) {
-		case '"':  sbuf_addstr(out, "\\\""); break;
-		case '\\': sbuf_addstr(out, "\\\\"); break;
-		case '\n': sbuf_addstr(out, "\\n");  break;
-		case '\r': sbuf_addstr(out, "\\r");  break;
-		case '\t': sbuf_addstr(out, "\\t");  break;
-		case '\b': sbuf_addstr(out, "\\b");  break;
-		case '\f': sbuf_addstr(out, "\\f");  break;
+		case '"':
+			sbuf_addstr(out, "\\\"");
+			break;
+		case '\\':
+			sbuf_addstr(out, "\\\\");
+			break;
+		case '\n':
+			sbuf_addstr(out, "\\n");
+			break;
+		case '\r':
+			sbuf_addstr(out, "\\r");
+			break;
+		case '\t':
+			sbuf_addstr(out, "\\t");
+			break;
+		case '\b':
+			sbuf_addstr(out, "\\b");
+			break;
+		case '\f':
+			sbuf_addstr(out, "\\f");
+			break;
 		default:
 			if ((unsigned char)*s < 0x20)
-				sbuf_addf(out, "\\u%04x",
-					  (unsigned char)*s);
+				sbuf_addf(out, "\\u%04x", (unsigned char)*s);
 			else
 				sbuf_addch(out, *s);
 		}

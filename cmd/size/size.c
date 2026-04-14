@@ -27,6 +27,7 @@
 #include "../../ice.h"
 #include "chip.h"
 
+/* clang-format off */
 static const struct cmd_manual manual = {
 	.description =
 	H_PARA("Reads a GCC/LD linker map file and prints a table of "
@@ -57,6 +58,7 @@ static const struct cmd_manual manual = {
 	H_ITEM("ice cmake size",
 	       "Invoke ESP-IDF's native size target (different format)."),
 };
+/* clang-format on */
 
 /* ---- helpers -------------------------------------------------------- */
 
@@ -72,10 +74,10 @@ static int has_suffix(const char *s, size_t len, const char *suffix)
  * A memory region after splitting and assignment to a chip memory type.
  */
 struct split_region {
-	const char *name;                  /**< Region name from map file. */
-	uint64_t origin;                   /**< Start address of this fragment. */
-	uint64_t length;                   /**< Size of this fragment. */
-	const char *attrs;                 /**< Attributes string. */
+	const char *name;  /**< Region name from map file. */
+	uint64_t origin;   /**< Start address of this fragment. */
+	uint64_t length;   /**< Size of this fragment. */
+	const char *attrs; /**< Attributes string. */
 	const struct chip_mem_range *type; /**< Assigned chip memory type. */
 };
 
@@ -110,7 +112,8 @@ static int split_regions(const struct map_file *mf,
 			int found = 0;
 
 			for (int j = 0; chip->ranges[j].name; j++) {
-				const struct chip_mem_range *cr = &chip->ranges[j];
+				const struct chip_mem_range *cr =
+				    &chip->ranges[j];
 				uint64_t addr = cr->primary_addr;
 				uint64_t len = cr->length;
 
@@ -118,15 +121,16 @@ static int split_regions(const struct map_file *mf,
 					found = 1;
 				} else if (cr->secondary_addr) {
 					addr = cr->secondary_addr;
-					if (addr <= origin && origin < addr + len)
+					if (addr <= origin &&
+					    origin < addr + len)
 						found = 1;
 				}
 				if (!found)
 					continue;
 
 				uint64_t avail = len - (origin - addr);
-				uint64_t used = remaining < avail
-					? remaining : avail;
+				uint64_t used =
+				    remaining < avail ? remaining : avail;
 
 				ALLOC_GROW(sr, nr + 1, alloc);
 				sr[nr].name = reg->name;
@@ -147,7 +151,8 @@ static int split_regions(const struct map_file *mf,
 				 * is at the exact end of a type range.
 				 */
 				for (int k = 0; k < nr; k++) {
-					uint64_t end = sr[k].origin + sr[k].length;
+					uint64_t end =
+					    sr[k].origin + sr[k].length;
 					if (origin + remaining == end) {
 						ALLOC_GROW(sr, nr + 1, alloc);
 						sr[nr].name = reg->name;
@@ -162,7 +167,8 @@ static int split_regions(const struct map_file *mf,
 				}
 				if (!found)
 					warn("cannot assign region '%s' to "
-					     "any memory type", reg->name);
+					     "any memory type",
+					     reg->name);
 				break;
 			}
 		}
@@ -257,8 +263,8 @@ static struct memmap_entry *memmap_find(struct memmap *mm, const char *name)
  * type, their mutual offset equals the offset between the type's
  * primary and secondary addresses, and their lengths match.
  */
-static void compute_sizes(struct memmap *mm,
-			  const struct split_region *regions, int nr)
+static void compute_sizes(struct memmap *mm, const struct split_region *regions,
+			  int nr)
 {
 	for (int i = 0; i < nr; i++) {
 		const struct split_region *sr = &regions[i];
@@ -343,7 +349,8 @@ static void assign_sections(struct memmap *mm, const struct map_file *mf,
 
 			if (!found) {
 				warn("cannot assign section '%s' to "
-				     "any memory type", sec->name);
+				     "any memory type",
+				     sec->name);
 				break;
 			}
 		}
@@ -373,8 +380,7 @@ static void memmap_build(struct memmap *mm, const char *target,
 
 	for (int i = 0; i < nr_ranges; i++) {
 		if (!memmap_find(mm, chip->ranges[i].name)) {
-			mm->entries[mm->nr_entries].name =
-				chip->ranges[i].name;
+			mm->entries[mm->nr_entries].name = chip->ranges[i].name;
 			mm->nr_entries++;
 		}
 	}
@@ -467,8 +473,7 @@ static const char *fmt_pct(char *buf, size_t sz, double pct)
  */
 static int is_cache_type(const char *name)
 {
-	return strncmp(name, "Flash", 5) == 0 ||
-	       strncmp(name, "SPI", 3) == 0 ||
+	return strncmp(name, "Flash", 5) == 0 || strncmp(name, "SPI", 3) == 0 ||
 	       strncmp(name, "CACHE", 5) == 0 ||
 	       strncmp(name, "External", 8) == 0;
 }
@@ -497,8 +502,8 @@ static void output_table(struct memmap *mm)
 	table_hline(TL, TM, TR, HH);
 
 	/* ┃ header ┃ */
-	printf(VH " @b{%-19s} " VH " @b{%12s} " VH " @b{%8s} "
-	       VH " @b{%14s} " VH " @b{%13s} " VH "\n",
+	printf(VH " @b{%-19s} " VH " @b{%12s} " VH " @b{%8s} " VH
+		  " @b{%14s} " VH " @b{%13s} " VH "\n",
 	       "Memory Type/Section", "Used [bytes]", "Used [%]",
 	       "Remain [bytes]", "Total [bytes]");
 
@@ -515,45 +520,36 @@ static void output_table(struct memmap *mm)
 			uint64_t remain = e->size - e->used;
 			fmt_pct(pctbuf, sizeof(pctbuf),
 				(double)e->used * 100.0 / (double)e->size);
-			printf(VL " @y{%-19s} " VL " %12llu "
-			       VL " %8s " VL " %14llu "
-			       VL " %13llu " VL "\n",
-			       e->name,
-			       (unsigned long long)e->used, pctbuf,
+			printf(VL " @y{%-19s} " VL " %12llu " VL " %8s " VL
+				  " %14llu " VL " %13llu " VL "\n",
+			       e->name, (unsigned long long)e->used, pctbuf,
 			       (unsigned long long)remain,
 			       (unsigned long long)e->size);
 		} else {
-			printf(VL " @y{%-19s} " VL " %12llu "
-			       VL " %8s " VL " %14s "
-			       VL " %13s " VL "\n",
-			       e->name,
-			       (unsigned long long)e->used,
-			       "", "", "");
+			printf(VL " @y{%-19s} " VL " %12llu " VL " %8s " VL
+				  " %14s " VL " %13s " VL "\n",
+			       e->name, (unsigned long long)e->used, "", "",
+			       "");
 		}
 
 		/* Section rows (cyan, indented). */
 		for (int j = 0; j < e->nr_sections; j++) {
-			const char *name = abbrev_section(
-				e->sections[j].name);
+			const char *name = abbrev_section(e->sections[j].name);
 			uint64_t sz = e->sections[j].size;
 
 			if (show_total) {
 				fmt_pct(pctbuf, sizeof(pctbuf),
-					(double)sz * 100.0 /
-						(double)e->size);
-				printf(VL " @c{   %-16s} " VL " %12llu "
-				       VL " %8s " VL " %14s "
-				       VL " %13s " VL "\n",
-				       name,
-				       (unsigned long long)sz, pctbuf,
-				       "", "");
+					(double)sz * 100.0 / (double)e->size);
+				printf(VL " @c{   %-16s} " VL " %12llu " VL
+					  " %8s " VL " %14s " VL " %13s " VL
+					  "\n",
+				       name, (unsigned long long)sz, pctbuf, "",
+				       "");
 			} else {
-				printf(VL " @c{   %-16s} " VL " %12llu "
-				       VL " %8s " VL " %14s "
-				       VL " %13s " VL "\n",
-				       name,
-				       (unsigned long long)sz,
-				       "", "", "");
+				printf(
+				    VL " @c{   %-16s} " VL " %12llu " VL
+				       " %8s " VL " %14s " VL " %13s " VL "\n",
+				    name, (unsigned long long)sz, "", "", "");
 			}
 		}
 	}
@@ -570,15 +566,14 @@ int cmd_size(int argc, const char **argv)
 	const char *format = "table";
 
 	struct option opts[] = {
-		OPT_STRING('t', "target", &target, "chip",
-			   "target chip (e.g. esp32s3)"),
-		OPT_STRING(0, "format", &format, "fmt",
-			   "output format (table)"),
-		OPT_END(),
+	    OPT_STRING('t', "target", &target, "chip",
+		       "target chip (e.g. esp32s3)"),
+	    OPT_STRING(0, "format", &format, "fmt", "output format (table)"),
+	    OPT_END(),
 	};
 	const char *usage[] = {
-		"ice size [--format <fmt>] [--target <chip>] <map-file>",
-		NULL,
+	    "ice size [--format <fmt>] [--target <chip>] <map-file>",
+	    NULL,
 	};
 
 	argc = parse_options_manual(argc, argv, opts, usage, &manual);

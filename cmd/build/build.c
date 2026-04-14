@@ -10,6 +10,7 @@
  */
 #include "../../ice.h"
 
+/* clang-format off */
 static const struct cmd_manual manual = {
 	.description =
 	H_PARA("Compiles the project's @b{all} target through cmake.  "
@@ -51,11 +52,12 @@ static const struct cmd_manual manual = {
 	H_ITEM("ice cmake <target>",
 	       "Run an arbitrary cmake target with direct stdio."),
 };
+/* clang-format on */
 
 int cmd_build(int argc, const char **argv)
 {
-	const char *usage[] = { "ice build", NULL };
-	struct option opts[] = { OPT_END() };
+	const char *usage[] = {"ice build", NULL};
+	struct option opts[] = {OPT_END()};
 
 	parse_options_manual(argc, argv, opts, usage, &manual);
 	return run_cmake_target("all", "build", 0);

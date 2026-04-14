@@ -17,8 +17,8 @@
 
 int cmd_help(int argc, const char **argv)
 {
-	const char *usage[] = { "ice help [<command>]", NULL };
-	struct option opts[] = { OPT_END() };
+	const char *usage[] = {"ice help [<command>]", NULL};
+	struct option opts[] = {OPT_END()};
 	const struct cmd_struct *cmd;
 	const char *forward_argv[3];
 

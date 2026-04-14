@@ -14,20 +14,20 @@
 #include "ice.h"
 
 const struct cmd_struct ice_commands[] = {
-	{"build",       cmd_build,       "build the default target"},
-	{"clean",       cmd_clean,       "remove build artifacts"},
-	{"cmake",       cmd_cmake,       "run an arbitrary cmake target"},
-	{"config",      cmd_config,      "inspect and modify configuration entries"},
-	{"configdep",   cmd_configdep,   "sdkconfig-aware compiler wrapper"},
-	{"flash",       cmd_flash,       "flash firmware to the device"},
-	{"fullclean",   cmd_fullclean,   "wipe the build directory"},
-	{"help",        cmd_help,        "show help for a subcommand"},
-	{"ldgen",       cmd_ldgen,       "analyse linker fragment (.lf) files"},
-	{"menuconfig",  cmd_menuconfig,  "open the project configuration UI"},
-	{"reconfigure", cmd_reconfigure, "regenerate the build system"},
-	{"set-target",  cmd_set_target,  "switch the chip target"},
-	{"size",        cmd_size,        "analyse firmware memory usage by region"},
-	{NULL, NULL, NULL},
+    {"build", cmd_build, "build the default target"},
+    {"clean", cmd_clean, "remove build artifacts"},
+    {"cmake", cmd_cmake, "run an arbitrary cmake target"},
+    {"config", cmd_config, "inspect and modify configuration entries"},
+    {"configdep", cmd_configdep, "sdkconfig-aware compiler wrapper"},
+    {"flash", cmd_flash, "flash firmware to the device"},
+    {"fullclean", cmd_fullclean, "wipe the build directory"},
+    {"help", cmd_help, "show help for a subcommand"},
+    {"ldgen", cmd_ldgen, "analyse linker fragment (.lf) files"},
+    {"menuconfig", cmd_menuconfig, "open the project configuration UI"},
+    {"reconfigure", cmd_reconfigure, "regenerate the build system"},
+    {"set-target", cmd_set_target, "switch the chip target"},
+    {"size", cmd_size, "analyse firmware memory usage by region"},
+    {NULL, NULL, NULL},
 };
 
 const char *ice_cmd_summary(const char *name)
@@ -47,8 +47,9 @@ static const struct cmd_struct *find_command(const char *name)
 }
 
 const char *ice_global_usage[] = {
-	"ice [-B <path>] [-G <name>] [-D <key=val>] [-v] [-C <dir>] [--no-color] <command> [<args>]",
-	NULL,
+    "ice [-B <path>] [-G <name>] [-D <key=val>] [-v] [-C <dir>] [--no-color] "
+    "<command> [<args>]",
+    NULL,
 };
 
 /*
@@ -60,21 +61,19 @@ static int global_no_color;
 static int global_version;
 
 const struct option ice_global_opts[] = {
-	OPT_CONFIG('B', "build-dir", "core.build-dir", "path",
-		   "build directory (default: build)"),
-	OPT_CONFIG_LIST('D', "define", "cmake.define", "key=val",
-			"cmake cache entry (repeatable)"),
-	OPT_CONFIG('G', "generator", "core.generator", "name",
-		   "cmake generator (default: Ninja)"),
-	OPT_BOOL(0, "no-color", &global_no_color,
-		 "disable colored output"),
-	OPT_CONFIG_BOOL('v', "verbose", "core.verbose",
-			"show full command output"),
-	OPT_BOOL(0, "version", &global_version,
-		 "show version"),
-	OPT_END(),
+    OPT_CONFIG('B', "build-dir", "core.build-dir", "path",
+	       "build directory (default: build)"),
+    OPT_CONFIG_LIST('D', "define", "cmake.define", "key=val",
+		    "cmake cache entry (repeatable)"),
+    OPT_CONFIG('G', "generator", "core.generator", "name",
+	       "cmake generator (default: Ninja)"),
+    OPT_BOOL(0, "no-color", &global_no_color, "disable colored output"),
+    OPT_CONFIG_BOOL('v', "verbose", "core.verbose", "show full command output"),
+    OPT_BOOL(0, "version", &global_version, "show version"),
+    OPT_END(),
 };
 
+/* clang-format off */
 const struct cmd_manual ice_root_manual = {
 	.summary = "frontend for ESP-IDF projects",
 
@@ -103,6 +102,7 @@ const struct cmd_manual ice_root_manual = {
 	H_ITEM("ice config --help",
 	       "How configuration entries and scopes work."),
 };
+/* clang-format on */
 
 /*
  * Tiny hand-rolled scan for -C and -B before the full parse.  The
@@ -115,8 +115,7 @@ const struct cmd_manual ice_root_manual = {
  * -B stays so the full parse can record it at CLI scope.
  */
 static void pre_parse_location(int *argcp, const char **argv,
-			       const char **out_chdir,
-			       const char **out_build)
+			       const char **out_chdir, const char **out_build)
 {
 	int argc = *argcp;
 	int dst = 1;
@@ -280,9 +279,9 @@ int main(int argc, const char **argv)
 		die_errno("cannot change to '%s'", chdir_to);
 
 	config_load_file(&config, CONFIG_SCOPE_LOCAL, local_config_path());
-	config_load_project(&config,
-			    build_override ? build_override
-					   : config_get("core.build-dir"));
+	config_load_project(&config, build_override
+					 ? build_override
+					 : config_get("core.build-dir"));
 	config_load_env(&config);
 
 	argc = parse_options_manual(argc, argv, ice_global_opts,
@@ -309,16 +308,18 @@ int main(int argc, const char **argv)
 		if (!try_expand_alias(&argc, &argv))
 			break;
 		if (argc < 1) {
-			print_manual(argv[0], &ice_root_manual,
-				     ice_global_opts, ice_global_usage);
+			print_manual(argv[0], &ice_root_manual, ice_global_opts,
+				     ice_global_usage);
 			return EXIT_FAILURE;
 		}
 	}
 
 	cmd = find_command(argv[0]);
 	if (!cmd) {
-		fprintf(stderr, "ice: '%s' is not a command. "
-				"See 'ice --help'.\n", argv[0]);
+		fprintf(stderr,
+			"ice: '%s' is not a command. "
+			"See 'ice --help'.\n",
+			argv[0]);
 		return EXIT_FAILURE;
 	}
 

@@ -51,33 +51,33 @@ static const struct {
 	const char *name;
 	const char *code;
 } color_names[] = {
-	{"COLOR_RESET",        "\033[0m"},
-	{"COLOR_BOLD",         "\033[1m"},
-	{"COLOR_UNDERLINE",    "\033[4m"},
-	{"COLOR_REVERSE",      "\033[7m"},
-	{"COLOR_BLACK",        "\033[30m"},
-	{"COLOR_RED",          "\033[31m"},
-	{"COLOR_GREEN",        "\033[32m"},
-	{"COLOR_YELLOW",       "\033[33m"},
-	{"COLOR_BLUE",         "\033[34m"},
-	{"COLOR_MAGENTA",      "\033[35m"},
-	{"COLOR_CYAN",         "\033[36m"},
-	{"COLOR_WHITE",        "\033[37m"},
-	{"COLOR_BOLD_RED",     "\033[1;31m"},
-	{"COLOR_BOLD_GREEN",   "\033[1;32m"},
-	{"COLOR_BOLD_YELLOW",  "\033[1;33m"},
-	{"COLOR_BOLD_BLUE",    "\033[1;34m"},
-	{"COLOR_BOLD_MAGENTA", "\033[1;35m"},
-	{"COLOR_BOLD_CYAN",    "\033[1;36m"},
-	{"COLOR_BOLD_WHITE",   "\033[1;37m"},
-	{"COLOR_BG_RED",       "\033[41m"},
-	{"COLOR_BG_GREEN",     "\033[42m"},
-	{"COLOR_BG_YELLOW",    "\033[43m"},
-	{"COLOR_BG_BLUE",      "\033[44m"},
-	{"COLOR_BG_MAGENTA",   "\033[45m"},
-	{"COLOR_BG_CYAN",      "\033[46m"},
-	{"COLOR_BG_WHITE",     "\033[47m"},
-	{ NULL },
+    {"COLOR_RESET", "\033[0m"},
+    {"COLOR_BOLD", "\033[1m"},
+    {"COLOR_UNDERLINE", "\033[4m"},
+    {"COLOR_REVERSE", "\033[7m"},
+    {"COLOR_BLACK", "\033[30m"},
+    {"COLOR_RED", "\033[31m"},
+    {"COLOR_GREEN", "\033[32m"},
+    {"COLOR_YELLOW", "\033[33m"},
+    {"COLOR_BLUE", "\033[34m"},
+    {"COLOR_MAGENTA", "\033[35m"},
+    {"COLOR_CYAN", "\033[36m"},
+    {"COLOR_WHITE", "\033[37m"},
+    {"COLOR_BOLD_RED", "\033[1;31m"},
+    {"COLOR_BOLD_GREEN", "\033[1;32m"},
+    {"COLOR_BOLD_YELLOW", "\033[1;33m"},
+    {"COLOR_BOLD_BLUE", "\033[1;34m"},
+    {"COLOR_BOLD_MAGENTA", "\033[1;35m"},
+    {"COLOR_BOLD_CYAN", "\033[1;36m"},
+    {"COLOR_BOLD_WHITE", "\033[1;37m"},
+    {"COLOR_BG_RED", "\033[41m"},
+    {"COLOR_BG_GREEN", "\033[42m"},
+    {"COLOR_BG_YELLOW", "\033[43m"},
+    {"COLOR_BG_BLUE", "\033[44m"},
+    {"COLOR_BG_MAGENTA", "\033[45m"},
+    {"COLOR_BG_CYAN", "\033[46m"},
+    {"COLOR_BG_WHITE", "\033[47m"},
+    {NULL},
 };
 
 static const char *find_color_name(const char *name, size_t len)
@@ -115,8 +115,7 @@ void color_text(struct sbuf *out, const char *text, size_t len,
 			continue;
 
 		/* Quoted strings: 'x', `x`, "x" → bold (skip \" etc.) */
-		if ((*p == '\'' || *p == '`' || *p == '"') &&
-		    p + 1 < end) {
+		if ((*p == '\'' || *p == '`' || *p == '"') && p + 1 < end) {
 			char q = *p;
 			const char *s = p + 1;
 			const char *close = NULL;
@@ -160,8 +159,8 @@ void color_text(struct sbuf *out, const char *text, size_t len,
 			    (*(p + 1) == 'x' || *(p + 1) == 'X')) {
 				p += 2;
 				while (p < end && ((*p >= '0' && *p <= '9') ||
-				       (*p >= 'a' && *p <= 'f') ||
-				       (*p >= 'A' && *p <= 'F')))
+						   (*p >= 'a' && *p <= 'f') ||
+						   (*p >= 'A' && *p <= 'F')))
 					p++;
 			} else {
 				while (p < end && *p >= '0' && *p <= '9')
@@ -225,7 +224,7 @@ void expand_colors(struct sbuf *out, const char *fmt, int colorize)
 					const char *s = fmt + 2;
 					size_t len = (size_t)(end - s);
 					const char *code =
-						find_color_name(s, len);
+					    find_color_name(s, len);
 					if (code) {
 						sbuf_addstr(out, code);
 					} else {
@@ -245,14 +244,30 @@ void expand_colors(struct sbuf *out, const char *fmt, int colorize)
 			const char *code = NULL;
 
 			switch (fmt[1]) {
-			case 'r': code = "\033[31m"; break;
-			case 'g': code = "\033[32m"; break;
-			case 'y': code = "\033[33m"; break;
-			case 'b': code = "\033[1m"; break;
-			case 'c': code = "\033[36m"; break;
-			case 'R': code = "\033[1;31m"; break;
-			case 'G': code = "\033[1;32m"; break;
-			case 'Y': code = "\033[1;33m"; break;
+			case 'r':
+				code = "\033[31m";
+				break;
+			case 'g':
+				code = "\033[32m";
+				break;
+			case 'y':
+				code = "\033[33m";
+				break;
+			case 'b':
+				code = "\033[1m";
+				break;
+			case 'c':
+				code = "\033[36m";
+				break;
+			case 'R':
+				code = "\033[1;31m";
+				break;
+			case 'G':
+				code = "\033[1;32m";
+				break;
+			case 'Y':
+				code = "\033[1;33m";
+				break;
 			}
 
 			if (code) {

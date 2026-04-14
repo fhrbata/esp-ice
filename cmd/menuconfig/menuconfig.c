@@ -6,10 +6,12 @@
 
 /**
  * @file cmd/menuconfig/menuconfig.c
- * @brief The "ice menuconfig" subcommand -- invoke the cmake "menuconfig" target.
+ * @brief The "ice menuconfig" subcommand -- invoke the cmake "menuconfig"
+ * target.
  */
 #include "../../ice.h"
 
+/* clang-format off */
 static const struct cmd_manual manual = {
 	.description =
 	H_PARA("Launches the ncurses @b{kconfig/menuconfig} UI -- the "
@@ -34,11 +36,12 @@ static const struct cmd_manual manual = {
 	       "Re-run cmake if menuconfig's results need to propagate "
 	       "to cache-time decisions."),
 };
+/* clang-format on */
 
 int cmd_menuconfig(int argc, const char **argv)
 {
-	const char *usage[] = { "ice menuconfig", NULL };
-	struct option opts[] = { OPT_END() };
+	const char *usage[] = {"ice menuconfig", NULL};
+	struct option opts[] = {OPT_END()};
 
 	parse_options_manual(argc, argv, opts, usage, &manual);
 	return run_cmake_target("menuconfig", "menuconfig", 1);

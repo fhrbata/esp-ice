@@ -10,6 +10,7 @@
  */
 #include "../../ice.h"
 
+/* clang-format off */
 static const struct cmd_manual manual = {
 	.description =
 	H_PARA("Invokes cmake's @b{flash} target to program the "
@@ -47,11 +48,12 @@ static const struct cmd_manual manual = {
 	H_ITEM("ice cmake erase-flash",
 	       "Wipe flash before reprogramming."),
 };
+/* clang-format on */
 
 int cmd_flash(int argc, const char **argv)
 {
-	const char *usage[] = { "ice flash", NULL };
-	struct option opts[] = { OPT_END() };
+	const char *usage[] = {"ice flash", NULL};
+	struct option opts[] = {OPT_END()};
 
 	parse_options_manual(argc, argv, opts, usage, &manual);
 	return run_cmake_target("flash", "flash", 0);

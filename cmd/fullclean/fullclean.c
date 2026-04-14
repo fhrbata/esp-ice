@@ -12,6 +12,7 @@
 
 #include "../../ice.h"
 
+/* clang-format off */
 static const struct cmd_manual manual = {
 	.description =
 	H_PARA("Deletes every file and subdirectory inside the configured "
@@ -46,6 +47,7 @@ static const struct cmd_manual manual = {
 	H_ITEM("ice set-target",
 	       "Switch the chip target; invokes fullclean internally."),
 };
+/* clang-format on */
 
 /*
  * Recursively delete the contents of @p path (a directory).  The
@@ -143,8 +145,8 @@ int fullclean_run(void)
 		    !strcmp(de->d_name, ".git") ||
 		    !strcmp(de->d_name, ".svn")) {
 			closedir(dir);
-			die("refusing to clean '%s': contains '%s'",
-			    build_dir, de->d_name);
+			die("refusing to clean '%s': contains '%s'", build_dir,
+			    de->d_name);
 		}
 	}
 	closedir(dir);
@@ -156,7 +158,8 @@ int fullclean_run(void)
 	}
 	if (!has_cache)
 		die("'%s' does not look like a cmake build directory "
-		    "(no CMakeCache.txt); delete it manually", build_dir);
+		    "(no CMakeCache.txt); delete it manually",
+		    build_dir);
 
 	config_get_bool("core.verbose", &verbose);
 	return rmtree(build_dir, verbose) < 0 ? -1 : 0;
@@ -164,8 +167,8 @@ int fullclean_run(void)
 
 int cmd_fullclean(int argc, const char **argv)
 {
-	const char *usage[] = { "ice fullclean", NULL };
-	struct option opts[] = { OPT_END() };
+	const char *usage[] = {"ice fullclean", NULL};
+	struct option opts[] = {OPT_END()};
 
 	parse_options_manual(argc, argv, opts, usage, &manual);
 	return fullclean_run();

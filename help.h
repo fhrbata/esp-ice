@@ -46,8 +46,8 @@ struct cmd_manual {
 	 */
 	const char *summary;
 	const char *description; /**< Prose built with H_PARA/H_LINE. */
-	const char *examples;    /**< Optional; built with H_EXAMPLE. */
-	const char *extras;      /**< Optional; extra sections with H_SECTION. */
+	const char *examples;	 /**< Optional; built with H_EXAMPLE. */
+	const char *extras; /**< Optional; extra sections with H_SECTION. */
 
 	/**
 	 * When non-zero, print_manual() auto-emits a COMMANDS section
@@ -79,25 +79,25 @@ struct cmd_manual {
 #define H_R_END "\x03"
 
 /** Paragraph: 4-space indent, reflowable, trailing blank line. */
-#define H_PARA(t)     H_R_BEG "\x04" t H_R_END "\n\n"
+#define H_PARA(t) H_R_BEG "\x04" t H_R_END "\n\n"
 
 /** Single indented line, verbatim (no reflow). */
-#define H_LINE(t)     "    " t "\n"
+#define H_LINE(t) "    " t "\n"
 
 /** Raw line -- no indent, verbatim. */
-#define H_RAW(t)      t "\n"
+#define H_RAW(t) t "\n"
 
 /** Shell example: indented, colored prompt + bold command, verbatim. */
-#define H_EXAMPLE(c)  "    @y{$} @b{" c "}\n"
+#define H_EXAMPLE(c) "    @y{$} @b{" c "}\n"
 
 /**
  * Definition-list entry: bold key at indent 4, description reflowed
  * at indent 8 (man-style two-line form).
  */
-#define H_ITEM(k, v)  "    @b{" k "}\n" H_R_BEG "\x08" v H_R_END "\n\n"
+#define H_ITEM(k, v) "    @b{" k "}\n" H_R_BEG "\x08" v H_R_END "\n\n"
 
 /** Section heading for use inside .extras (NAME/SYNOPSIS/OPTIONS are auto). */
-#define H_SECTION(n)  "@b{" n "}\n"
+#define H_SECTION(n) "@b{" n "}\n"
 
 /**
  * @brief Render a full manual page to stdout.
@@ -112,9 +112,7 @@ struct cmd_manual {
  *                  "ice-<name>" for NAME and to look up the summary
  *                  from ice_commands[] when @p m->summary is NULL.
  */
-void print_manual(const char *cmd_name,
-		  const struct cmd_manual *m,
-		  const struct option *opts,
-		  const char **usage);
+void print_manual(const char *cmd_name, const struct cmd_manual *m,
+		  const struct option *opts, const char **usage);
 
 #endif /* HELP_H */

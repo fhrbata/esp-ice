@@ -10,6 +10,7 @@
  */
 #include "../../ice.h"
 
+/* clang-format off */
 static const struct cmd_manual manual = {
 	.description =
 	H_PARA("Invokes cmake's @b{clean} target to remove intermediate "
@@ -28,11 +29,12 @@ static const struct cmd_manual manual = {
 	       "Force cmake to re-run configuration from scratch "
 	       "(full reset when combined with a fresh @b{core.build-dir})."),
 };
+/* clang-format on */
 
 int cmd_clean(int argc, const char **argv)
 {
-	const char *usage[] = { "ice clean", NULL };
-	struct option opts[] = { OPT_END() };
+	const char *usage[] = {"ice clean", NULL};
+	struct option opts[] = {OPT_END()};
 
 	parse_options_manual(argc, argv, opts, usage, &manual);
 	return run_cmake_target("clean", "clean", 0);

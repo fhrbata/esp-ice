@@ -18,8 +18,8 @@
  *
  * Output format:  error: file:line: in func: <message>[: strerror]\n
  */
-void err_msg(char *file, int line, const char *func, int add_errno,
-	     char *fmt, ...)
+void err_msg(char *file, int line, const char *func, int add_errno, char *fmt,
+	     ...)
 {
 	struct sbuf msg = SBUF_INIT;
 	va_list ap;

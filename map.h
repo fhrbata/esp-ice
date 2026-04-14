@@ -91,7 +91,7 @@ struct map_section {
  * Populated by map_read(); freed by map_release().
  */
 struct map_file {
-	const char *target;	      /**< Chip target (e.g. "esp32s3"), or NULL. */
+	const char *target; /**< Chip target (e.g. "esp32s3"), or NULL. */
 	struct map_region *regions;   /**< Array of memory regions. */
 	int nr_regions;		      /**< Number of memory regions. */
 	struct map_section *sections; /**< Array of output sections. */

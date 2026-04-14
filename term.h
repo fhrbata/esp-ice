@@ -94,11 +94,11 @@ int use_color_for(FILE *stream);
  */
 struct color_rule {
 	const char *keyword;
-	int         len;
-	const char *color;	/* named color, e.g. "COLOR_BOLD_RED" */
+	int len;
+	const char *color; /* named color, e.g. "COLOR_BOLD_RED" */
 };
 
-#define COLOR_RULE(kw, color) { (kw), sizeof(kw) - 1, (color) }
+#define COLOR_RULE(kw, color) {(kw), sizeof(kw) - 1, (color)}
 
 /**
  * @brief Colorize plain text using @x{...} tokens.

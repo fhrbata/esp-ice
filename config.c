@@ -180,13 +180,13 @@ int config_get_bool(const char *key, int *out)
 	if (!s)
 		return -1;
 
-	if (streq_ci(s, "true") || streq_ci(s, "yes") ||
-	    streq_ci(s, "on") || !strcmp(s, "1")) {
+	if (streq_ci(s, "true") || streq_ci(s, "yes") || streq_ci(s, "on") ||
+	    !strcmp(s, "1")) {
 		*out = 1;
 		return 0;
 	}
-	if (streq_ci(s, "false") || streq_ci(s, "no") ||
-	    streq_ci(s, "off") || !strcmp(s, "0") || !*s) {
+	if (streq_ci(s, "false") || streq_ci(s, "no") || streq_ci(s, "off") ||
+	    !strcmp(s, "0") || !*s) {
 		*out = 0;
 		return 0;
 	}
@@ -196,12 +196,18 @@ int config_get_bool(const char *key, int *out)
 const char *scope_name(enum config_scope scope)
 {
 	switch (scope) {
-	case CONFIG_SCOPE_DEFAULT:	return "default";
-	case CONFIG_SCOPE_USER:		return "user";
-	case CONFIG_SCOPE_LOCAL:	return "local";
-	case CONFIG_SCOPE_PROJECT:	return "project";
-	case CONFIG_SCOPE_ENV:		return "env";
-	case CONFIG_SCOPE_CLI:		return "cli";
+	case CONFIG_SCOPE_DEFAULT:
+		return "default";
+	case CONFIG_SCOPE_USER:
+		return "user";
+	case CONFIG_SCOPE_LOCAL:
+		return "local";
+	case CONFIG_SCOPE_PROJECT:
+		return "project";
+	case CONFIG_SCOPE_ENV:
+		return "env";
+	case CONFIG_SCOPE_CLI:
+		return "cli";
 	}
 	return "unknown";
 }
@@ -232,10 +238,7 @@ const char *user_config_path(void)
 	return path.buf;
 }
 
-const char *local_config_path(void)
-{
-	return "./.iceconfig";
-}
+const char *local_config_path(void) { return "./.iceconfig"; }
 
 /* ------------------------------------------------------------------ */
 /*  INI parser                                                        */
@@ -249,7 +252,7 @@ static int valid_name_char(int ch)
 static void parse_section(const char *path, int lineno, char *line,
 			  struct sbuf *section)
 {
-	char *start = line + 1;	/* past '[' */
+	char *start = line + 1; /* past '[' */
 	char *end, *after, *p;
 
 	end = strchr(start, ']');
@@ -278,8 +281,8 @@ static void parse_section(const char *path, int lineno, char *line,
 
 	for (p = start; p < end; p++) {
 		if (!valid_name_char((unsigned char)*p)) {
-			warn("%s:%d: invalid character in section name",
-			     path, lineno);
+			warn("%s:%d: invalid character in section name", path,
+			     lineno);
 			return;
 		}
 	}
@@ -334,8 +337,7 @@ static void parse_kv(struct config *c, enum config_scope scope,
 		value++;
 		vend = strchr(value, '"');
 		if (!vend) {
-			warn("%s:%d: unterminated quoted value",
-			     path, lineno);
+			warn("%s:%d: unterminated quoted value", path, lineno);
 			return;
 		}
 		sbuf_add(&val, value, vend - value);
@@ -344,14 +346,13 @@ static void parse_kv(struct config *c, enum config_scope scope,
 		while (*after == ' ' || *after == '\t')
 			after++;
 		if (*after && *after != '#' && *after != ';') {
-			warn("%s:%d: garbage after quoted value",
-			     path, lineno);
+			warn("%s:%d: garbage after quoted value", path, lineno);
 			sbuf_release(&val);
 			return;
 		}
 	} else {
 		char *cur = value;
-		char *last = value;	/* one past last non-ws, non-comment */
+		char *last = value; /* one past last non-ws, non-comment */
 
 		while (*cur && *cur != '#' && *cur != ';') {
 			if (*cur != ' ' && *cur != '\t')
@@ -428,7 +429,7 @@ void config_load_defaults(struct config *c)
 {
 	config_set(c, "core.build-dir", "build", CONFIG_SCOPE_DEFAULT);
 	config_set(c, "core.generator", "Ninja", CONFIG_SCOPE_DEFAULT);
-	config_set(c, "core.verbose",   "false", CONFIG_SCOPE_DEFAULT);
+	config_set(c, "core.verbose", "false", CONFIG_SCOPE_DEFAULT);
 }
 
 static int value_needs_quoting(const char *v)
@@ -462,7 +463,8 @@ static void write_value(const char *v, struct sbuf *out)
 	for (const char *p = v; *p; p++) {
 		if (*p == '"' || *p == '\\' || *p == '\n' || *p == '\r')
 			die("cannot serialise value containing '%c' "
-			    "(escape support not implemented)", *p);
+			    "(escape support not implemented)",
+			    *p);
 	}
 
 	sbuf_addch(out, '"');
@@ -489,7 +491,7 @@ int config_write_file(const struct config *c, enum config_scope scope,
 
 		dot = strchr(c->entries[i].key, '.');
 		if (!dot)
-			continue;	/* section-less keys are not written */
+			continue; /* section-less keys are not written */
 
 		sec = sbuf_strndup(c->entries[i].key,
 				   (size_t)(dot - c->entries[i].key));
@@ -554,9 +556,9 @@ void config_load_env(struct config *c)
 		const char *env;
 		const char *key;
 	} map[] = {
-		{ "ESPPORT",    "serial.port" },
-		{ "ESPBAUD",    "serial.baud" },
-		{ "IDF_TARGET", "target"      },
+	    {"ESPPORT", "serial.port"},
+	    {"ESPBAUD", "serial.baud"},
+	    {"IDF_TARGET", "target"},
 	};
 
 	for (size_t i = 0; i < sizeof(map) / sizeof(map[0]); i++) {
@@ -583,8 +585,7 @@ void config_load_project(struct config *c, const char *build_dir)
 		const char *target = cmakecache_get(&cache, "IDF_TARGET");
 
 		if (target)
-			config_set(c, "target", target,
-				   CONFIG_SCOPE_PROJECT);
+			config_set(c, "target", target, CONFIG_SCOPE_PROJECT);
 	}
 
 	sbuf_reset(&path);
@@ -593,8 +594,8 @@ void config_load_project(struct config *c, const char *build_dir)
 		desc = json_parse(buf.buf, buf.len);
 
 	if (desc) {
-		const char *name = json_as_string(json_get(desc,
-							   "project_name"));
+		const char *name =
+		    json_as_string(json_get(desc, "project_name"));
 		if (name) {
 			sbuf_addf(&derived, "%s/%s.map", build_dir, name);
 			config_set(c, "mapfile", derived.buf,
@@ -602,8 +603,7 @@ void config_load_project(struct config *c, const char *build_dir)
 
 			sbuf_reset(&derived);
 			sbuf_addf(&derived, "%s/%s.elf", build_dir, name);
-			config_set(c, "elf", derived.buf,
-				   CONFIG_SCOPE_PROJECT);
+			config_set(c, "elf", derived.buf, CONFIG_SCOPE_PROJECT);
 		}
 	}
 

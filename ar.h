@@ -39,9 +39,9 @@
  * the caller must keep the buffer alive while using @p data.
  */
 struct ar_member {
-	char *name;		/**< Member name (heap-allocated, caller frees). */
-	const void *data;	/**< Member data (points into archive buffer). */
-	size_t size;		/**< Member data size in bytes. */
+	char *name;	  /**< Member name (heap-allocated, caller frees). */
+	const void *data; /**< Member data (points into archive buffer). */
+	size_t size;	  /**< Member data size in bytes. */
 };
 
 /**
@@ -54,7 +54,7 @@ struct ar_reader {
 	const unsigned char *buf;
 	size_t len;
 	size_t pos;
-	const char *strtab;	/**< GNU long-name string table (or NULL). */
+	const char *strtab; /**< GNU long-name string table (or NULL). */
 	size_t strtab_len;
 };
 

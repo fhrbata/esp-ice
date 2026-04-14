@@ -34,12 +34,12 @@
  *
  * Dies on OOM.  @p x is updated in place.
  */
-#define REALLOC_ARRAY(x, alloc)                                        \
-	do {                                                           \
-		void *_p = realloc((x), (alloc) * sizeof(*(x)));       \
-		if (!_p)                                               \
-			die_errno("realloc");                          \
-		(x) = _p;                                              \
+#define REALLOC_ARRAY(x, alloc)                                                \
+	do {                                                                   \
+		void *_p = realloc((x), (alloc) * sizeof(*(x)));               \
+		if (!_p)                                                       \
+			die_errno("realloc");                                  \
+		(x) = _p;                                                      \
 	} while (0)
 
 /**
@@ -50,15 +50,15 @@
  * Dies on OOM.  The caller is responsible for updating the element
  * count after filling in new entries.
  */
-#define ALLOC_GROW(x, nr, alloc)                                       \
-	do {                                                           \
-		if ((nr) > (alloc)) {                                  \
-			if (alloc_nr(alloc) < (nr))                    \
-				(alloc) = (nr);                        \
-			else                                           \
-				(alloc) = alloc_nr(alloc);             \
-			REALLOC_ARRAY(x, alloc);                       \
-		}                                                      \
+#define ALLOC_GROW(x, nr, alloc)                                               \
+	do {                                                                   \
+		if ((nr) > (alloc)) {                                          \
+			if (alloc_nr(alloc) < (nr))                            \
+				(alloc) = (nr);                                \
+			else                                                   \
+				(alloc) = alloc_nr(alloc);                     \
+			REALLOC_ARRAY(x, alloc);                               \
+		}                                                              \
 	} while (0)
 
 #endif /* ALLOC_H */

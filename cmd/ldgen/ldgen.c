@@ -11,6 +11,7 @@
 #include "../../ice.h"
 #include "lf.h"
 
+/* clang-format off */
 static const struct cmd_manual manual = {
 	.description =
 	H_PARA("Parses ESP-IDF linker fragment (@b{.lf}) files and "
@@ -35,18 +36,19 @@ static const struct cmd_manual manual = {
 	       "Runs the full build pipeline including ESP-IDF's own "
 	       "linker-fragment merger."),
 };
+/* clang-format on */
 
 int cmd_ldgen(int argc, const char **argv)
 {
 	int dump = 0;
 
 	struct option opts[] = {
-		OPT_BOOL('d', "dump", &dump, "dump parsed AST"),
-		OPT_END(),
+	    OPT_BOOL('d', "dump", &dump, "dump parsed AST"),
+	    OPT_END(),
 	};
 	const char *usage[] = {
-		"ice ldgen [--dump] <file.lf> [...]",
-		NULL,
+	    "ice ldgen [--dump] <file.lf> [...]",
+	    NULL,
 	};
 
 	argc = parse_options_manual(argc, argv, opts, usage, &manual);
@@ -67,14 +69,21 @@ int cmd_ldgen(int argc, const char **argv)
 		int ns = 0, nc = 0, nm = 0;
 		for (int j = 0; j < f->n_frags; j++) {
 			switch (f->frags[j].kind) {
-			case LF_SECTIONS:  ns++; break;
-			case LF_SCHEME:    nc++; break;
-			case LF_MAPPING:   nm++; break;
-			case LF_FRAG_COND: break;
+			case LF_SECTIONS:
+				ns++;
+				break;
+			case LF_SCHEME:
+				nc++;
+				break;
+			case LF_MAPPING:
+				nm++;
+				break;
+			case LF_FRAG_COND:
+				break;
 			}
 		}
-		printf("%s: %d sections, %d schemes, %d mappings\n",
-		       argv[i], ns, nc, nm);
+		printf("%s: %d sections, %d schemes, %d mappings\n", argv[i],
+		       ns, nc, nm);
 
 		lf_file_free(f);
 		sbuf_release(&sb);

@@ -20,6 +20,7 @@
  */
 #include "../../ice.h"
 
+/* clang-format off */
 static const struct cmd_manual manual = {
 	.description =
 	H_PARA("Compiler wrapper that rewrites GCC-style dependency "
@@ -51,19 +52,20 @@ static const struct cmd_manual manual = {
 	       "Edit @b{sdkconfig} interactively; subsequent builds "
 	       "pick up only the actually-affected sources."),
 };
+/* clang-format on */
 
 /* ------------------------------------------------------------------ */
 /*  Parsed dependency file                                            */
 /* ------------------------------------------------------------------ */
 
 struct depfile {
-	char *fn;		/**< Dep file path (borrowed from argv). */
-	char *target;		/**< Make target (heap). */
+	char *fn;     /**< Dep file path (borrowed from argv). */
+	char *target; /**< Make target (heap). */
 	size_t target_len;
-	char *sdkconfig_dir;	/**< Dir prefix of sdkconfig.h, or NULL. */
+	char *sdkconfig_dir; /**< Dir prefix of sdkconfig.h, or NULL. */
 	size_t sdkconfig_dir_len;
-	int sdkconfig;		/**< Non-zero if sdkconfig.h was found. */
-	char **deps;		/**< Dependency paths (heap strings). */
+	int sdkconfig; /**< Non-zero if sdkconfig.h was found. */
+	char **deps;   /**< Dependency paths (heap strings). */
 	int n_deps, alloc_deps;
 };
 
@@ -173,7 +175,7 @@ static int parse_depfile(struct depfile *d)
 /* ------------------------------------------------------------------ */
 
 struct sdk_opts {
-	char **opts;		/**< Unique option names (without CONFIG_). */
+	char **opts; /**< Unique option names (without CONFIG_). */
 	int n_opts, alloc_opts;
 };
 
@@ -310,8 +312,7 @@ static int fix_depfile(struct depfile *d, struct sdk_opts *cfg)
 	for (int i = 0; i < cfg->n_opts; i++) {
 		sbuf_reset(&path);
 		if (d->sdkconfig_dir) {
-			sbuf_add(&path, d->sdkconfig_dir,
-				 d->sdkconfig_dir_len);
+			sbuf_add(&path, d->sdkconfig_dir, d->sdkconfig_dir_len);
 			sbuf_addch(&path, '/');
 		}
 
@@ -378,11 +379,11 @@ int cmd_configdep(int argc, const char **argv)
 	 * like -c, -MF etc. are not ours.  Intercept --help/-h manually
 	 * at the head of the argv before forwarding takes over.
 	 */
-	if (argc >= 2 && (!strcmp(argv[1], "--help") ||
-			  !strcmp(argv[1], "-h"))) {
+	if (argc >= 2 &&
+	    (!strcmp(argv[1], "--help") || !strcmp(argv[1], "-h"))) {
 		const char *usage[] = {
-			"ice configdep <compiler> [<arg>...]",
-			NULL,
+		    "ice configdep <compiler> [<arg>...]",
+		    NULL,
 		};
 		print_manual("configdep", &manual, NULL, usage);
 		return EXIT_SUCCESS;

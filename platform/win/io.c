@@ -38,26 +38,35 @@ static WORD ansi_to_attr(WORD attr, int code, WORD defattr)
 {
 	/* Foreground color table: index 0-7 maps SGR 30-37 and 90-97. */
 	static const WORD fg[] = {
-		0,                                          /* 0: black */
-		FOREGROUND_RED,                             /* 1: red */
-		FOREGROUND_GREEN,                           /* 2: green */
-		FOREGROUND_RED | FOREGROUND_GREEN,           /* 3: yellow */
-		FOREGROUND_BLUE,                            /* 4: blue */
-		FOREGROUND_RED | FOREGROUND_BLUE,            /* 5: magenta */
-		FOREGROUND_GREEN | FOREGROUND_BLUE,          /* 6: cyan */
-		FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE, /* 7: white */
+	    0,					/* 0: black */
+	    FOREGROUND_RED,			/* 1: red */
+	    FOREGROUND_GREEN,			/* 2: green */
+	    FOREGROUND_RED | FOREGROUND_GREEN,	/* 3: yellow */
+	    FOREGROUND_BLUE,			/* 4: blue */
+	    FOREGROUND_RED | FOREGROUND_BLUE,	/* 5: magenta */
+	    FOREGROUND_GREEN | FOREGROUND_BLUE, /* 6: cyan */
+	    FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE, /* 7: white */
 	};
 
 	switch (code) {
-	case 0:  return defattr;                            /* reset */
-	case 1:  return attr | FOREGROUND_INTENSITY;        /* bold */
-	case 4:  return attr | COMMON_LVB_UNDERSCORE;       /* underline */
-	case 7:  return attr | COMMON_LVB_REVERSE_VIDEO;    /* reverse */
-	case 22: return attr & ~FOREGROUND_INTENSITY;        /* normal */
-	case 24: return attr & ~(WORD)COMMON_LVB_UNDERSCORE; /* no underline */
-	case 27: return attr & ~(WORD)COMMON_LVB_REVERSE_VIDEO; /* no reverse */
-	case 39: return (attr & ~0x0F) | (defattr & 0x0F);  /* default fg */
-	case 49: return (attr & ~0xF0) | (defattr & 0xF0);  /* default bg */
+	case 0:
+		return defattr; /* reset */
+	case 1:
+		return attr | FOREGROUND_INTENSITY; /* bold */
+	case 4:
+		return attr | COMMON_LVB_UNDERSCORE; /* underline */
+	case 7:
+		return attr | COMMON_LVB_REVERSE_VIDEO; /* reverse */
+	case 22:
+		return attr & ~FOREGROUND_INTENSITY; /* normal */
+	case 24:
+		return attr & ~(WORD)COMMON_LVB_UNDERSCORE; /* no underline */
+	case 27:
+		return attr & ~(WORD)COMMON_LVB_REVERSE_VIDEO; /* no reverse */
+	case 39:
+		return (attr & ~0x0F) | (defattr & 0x0F); /* default fg */
+	case 49:
+		return (attr & ~0xF0) | (defattr & 0xF0); /* default bg */
 	}
 
 	/* Foreground: 30-37 */
@@ -140,11 +149,10 @@ static int console_write_legacy(HANDLE h, const char *buf)
 		if (p[0] == '\033' && p[1] == '[') {
 			/* Flush text before the escape sequence. */
 			if (p > text_start) {
-				wchar_t *ws = mbs_to_wcs_n(text_start,
-							   p - text_start);
+				wchar_t *ws =
+				    mbs_to_wcs_n(text_start, p - text_start);
 				if (ws) {
-					WriteConsoleW(h, ws,
-						      (DWORD)wcslen(ws),
+					WriteConsoleW(h, ws, (DWORD)wcslen(ws),
 						      NULL, NULL);
 					total += (int)(p - text_start);
 					free(ws);
@@ -160,8 +168,8 @@ static int console_write_legacy(HANDLE h, const char *buf)
 				if (code == 38 || code == 48)
 					p = skip_extended_color(p);
 				else
-					attr = ansi_to_attr(attr, code,
-							    defattr);
+					attr =
+					    ansi_to_attr(attr, code, defattr);
 				if (*p == ';')
 					p++;
 			}

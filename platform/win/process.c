@@ -37,7 +37,7 @@ static wchar_t *build_cmdline(const char **argv)
 	size_t len = 0;
 	for (int i = 0; argv[i]; i++) {
 		if (i > 0)
-			len++; /* space separator */
+			len++;		    /* space separator */
 		len += strlen(argv[i]) + 2; /* worst case: quotes */
 	}
 	len++; /* NUL */
@@ -151,21 +151,21 @@ int process_start(struct process *proc)
 	    proc->merge_err) {
 		si.dwFlags |= STARTF_USESTDHANDLES;
 		si.hStdInput = proc->pipe_in
-			? (HANDLE)_get_osfhandle(pipe_in[0])
-			: GetStdHandle(STD_INPUT_HANDLE);
+				   ? (HANDLE)_get_osfhandle(pipe_in[0])
+				   : GetStdHandle(STD_INPUT_HANDLE);
 		si.hStdOutput = proc->pipe_out
-			? (HANDLE)_get_osfhandle(pipe_out[1])
-			: GetStdHandle(STD_OUTPUT_HANDLE);
-		si.hStdError = proc->pipe_err
-			? (HANDLE)_get_osfhandle(pipe_err[1])
-			: proc->merge_err ? si.hStdOutput
-			: GetStdHandle(STD_ERROR_HANDLE);
+				    ? (HANDLE)_get_osfhandle(pipe_out[1])
+				    : GetStdHandle(STD_OUTPUT_HANDLE);
+		si.hStdError =
+		    proc->pipe_err    ? (HANDLE)_get_osfhandle(pipe_err[1])
+		    : proc->merge_err ? si.hStdOutput
+				      : GetStdHandle(STD_ERROR_HANDLE);
 	}
 
 	ZeroMemory(&pi, sizeof(pi));
 
-	if (!CreateProcessW(NULL, wcmdl, NULL, NULL, TRUE, 0, NULL, wdir,
-			    &si, &pi)) {
+	if (!CreateProcessW(NULL, wcmdl, NULL, NULL, TRUE, 0, NULL, wdir, &si,
+			    &pi)) {
 		err("CreateProcess failed (%lu)", GetLastError());
 		goto err;
 	}
@@ -194,9 +194,18 @@ int process_start(struct process *proc)
 	return 0;
 
 err:
-	if (pipe_in[0] != -1)  { _close(pipe_in[0]); _close(pipe_in[1]); }
-	if (pipe_out[0] != -1) { _close(pipe_out[0]); _close(pipe_out[1]); }
-	if (pipe_err[0] != -1) { _close(pipe_err[0]); _close(pipe_err[1]); }
+	if (pipe_in[0] != -1) {
+		_close(pipe_in[0]);
+		_close(pipe_in[1]);
+	}
+	if (pipe_out[0] != -1) {
+		_close(pipe_out[0]);
+		_close(pipe_out[1]);
+	}
+	if (pipe_err[0] != -1) {
+		_close(pipe_err[0]);
+		_close(pipe_err[1]);
+	}
 	free(wcmdl);
 	free(wdir);
 	return -1;

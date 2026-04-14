@@ -10,6 +10,7 @@
  */
 #include "../../ice.h"
 
+/* clang-format off */
 static const struct cmd_manual manual = {
 	.description =
 	H_PARA("Forces cmake to regenerate the build system, even when "
@@ -37,11 +38,12 @@ static const struct cmd_manual manual = {
 	       "Remove build artifacts; combine with reconfigure for a "
 	       "clean rebuild."),
 };
+/* clang-format on */
 
 int cmd_reconfigure(int argc, const char **argv)
 {
-	const char *usage[] = { "ice reconfigure", NULL };
-	struct option opts[] = { OPT_END() };
+	const char *usage[] = {"ice reconfigure", NULL};
+	struct option opts[] = {OPT_END()};
 
 	parse_options_manual(argc, argv, opts, usage, &manual);
 	return ensure_build_directory(1);

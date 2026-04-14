@@ -19,6 +19,7 @@
  */
 #include "../../ice.h"
 
+/* clang-format off */
 static const struct cmd_manual manual = {
 	.description =
 	H_PARA("Low-level escape hatch: configures the build directory "
@@ -46,11 +47,12 @@ static const struct cmd_manual manual = {
 	H_ITEM("ice flash",
 	       "Shortcut for @b{ice cmake flash}."),
 };
+/* clang-format on */
 
 int cmd_cmake(int argc, const char **argv)
 {
-	const char *usage[] = { "ice cmake <target>", NULL };
-	struct option opts[] = { OPT_END() };
+	const char *usage[] = {"ice cmake <target>", NULL};
+	struct option opts[] = {OPT_END()};
 
 	argc = parse_options_manual(argc, argv, opts, usage, &manual);
 
