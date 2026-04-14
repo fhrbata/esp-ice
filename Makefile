@@ -91,7 +91,12 @@ endif
 
 PKG_NAME := $(NAME)-$(VERSION)-$(S)-$(ARCH)$(PKG_SUFFIX)
 
-SRCS := ice.c \
+# LIB_SRCS go into libice.a -- everything reusable except the program
+# entry point.  Tests link against the archive directly so they don't
+# need to know which .c files implement which transitive dependency.
+# Static-archive linking also drops dead code from the final binary
+# (today: ar.c, elf.c, http.c have no live callers from main()).
+LIB_SRCS := \
 	ar.c \
 	cmake.c \
 	cmakecache.c \
@@ -124,6 +129,13 @@ SRCS := ice.c \
 	svec.c \
 	http.c
 
+# MAIN_SRCS provide the program entry point.  Excluded from libice.a
+# so that unit tests (and any future external libice consumer) can
+# supply their own main().
+MAIN_SRCS := ice.c
+
+SRCS := $(MAIN_SRCS) $(LIB_SRCS)
+
 # STATIC=1: use vendored deps from deps/ (fully self-contained).
 # On Linux this requires a musl CC (enforced below); glibc -static is
 # a lie because NSS dlopen()s the target system's libc at runtime, so
@@ -152,7 +164,12 @@ endif
 
 ifeq ($(S), win)
 
-SRCS += platform/win/io.c platform/win/process.c platform/win/wconv.c platform/win/wmain.c
+# wmain.c provides the Windows wide-char entry point that calls into
+# main() from ice.c, so it lives with MAIN_SRCS.  io / process / wconv
+# are reusable platform glue and go into libice.a.
+LIB_SRCS  += platform/win/io.c platform/win/process.c platform/win/wconv.c
+MAIN_SRCS += platform/win/wmain.c
+SRCS      := $(MAIN_SRCS) $(LIB_SRCS)
 CFLAGS += -municode
 LDFLAGS += -municode
 LIBS += -lws2_32 -lbcrypt -lwinhttp -liphlpapi
@@ -160,15 +177,26 @@ BINARY := $(O)/$(NAME).exe
 
 else
 
-SRCS += platform/posix/posix_io.c platform/posix/posix_process.c
+LIB_SRCS += platform/posix/posix_io.c platform/posix/posix_process.c
+SRCS     := $(MAIN_SRCS) $(LIB_SRCS)
 BINARY := $(O)/$(NAME)
 
 endif
 
-OBJS := $(patsubst %.c,$(O)/%.o,$(SRCS))
+LIB_OBJS  := $(patsubst %.c,$(O)/%.o,$(LIB_SRCS))
+MAIN_OBJS := $(patsubst %.c,$(O)/%.o,$(MAIN_SRCS))
 ifeq ($(S), win)
-	OBJS += $(O)/manifest.o
+	# manifest.o is per-binary metadata, not part of the library.
+	MAIN_OBJS += $(O)/manifest.o
 endif
+OBJS := $(MAIN_OBJS) $(LIB_OBJS)
+
+LIBICE     := $(O)/libice.a
+LIBICE_ABS := $(abspath $(LIBICE))
+
+# Default to the cross-compile prefix when present; users can still
+# override on the command line (e.g. `make AR=clang-ar`).
+AR := $(CROSS_COMPILE)ar
 
 OBJDIRS := $(sort $(patsubst %/,%,$(dir $(OBJS))))
 
@@ -218,10 +246,18 @@ $(DEPS_STAMP):
 	$(MAKE) -C deps PREFIX=$(DEPS_PREFIX) S=$(S) TRIPLE=$(TRIPLE) $(if $(CROSS),CROSS=1)
 endif
 
-$(BINARY): $(OBJS) | $(O)
-	$(CC) -o $@ $^ $(BUILD_LDFLAGS) $(LIBS)
+$(LIBICE): $(LIB_OBJS)
+	$(AR) rcs $@ $^
+
+# Link MAIN_OBJS first so ld picks up only the libice.a members the
+# binary actually references; unused modules (e.g. http.o today) drop
+# out of the binary along with anything they would have pulled from
+# system libs.
+$(BINARY): $(MAIN_OBJS) $(LIBICE) | $(O)
+	$(CC) -o $@ $(MAIN_OBJS) $(LIBICE) $(BUILD_LDFLAGS) $(LIBS)
 
 .PHONY: clean mrproper deps \
+	libice \
 	targz-pkg \
 	tarxz-pkg \
 	zip-pkg \
@@ -232,6 +268,9 @@ $(BINARY): $(OBJS) | $(O)
 	ctags \
 	tags \
 	help
+
+# Convenience target: build only the static library.
+libice: $(LIBICE)
 
 FORCE:
 
@@ -280,8 +319,9 @@ clang-tidy:
 		$(BUILD_CFLAGS)
 
 BINARY_ABS := $(abspath $(BINARY))
-test: $(BINARY)
-	T_OUT=$(T_OUT) BINARY=$(BINARY_ABS) CC=${CC} S=$(S) prove $(PFLAGS) $(T)
+test: $(BINARY) $(LIBICE)
+	T_OUT=$(T_OUT) BINARY=$(BINARY_ABS) LIBICE=$(LIBICE_ABS) \
+		CC=${CC} S=$(S) prove $(PFLAGS) $(T)
 
 
 TAG_DIRS := cmd platform
@@ -315,6 +355,7 @@ help:
 	@echo ''
 	@echo 'test targets:'
 	@echo ' test             - run all tests  (default: $(PFLAGS))'
+	@echo ' libice           - build the static library (linked by ice and tests)'
 	@echo ''
 	@echo 'distribution variables:'
 	@echo ' DIST             - output directory for distribution files (default: $(DIST))'
