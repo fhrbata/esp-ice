@@ -17,10 +17,10 @@ static int is_bool_opt(enum option_type t)
 
 static void print_usage(const struct option *opts, const char **usage)
 {
-	fprintf(stderr, "usage: ");
+	fprintf(stderr, "@b{usage}: ");
 	for (int i = 0; usage[i]; i++) {
 		if (i > 0)
-			fprintf(stderr, "   or: ");
+			fprintf(stderr, "   @b{or}: ");
 		fprintf(stderr, "%s\n", usage[i]);
 	}
 
@@ -45,13 +45,14 @@ static void print_usage(const struct option *opts, const char **usage)
 		}
 
 		if (o->short_opt && o->long_opt)
-			fprintf(stderr, "    %s, %-20s %s\n", short_str,
-				long_str, o->help ? o->help : "");
+			fprintf(stderr, "    @b{%s}, @b{%-20s} %s\n",
+				short_str, long_str,
+				o->help ? o->help : "");
 		else if (o->short_opt)
-			fprintf(stderr, "    %-24s %s\n", short_str,
+			fprintf(stderr, "    @b{%-24s} %s\n", short_str,
 				o->help ? o->help : "");
 		else
-			fprintf(stderr, "        %-20s %s\n", long_str,
+			fprintf(stderr, "        @b{%-20s} %s\n", long_str,
 				o->help ? o->help : "");
 	}
 }

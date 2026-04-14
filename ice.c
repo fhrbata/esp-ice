@@ -70,6 +70,7 @@ const struct cmd_manual ice_root_manual = {
 	       "precedence."),
 
 	.list_commands = 1,
+	.list_aliases  = 1,
 
 	.examples =
 	H_EXAMPLE("ice reconfigure")

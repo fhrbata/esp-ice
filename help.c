@@ -304,6 +304,56 @@ static void print_commands_body(void)
 }
 
 /*
+ * Walk the active config for "alias.<name>" entries and dedupe by
+ * name (the same alias may be set in multiple scopes).  Populates
+ * @p names with unique alias names in first-occurrence order.
+ */
+static void collect_aliases(struct svec *names)
+{
+	for (int i = 0; i < config.nr; i++) {
+		const char *key = config.entries[i].key;
+		const char *name;
+		int dup = 0;
+
+		if (strncmp(key, "alias.", 6) != 0)
+			continue;
+		name = key + 6;
+		if (!*name)
+			continue;
+
+		for (size_t j = 0; j < names->nr; j++)
+			if (!strcmp(names->v[j], name)) {
+				dup = 1;
+				break;
+			}
+		if (!dup)
+			svec_push(names, name);
+	}
+}
+
+static void print_aliases_body(const struct svec *names)
+{
+	size_t maxlen = 0;
+
+	for (size_t i = 0; i < names->nr; i++)
+		if (strlen(names->v[i]) > maxlen)
+			maxlen = strlen(names->v[i]);
+
+	for (size_t i = 0; i < names->nr; i++) {
+		struct sbuf key = SBUF_INIT;
+		const char *val;
+
+		sbuf_addf(&key, "alias.%s", names->v[i]);
+		val = config_get(key.buf);
+		sbuf_release(&key);
+
+		printf(INDENT "@b{%-*s}   %s\n",
+		       (int)maxlen, names->v[i], val ? val : "");
+	}
+	fputs("\n", stdout);
+}
+
+/*
  * Strip any leading path components from argv[0] so the NAME line
  * shows "ice" / "ice-config" rather than "/usr/bin/ice".
  */
@@ -369,6 +419,18 @@ void print_manual(const char *cmd_name,
 	if (m && m->list_commands) {
 		fputs("@b{COMMANDS}\n", stdout);
 		print_commands_body();
+	}
+
+	/* ALIASES -- skipped entirely when no aliases are configured. */
+	if (m && m->list_aliases) {
+		struct svec names = SVEC_INIT;
+
+		collect_aliases(&names);
+		if (names.nr > 0) {
+			fputs("@b{ALIASES}\n", stdout);
+			print_aliases_body(&names);
+		}
+		svec_clear(&names);
 	}
 
 	/* EXAMPLES -- verbatim, indented. */

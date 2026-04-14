@@ -55,6 +55,13 @@ struct cmd_manual {
 	 * Used by the top-level `ice --help` manual.
 	 */
 	int list_commands;
+
+	/**
+	 * When non-zero, print_manual() auto-emits an ALIASES section
+	 * listing every @c alias.<name> defined in the active config
+	 * (skipped silently if the user has no aliases).
+	 */
+	int list_aliases;
 };
 
 /** Paragraph: 4-space indent, trailing blank line. */
