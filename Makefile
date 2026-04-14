@@ -16,6 +16,14 @@ T ?= $(wildcard cmd/*/t) t
 PFLAGS ?=
 T_OUT ?= t_out
 
+# Default parallel build on the host running make.  Try nproc (Linux
+# and MSYS2), fall back to sysctl (macOS), finally 1 if neither works.
+# Override with `make JOBS=1` to debug a parallel-build failure, or
+# pass `-j N` on the command line -- the last -j wins, so user flags
+# always take precedence over MAKEFLAGS.
+JOBS ?= $(shell nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 1)
+MAKEFLAGS += -j$(JOBS)
+
 # Target triple.  Prefer the CC name's prefix (e.g. aarch64-w64-mingw32-clang
 # → aarch64-w64-mingw32) over $(CC) -dumpmachine, because llvm-mingw's clang
 # reports its triple as "aarch64-w64-windows-gnu" which autotools config.sub
@@ -296,6 +304,7 @@ help:
 	@echo ' LDFLAGS          - linker options (default: $(LDFLAGS))'
 	@echo ' CFLAGS_APPEND    - additional compiler options to append after CFLAGS'
 	@echo ' LDFLAGS_APPEND   - additional linker options to append after LDFLAGS'
+	@echo ' JOBS             - parallel build jobs; `-j N` on the command line wins (default: $(JOBS))'
 	@echo ''
 	@echo 'test variables:'
 	@echo ' T                - test path(s) passed to prove; override to run a subset,'
