@@ -30,12 +30,13 @@
 
 /** Config source, ordered low -> high precedence. */
 enum config_scope {
-	CONFIG_SCOPE_DEFAULT,	/**< Built-in defaults. */
-	CONFIG_SCOPE_USER,	/**< ~/.iceconfig (or %USERPROFILE%\.iceconfig). */
-	CONFIG_SCOPE_LOCAL,	/**< .iceconfig in project root. */
-	CONFIG_SCOPE_PROJECT,	/**< Auto-derived from CMakeCache, sdkconfig, etc. */
-	CONFIG_SCOPE_ENV,	/**< Environment variables (ESPPORT, ...). */
-	CONFIG_SCOPE_CLI,	/**< Global and command-line args. */
+	CONFIG_SCOPE_DEFAULT, /**< Built-in defaults. */
+	CONFIG_SCOPE_USER,  /**< ~/.iceconfig (or %USERPROFILE%\.iceconfig). */
+	CONFIG_SCOPE_LOCAL, /**< .iceconfig in project root. */
+	CONFIG_SCOPE_PROJECT, /**< Auto-derived from CMakeCache, sdkconfig, etc.
+			       */
+	CONFIG_SCOPE_ENV,     /**< Environment variables (ESPPORT, ...). */
+	CONFIG_SCOPE_CLI,     /**< Global and command-line args. */
 };
 
 /** A single (key, value, scope) entry in the config store. */
@@ -56,7 +57,7 @@ struct config {
 };
 
 /** Static initializer. */
-#define CONFIG_INIT { .entries = NULL, .nr = 0, .alloc = 0 }
+#define CONFIG_INIT {.entries = NULL, .nr = 0, .alloc = 0}
 
 /** Process-wide config store. */
 extern struct config config;

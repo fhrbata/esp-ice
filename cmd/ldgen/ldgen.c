@@ -12,28 +12,24 @@
 #include "lf.h"
 
 static const struct cmd_manual manual = {
-	.description =
+    .description =
 	H_PARA("Parses ESP-IDF linker fragment (@b{.lf}) files and "
 	       "reports the number of @b{sections}, @b{schemes}, and "
 	       "@b{mappings} found in each.  Use @b{--dump} to print "
 	       "the parsed AST for debugging.")
-	H_PARA("This is currently an analysis helper -- useful for "
-	       "validating @b{.lf} syntax before a full build -- and "
-	       "does not yet emit a final linker script.  A fragment is "
-	       "a declarative description of which object/archive "
-	       "sections land in which memory region; ESP-IDF's linker "
-	       "pipeline merges them into a single generated @b{.ld}."),
+	    H_PARA("This is currently an analysis helper -- useful for "
+		   "validating @b{.lf} syntax before a full build -- and "
+		   "does not yet emit a final linker script.  A fragment is "
+		   "a declarative description of which object/archive "
+		   "sections land in which memory region; ESP-IDF's linker "
+		   "pipeline merges them into a single generated @b{.ld}."),
 
-	.examples =
-	H_EXAMPLE("ice ldgen components/freertos/linker.lf")
-	H_EXAMPLE("ice ldgen --dump app.lf")
-	H_EXAMPLE("ice ldgen app.lf bootloader.lf"),
+    .examples = H_EXAMPLE("ice ldgen components/freertos/linker.lf") H_EXAMPLE(
+	"ice ldgen --dump app.lf") H_EXAMPLE("ice ldgen app.lf bootloader.lf"),
 
-	.extras =
-	H_SECTION("SEE ALSO")
-	H_ITEM("ice build",
-	       "Runs the full build pipeline including ESP-IDF's own "
-	       "linker-fragment merger."),
+    .extras = H_SECTION("SEE ALSO") H_ITEM(
+	"ice build", "Runs the full build pipeline including ESP-IDF's own "
+		     "linker-fragment merger."),
 };
 
 int cmd_ldgen(int argc, const char **argv)
@@ -41,12 +37,12 @@ int cmd_ldgen(int argc, const char **argv)
 	int dump = 0;
 
 	struct option opts[] = {
-		OPT_BOOL('d', "dump", &dump, "dump parsed AST"),
-		OPT_END(),
+	    OPT_BOOL('d', "dump", &dump, "dump parsed AST"),
+	    OPT_END(),
 	};
 	const char *usage[] = {
-		"ice ldgen [--dump] <file.lf> [...]",
-		NULL,
+	    "ice ldgen [--dump] <file.lf> [...]",
+	    NULL,
 	};
 
 	argc = parse_options_manual(argc, argv, opts, usage, &manual);
@@ -67,14 +63,21 @@ int cmd_ldgen(int argc, const char **argv)
 		int ns = 0, nc = 0, nm = 0;
 		for (int j = 0; j < f->n_frags; j++) {
 			switch (f->frags[j].kind) {
-			case LF_SECTIONS:  ns++; break;
-			case LF_SCHEME:    nc++; break;
-			case LF_MAPPING:   nm++; break;
-			case LF_FRAG_COND: break;
+			case LF_SECTIONS:
+				ns++;
+				break;
+			case LF_SCHEME:
+				nc++;
+				break;
+			case LF_MAPPING:
+				nm++;
+				break;
+			case LF_FRAG_COND:
+				break;
 			}
 		}
-		printf("%s: %d sections, %d schemes, %d mappings\n",
-		       argv[i], ns, nc, nm);
+		printf("%s: %d sections, %d schemes, %d mappings\n", argv[i],
+		       ns, nc, nm);
 
 		lf_file_free(f);
 		sbuf_release(&sb);

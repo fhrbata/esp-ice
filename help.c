@@ -14,7 +14,7 @@
 #include <fcntl.h>
 #endif
 
-#define INDENT    "    "
+#define INDENT "    "
 #define MIN_WIDTH 40
 
 static int is_bool_opt(enum option_type t)
@@ -34,7 +34,7 @@ static int has_options(const struct option *opts)
  */
 static int detect_width(void)
 {
-	const int fds[] = { STDOUT_FILENO, STDERR_FILENO, STDIN_FILENO };
+	const int fds[] = {STDOUT_FILENO, STDERR_FILENO, STDIN_FILENO};
 	const char *cols;
 
 	for (size_t i = 0; i < sizeof(fds) / sizeof(fds[0]); i++)
@@ -108,7 +108,8 @@ static size_t visible_len(const char *s, size_t len)
 			depth--;
 			i++;
 		} else if (((unsigned char)s[i] & 0xc0) == 0x80) {
-			/* UTF-8 continuation -- part of the previous code point */
+			/* UTF-8 continuation -- part of the previous code point
+			 */
 			i++;
 		} else {
 			vw++;
@@ -125,8 +126,8 @@ static size_t visible_len(const char *s, size_t len)
  */
 static const char *word_end(const char *p)
 {
-	while (*p && *p != ' ' && *p != '\t' && *p != '\n' &&
-	       *p != '\x02' && *p != '\x03') {
+	while (*p && *p != ' ' && *p != '\t' && *p != '\n' && *p != '\x02' &&
+	       *p != '\x03') {
 		if (*p == '@' && p[1] == '@') {
 			p += 2;
 		} else if (*p == '@' && p[1] && p[2] == '{') {
@@ -185,7 +186,7 @@ static void reflow_region(struct sbuf *out, const char **pp, int width)
 		*pp = p;
 		return;
 	}
-	p++;  /* skip the indent byte */
+	p++; /* skip the indent byte */
 
 	content_w = width - indent;
 	if (content_w < 10)
@@ -306,8 +307,7 @@ static void print_commands_body(void)
 	}
 
 	for (const struct cmd_struct *c = ice_commands; c->name; c++) {
-		printf(INDENT "@b{%-*s}   %s\n",
-		       (int)maxlen, c->name,
+		printf(INDENT "@b{%-*s}   %s\n", (int)maxlen, c->name,
 		       c->summary ? c->summary : "");
 	}
 	fputs("\n", stdout);
@@ -357,8 +357,8 @@ static void print_aliases_body(const struct svec *names)
 		val = config_get(key.buf);
 		sbuf_release(&key);
 
-		printf(INDENT "@b{%-*s}   %s\n",
-		       (int)maxlen, names->v[i], val ? val : "");
+		printf(INDENT "@b{%-*s}   %s\n", (int)maxlen, names->v[i],
+		       val ? val : "");
 	}
 	fputs("\n", stdout);
 }
@@ -380,17 +380,15 @@ static const char *basename_of(const char *p)
 	return last;
 }
 
-void print_manual(const char *cmd_name,
-		  const struct cmd_manual *m,
-		  const struct option *opts,
-		  const char **usage)
+void print_manual(const char *cmd_name, const struct cmd_manual *m,
+		  const struct option *opts, const char **usage)
 {
 	const char *summary;
 
 	cmd_name = basename_of(cmd_name);
 	summary = m && m->summary
-			  ? m->summary
-			  : (cmd_name ? ice_cmd_summary(cmd_name) : NULL);
+		      ? m->summary
+		      : (cmd_name ? ice_cmd_summary(cmd_name) : NULL);
 
 	pager_start();
 

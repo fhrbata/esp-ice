@@ -11,10 +11,10 @@
 #include "ice.h"
 
 #ifdef _WIN32
-#define popen  _popen
+#define popen _popen
 #define pclose _pclose
-#define dup    _dup
-#define dup2   _dup2
+#define dup _dup
+#define dup2 _dup2
 #endif
 
 /*
@@ -33,10 +33,7 @@ int pclose(FILE *stream);
 static FILE *pager_pipe;
 static int saved_stdout_fd = -1;
 
-int pager_active(void)
-{
-	return pager_pipe != NULL;
-}
+int pager_active(void) { return pager_pipe != NULL; }
 
 static const char *resolve_pager(void)
 {

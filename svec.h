@@ -33,13 +33,13 @@
 extern const char *svec_empty[];
 
 struct svec {
-	const char **v;	/**< NULL-terminated string array (never NULL). */
+	const char **v; /**< NULL-terminated string array (never NULL). */
 	size_t nr;	/**< Number of strings (excluding NULL terminator). */
 	size_t alloc;	/**< Allocated slots (0 = not owned). */
 };
 
 /** Static initializer. */
-#define SVEC_INIT { .v = svec_empty, .nr = 0, .alloc = 0 }
+#define SVEC_INIT {.v = svec_empty, .nr = 0, .alloc = 0}
 
 /** Initialize an svec (equivalent to SVEC_INIT assignment). */
 void svec_init(struct svec *sv);

@@ -52,8 +52,8 @@ static void setup_io(void)
 		DWORD mode;
 
 		if (GetConsoleMode(h, &mode)) {
-			if (SetConsoleMode(h, mode |
-					   ENABLE_VIRTUAL_TERMINAL_PROCESSING))
+			if (SetConsoleMode(
+				h, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING))
 				use_vt = 1;
 		} else {
 			_setmode(fds[i], _O_BINARY);

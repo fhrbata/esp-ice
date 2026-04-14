@@ -46,22 +46,19 @@
 struct process {
 	const char **argv; /**< NULL-terminated argument vector. */
 	const char *dir;   /**< Working directory (NULL = inherit). */
-	const char **env;  /**< Extra env vars ("KEY=VALUE"), NULL-terminated. */
-	pid_t pid;	   /**< Child PID (set by process_start). */
-	int in;		   /**< fd to child's stdin  (caller writes). */
-	int out;	   /**< fd to child's stdout (caller reads). */
-	int err;	   /**< fd to child's stderr (caller reads). */
-	unsigned pipe_in : 1;   /**< Create pipe for stdin. */
-	unsigned pipe_out : 1;  /**< Create pipe for stdout. */
-	unsigned pipe_err : 1;  /**< Create pipe for stderr. */
+	const char **env; /**< Extra env vars ("KEY=VALUE"), NULL-terminated. */
+	pid_t pid;	  /**< Child PID (set by process_start). */
+	int in;		  /**< fd to child's stdin  (caller writes). */
+	int out;	  /**< fd to child's stdout (caller reads). */
+	int err;	  /**< fd to child's stderr (caller reads). */
+	unsigned pipe_in : 1;	/**< Create pipe for stdin. */
+	unsigned pipe_out : 1;	/**< Create pipe for stdout. */
+	unsigned pipe_err : 1;	/**< Create pipe for stderr. */
 	unsigned merge_err : 1; /**< Redirect stderr to stdout. */
 };
 
 /** Static initializer for struct process. */
-#define PROCESS_INIT                                                           \
-	{                                                                      \
-		0                                                              \
-	}
+#define PROCESS_INIT {0}
 
 /**
  * @brief Start a child process.

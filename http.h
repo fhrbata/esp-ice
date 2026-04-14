@@ -58,8 +58,8 @@ void http_default_progress(size_t total, size_t now, void *ctx);
  * @param ctx       Opaque context passed to progress callback.
  * @return 0 on success, -1 on error.
  */
-int http_download(const char *url, const char *path,
-		  http_progress_fn progress, void *ctx);
+int http_download(const char *url, const char *path, http_progress_fn progress,
+		  void *ctx);
 
 /**
  * @brief Fetch a URL into memory.

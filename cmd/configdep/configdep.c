@@ -21,35 +21,32 @@
 #include "../../ice.h"
 
 static const struct cmd_manual manual = {
-	.description =
+    .description =
 	H_PARA("Compiler wrapper that rewrites GCC-style dependency "
 	       "files (@b{-MF}) so a translation unit only rebuilds "
 	       "when the specific @b{CONFIG_*} options it actually "
 	       "references change -- not every time @b{sdkconfig} is "
 	       "touched.")
-	H_PARA("Not intended for direct use: the cmake toolchain is "
-	       "configured to invoke the real compiler through this "
-	       "wrapper.  The command is documented here so the build "
-	       "system's behaviour is discoverable.")
-	H_PARA("Mechanism: the wrapper first runs the real compiler "
-	       "with the arguments it was given.  If a @b{-MF} "
-	       "dependency file was produced, it parses that file, "
-	       "removes @b{sdkconfig.h} from the prerequisite list, "
-	       "scans the remaining prerequisite files for "
-	       "@b{CONFIG_*} identifiers, and rewrites the dependency "
-	       "file with one per-option @b{.cdep} marker file per "
-	       "referenced option.  Those marker files are touched "
-	       "only when the corresponding option changes, so Make / "
-	       "Ninja recompile precisely the affected sources."),
+	    H_PARA("Not intended for direct use: the cmake toolchain is "
+		   "configured to invoke the real compiler through this "
+		   "wrapper.  The command is documented here so the build "
+		   "system's behaviour is discoverable.")
+		H_PARA("Mechanism: the wrapper first runs the real compiler "
+		       "with the arguments it was given.  If a @b{-MF} "
+		       "dependency file was produced, it parses that file, "
+		       "removes @b{sdkconfig.h} from the prerequisite list, "
+		       "scans the remaining prerequisite files for "
+		       "@b{CONFIG_*} identifiers, and rewrites the dependency "
+		       "file with one per-option @b{.cdep} marker file per "
+		       "referenced option.  Those marker files are touched "
+		       "only when the corresponding option changes, so Make / "
+		       "Ninja recompile precisely the affected sources."),
 
-	.examples =
-	H_EXAMPLE("ice configdep cc -c foo.c -o foo.o -MF foo.d"),
+    .examples = H_EXAMPLE("ice configdep cc -c foo.c -o foo.o -MF foo.d"),
 
-	.extras =
-	H_SECTION("SEE ALSO")
-	H_ITEM("ice menuconfig",
-	       "Edit @b{sdkconfig} interactively; subsequent builds "
-	       "pick up only the actually-affected sources."),
+    .extras = H_SECTION("SEE ALSO") H_ITEM(
+	"ice menuconfig", "Edit @b{sdkconfig} interactively; subsequent builds "
+			  "pick up only the actually-affected sources."),
 };
 
 /* ------------------------------------------------------------------ */
@@ -57,13 +54,13 @@ static const struct cmd_manual manual = {
 /* ------------------------------------------------------------------ */
 
 struct depfile {
-	char *fn;		/**< Dep file path (borrowed from argv). */
-	char *target;		/**< Make target (heap). */
+	char *fn;     /**< Dep file path (borrowed from argv). */
+	char *target; /**< Make target (heap). */
 	size_t target_len;
-	char *sdkconfig_dir;	/**< Dir prefix of sdkconfig.h, or NULL. */
+	char *sdkconfig_dir; /**< Dir prefix of sdkconfig.h, or NULL. */
 	size_t sdkconfig_dir_len;
-	int sdkconfig;		/**< Non-zero if sdkconfig.h was found. */
-	char **deps;		/**< Dependency paths (heap strings). */
+	int sdkconfig; /**< Non-zero if sdkconfig.h was found. */
+	char **deps;   /**< Dependency paths (heap strings). */
 	int n_deps, alloc_deps;
 };
 
@@ -173,7 +170,7 @@ static int parse_depfile(struct depfile *d)
 /* ------------------------------------------------------------------ */
 
 struct sdk_opts {
-	char **opts;		/**< Unique option names (without CONFIG_). */
+	char **opts; /**< Unique option names (without CONFIG_). */
 	int n_opts, alloc_opts;
 };
 
@@ -310,8 +307,7 @@ static int fix_depfile(struct depfile *d, struct sdk_opts *cfg)
 	for (int i = 0; i < cfg->n_opts; i++) {
 		sbuf_reset(&path);
 		if (d->sdkconfig_dir) {
-			sbuf_add(&path, d->sdkconfig_dir,
-				 d->sdkconfig_dir_len);
+			sbuf_add(&path, d->sdkconfig_dir, d->sdkconfig_dir_len);
 			sbuf_addch(&path, '/');
 		}
 
@@ -378,11 +374,11 @@ int cmd_configdep(int argc, const char **argv)
 	 * like -c, -MF etc. are not ours.  Intercept --help/-h manually
 	 * at the head of the argv before forwarding takes over.
 	 */
-	if (argc >= 2 && (!strcmp(argv[1], "--help") ||
-			  !strcmp(argv[1], "-h"))) {
+	if (argc >= 2 &&
+	    (!strcmp(argv[1], "--help") || !strcmp(argv[1], "-h"))) {
 		const char *usage[] = {
-			"ice configdep <compiler> [<arg>...]",
-			NULL,
+		    "ice configdep <compiler> [<arg>...]",
+		    NULL,
 		};
 		print_manual("configdep", &manual, NULL, usage);
 		return EXIT_SUCCESS;

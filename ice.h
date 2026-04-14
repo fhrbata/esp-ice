@@ -27,19 +27,19 @@
 #include "cmake.h"
 #include "cmakecache.h"
 #include "config.h"
-#include "term.h"
 #include "elf.h"
 #include "error.h"
 #include "help.h"
 #include "http.h"
-#include "pager.h"
 #include "json.h"
 #include "map.h"
 #include "options.h"
+#include "pager.h"
 #include "platform.h"
 #include "process.h"
 #include "sbuf.h"
 #include "svec.h"
+#include "term.h"
 
 /* Subcommands -- cmake wrappers (see cmake.h) */
 int cmd_build(int argc, const char **argv);

@@ -383,7 +383,8 @@ static void parse_sections(char *buf, size_t len, size_t *pos,
 				/* Lowercase in-place and NUL-terminate
 				 * at the first non-alnum character. */
 				for (p = (char *)t; (*p >= 'A' && *p <= 'Z') ||
-				     (*p >= '0' && *p <= '9'); p++)
+						    (*p >= '0' && *p <= '9');
+				     p++)
 					*p |= 0x20;
 				*p = '\0';
 			}

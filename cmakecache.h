@@ -36,7 +36,7 @@ struct cmakecache {
 };
 
 /** Static initializer. */
-#define CMAKECACHE_INIT { .entries = NULL, .nr = 0, .alloc = 0 }
+#define CMAKECACHE_INIT {.entries = NULL, .nr = 0, .alloc = 0}
 
 /** Initialize a cache to empty (equivalent to CMAKECACHE_INIT). */
 void cmakecache_init(struct cmakecache *c);

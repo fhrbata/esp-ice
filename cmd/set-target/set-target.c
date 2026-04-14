@@ -15,17 +15,15 @@
  * require --preview to match idf.py's behaviour.
  */
 static const char *const SUPPORTED_TARGETS[] = {
-	"esp32", "esp32s2", "esp32c3", "esp32s3", "esp32c2",
-	"esp32c6", "esp32h2", "esp32p4", "esp32c5", "esp32c61",
-	NULL,
+    "esp32",   "esp32s2", "esp32c3", "esp32s3",	 "esp32c2", "esp32c6",
+    "esp32h2", "esp32p4", "esp32c5", "esp32c61", NULL,
 };
 static const char *const PREVIEW_TARGETS[] = {
-	"linux", "esp32h21", "esp32h4", "esp32s31",
-	NULL,
+    "linux", "esp32h21", "esp32h4", "esp32s31", NULL,
 };
 
 static const struct cmd_manual manual = {
-	.description =
+    .description =
 	H_PARA("Switches the project to build for chip @b{<target>} "
 	       "(e.g. @b{esp32}, @b{esp32s3}, @b{esp32c6}).  Wipes the "
 	       "build directory, renames any existing @b{sdkconfig} to "
@@ -33,32 +31,28 @@ static const struct cmd_manual manual = {
 	       "@b{IDF_TARGET}.  The fresh @b{sdkconfig} is generated "
 	       "from @b{sdkconfig.defaults} (and any "
 	       "@b{sdkconfig.defaults.<target>} override).")
-	H_PARA("Use this when switching chips.  For ad-hoc cmake cache "
-	       "tweaks that should not discard the current @b{sdkconfig}, "
-	       "run @b{ice reconfigure} with a @b{-D IDF_TARGET=...} "
-	       "override instead."),
+	    H_PARA("Use this when switching chips.  For ad-hoc cmake cache "
+		   "tweaks that should not discard the current @b{sdkconfig}, "
+		   "run @b{ice reconfigure} with a @b{-D IDF_TARGET=...} "
+		   "override instead."),
 
-	.examples =
-	H_EXAMPLE("ice set-target esp32")
-	H_EXAMPLE("ice set-target esp32s3")
-	H_EXAMPLE("ice --preview set-target linux"),
+    .examples = H_EXAMPLE("ice set-target esp32") H_EXAMPLE(
+	"ice set-target esp32s3") H_EXAMPLE("ice --preview set-target linux"),
 
-	.extras =
-	H_SECTION("CONFIG")
-	H_ITEM("core.build-dir",
-	       "Build directory to wipe and reconfigure "
-	       "(default @b{build}).")
+    .extras = H_SECTION("CONFIG") H_ITEM(
+	"core.build-dir", "Build directory to wipe and reconfigure "
+			  "(default @b{build}).")
 	H_ITEM("cmake.define",
 	       "@b{IDF_TARGET=<target>} is appended at CLI scope and "
 	       "forwarded to cmake as @b{-DIDF_TARGET=<target>}.")
 
-	H_SECTION("SEE ALSO")
-	H_ITEM("ice fullclean",
-	       "Wipe the build directory without changing the target.")
-	H_ITEM("ice reconfigure",
-	       "Regenerate the build system without wiping sdkconfig.")
-	H_ITEM("ice build",
-	       "Build the project after switching target."),
+	    H_SECTION("SEE ALSO") H_ITEM(
+		"ice fullclean",
+		"Wipe the build directory without changing the target.")
+		H_ITEM("ice reconfigure",
+		       "Regenerate the build system without wiping sdkconfig.")
+		    H_ITEM("ice build",
+			   "Build the project after switching target."),
 };
 
 static int in_list(const char *target, const char *const *list)
@@ -83,13 +77,12 @@ int cmd_set_target(int argc, const char **argv)
 	static char envstr[] = "_IDF_PY_SET_TARGET_ACTION=1";
 	int preview = 0;
 	const char *usage[] = {
-		"ice set-target [--preview] <target>",
-		NULL,
+	    "ice set-target [--preview] <target>",
+	    NULL,
 	};
 	struct option opts[] = {
-		OPT_BOOL(0, "preview", &preview,
-			 "allow preview targets"),
-		OPT_END(),
+	    OPT_BOOL(0, "preview", &preview, "allow preview targets"),
+	    OPT_END(),
 	};
 	const char *target;
 	struct sbuf define = SBUF_INIT;
@@ -107,7 +100,8 @@ int cmd_set_target(int argc, const char **argv)
 		if (in_list(target, PREVIEW_TARGETS)) {
 			if (!preview)
 				die("'%s' is a preview target; "
-				    "pass --preview to use it", target);
+				    "pass --preview to use it",
+				    target);
 		} else {
 			die("'%s' is not a supported target", target);
 		}

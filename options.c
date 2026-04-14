@@ -39,15 +39,14 @@ static void print_usage(const struct option *opts, const char **usage)
 				snprintf(long_str, sizeof(long_str), "--%s",
 					 o->long_opt);
 			else
-				snprintf(long_str, sizeof(long_str), "--%s=<%s>",
-					 o->long_opt,
+				snprintf(long_str, sizeof(long_str),
+					 "--%s=<%s>", o->long_opt,
 					 o->argh ? o->argh : "...");
 		}
 
 		if (o->short_opt && o->long_opt)
-			fprintf(stderr, "    @b{%s}, @b{%-20s} %s\n",
-				short_str, long_str,
-				o->help ? o->help : "");
+			fprintf(stderr, "    @b{%s}, @b{%-20s} %s\n", short_str,
+				long_str, o->help ? o->help : "");
 		else if (o->short_opt)
 			fprintf(stderr, "    @b{%-24s} %s\n", short_str,
 				o->help ? o->help : "");
@@ -109,8 +108,8 @@ static int set_value(const struct option *o, const char *val)
 			   CONFIG_SCOPE_CLI);
 		return 0;
 	case OPTION_CONFIG_BOOL:
-		config_set(&config, (const char *)o->value,
-			   val ? val : "true", CONFIG_SCOPE_CLI);
+		config_set(&config, (const char *)o->value, val ? val : "true",
+			   CONFIG_SCOPE_CLI);
 		return 0;
 	case OPTION_CONFIG_LIST:
 		config_add(&config, (const char *)o->value, val,
@@ -121,9 +120,8 @@ static int set_value(const struct option *o, const char *val)
 	}
 }
 
-int parse_options_manual(int argc, const char **argv,
-			 const struct option *opts, const char **usage,
-			 const struct cmd_manual *manual)
+int parse_options_manual(int argc, const char **argv, const struct option *opts,
+			 const char **usage, const struct cmd_manual *manual)
 {
 	int out = 0;
 	int i;
@@ -157,8 +155,7 @@ int parse_options_manual(int argc, const char **argv,
 		/* Long option */
 		if (arg[1] == '-') {
 			const char *val = NULL;
-			const struct option *o =
-				find_long(opts, arg + 2, &val);
+			const struct option *o = find_long(opts, arg + 2, &val);
 
 			if (!o)
 				die("unknown option: %s", arg);

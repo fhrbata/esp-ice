@@ -28,10 +28,10 @@
  */
 #include "ice.h"
 
-#define AR_MAGIC     "!<arch>\n"
+#define AR_MAGIC "!<arch>\n"
 #define AR_MAGIC_LEN 8
-#define AR_HDR_LEN   60
-#define AR_FMAG      "`\n"
+#define AR_HDR_LEN 60
+#define AR_FMAG "`\n"
 
 /**
  * Parse a space-padded decimal number from a fixed-width field.
@@ -48,8 +48,7 @@ static size_t parse_ar_decimal(const char *s, int width)
 
 void ar_reader_init(struct ar_reader *r, const void *buf, size_t len)
 {
-	if (len < AR_MAGIC_LEN ||
-	    memcmp(buf, AR_MAGIC, AR_MAGIC_LEN) != 0)
+	if (len < AR_MAGIC_LEN || memcmp(buf, AR_MAGIC, AR_MAGIC_LEN) != 0)
 		die("not an AR archive (bad magic)");
 
 	r->buf = buf;
@@ -75,20 +74,23 @@ int ar_reader_next(struct ar_reader *r, struct ar_member *m)
 
 		if (r->pos + AR_HDR_LEN > r->len)
 			die("AR archive truncated "
-			    "(incomplete header at offset %zu)", r->pos);
+			    "(incomplete header at offset %zu)",
+			    r->pos);
 
 		hdr = (const char *)(r->buf + r->pos);
 
 		if (memcmp(hdr + 58, AR_FMAG, 2) != 0)
 			die("AR member at offset %zu: "
-			    "bad header magic", r->pos);
+			    "bad header magic",
+			    r->pos);
 
 		size = parse_ar_decimal(hdr + 48, 10);
 		data = r->buf + r->pos + AR_HDR_LEN;
 
 		if (r->pos + AR_HDR_LEN + size > r->len)
 			die("AR member at offset %zu: "
-			    "data extends past end of archive", r->pos);
+			    "data extends past end of archive",
+			    r->pos);
 
 		r->pos += AR_HDR_LEN + size;
 
@@ -104,7 +106,8 @@ int ar_reader_next(struct ar_reader *r, struct ar_member *m)
 				continue;
 			}
 			if (hdr[1] >= '0' && hdr[1] <= '9') {
-				/* GNU long name: /offset -- fall through to name resolution. */
+				/* GNU long name: /offset -- fall through to
+				 * name resolution. */
 				break;
 			}
 			/*
@@ -131,7 +134,9 @@ int ar_reader_next(struct ar_reader *r, struct ar_member *m)
 
 			m->name = sbuf_strndup((const char *)data, name_len);
 			m->data = data + name_len;
-			m->size = size - (size_t)((const unsigned char *)m->data - data);
+			m->size =
+			    size -
+			    (size_t)((const unsigned char *)m->data - data);
 			return 1;
 		}
 
@@ -147,7 +152,8 @@ int ar_reader_next(struct ar_reader *r, struct ar_member *m)
 
 		if (!r->strtab || off >= r->strtab_len)
 			die("AR: long name offset %zu "
-			    "exceeds string table", off);
+			    "exceeds string table",
+			    off);
 
 		s = r->strtab + off;
 		end = memchr(s, '/', r->strtab_len - off);

@@ -11,7 +11,7 @@
 #include "../../ice.h"
 
 static const struct cmd_manual manual = {
-	.description =
+    .description =
 	H_PARA("Forces cmake to regenerate the build system, even when "
 	       "@b{CMakeCache.txt} is already present and up to date.  "
 	       "Re-reads the project's top-level @b{CMakeLists.txt}, "
@@ -19,29 +19,26 @@ static const struct cmd_manual manual = {
 	       "entry, and re-derives project-scope config values "
 	       "(@b{target}, @b{mapfile}, @b{elf}) from the regenerated "
 	       "cache and @b{project_description.json}.")
-	H_PARA("Run this after switching target chips, changing the "
-	       "cmake generator, or pulling in top-level @b{CMakeLists} "
-	       "changes that ice's on-demand reconfigure heuristic does "
-	       "not detect."),
+	    H_PARA("Run this after switching target chips, changing the "
+		   "cmake generator, or pulling in top-level @b{CMakeLists} "
+		   "changes that ice's on-demand reconfigure heuristic does "
+		   "not detect."),
 
-	.examples =
-	H_EXAMPLE("ice reconfigure")
+    .examples = H_EXAMPLE("ice reconfigure")
 	H_EXAMPLE("ice -G \"Unix Makefiles\" reconfigure")
-	H_EXAMPLE("ice -D IDF_TARGET=esp32c6 reconfigure"),
+	    H_EXAMPLE("ice -D IDF_TARGET=esp32c6 reconfigure"),
 
-	.extras =
-	H_SECTION("SEE ALSO")
-	H_ITEM("ice build",
-	       "Build after reconfiguring.")
-	H_ITEM("ice clean",
-	       "Remove build artifacts; combine with reconfigure for a "
-	       "clean rebuild."),
+    .extras =
+	H_SECTION("SEE ALSO") H_ITEM("ice build", "Build after reconfiguring.")
+	    H_ITEM("ice clean",
+		   "Remove build artifacts; combine with reconfigure for a "
+		   "clean rebuild."),
 };
 
 int cmd_reconfigure(int argc, const char **argv)
 {
-	const char *usage[] = { "ice reconfigure", NULL };
-	struct option opts[] = { OPT_END() };
+	const char *usage[] = {"ice reconfigure", NULL};
+	struct option opts[] = {OPT_END()};
 
 	parse_options_manual(argc, argv, opts, usage, &manual);
 	return ensure_build_directory(1);

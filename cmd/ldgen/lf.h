@@ -50,12 +50,12 @@ enum lf_flag_kind {
  */
 struct lf_flag {
 	enum lf_flag_kind kind;
-	int alignment;		/**< ALIGN: alignment value */
-	int pre;		/**< ALIGN: align before (default true) */
-	int post;		/**< ALIGN: align after (default false) */
-	char *sort_first;	/**< SORT: first key (NULL = default) */
-	char *sort_second;	/**< SORT: second key (NULL = none) */
-	char *symbol;		/**< SURROUND: symbol name */
+	int alignment;	   /**< ALIGN: alignment value */
+	int pre;	   /**< ALIGN: align before (default true) */
+	int post;	   /**< ALIGN: align after (default false) */
+	char *sort_first;  /**< SORT: first key (NULL = default) */
+	char *sort_second; /**< SORT: second key (NULL = none) */
+	char *symbol;	   /**< SURROUND: symbol name */
 };
 
 /**
@@ -67,8 +67,8 @@ struct lf_flag {
  *       sections2 -> target2 ALIGN(4)
  */
 struct lf_flag_item {
-	char *sections;		/**< sections reference */
-	char *target;		/**< target name */
+	char *sections; /**< sections reference */
+	char *target;	/**< target name */
 	struct lf_flag *flags;
 	int n_flags;
 };
@@ -95,7 +95,8 @@ struct lf_entry {
 	char *name;
 	char *target;
 	char *scheme;
-	struct lf_flag_item *flag_items;  /**< mapping: flag overrides (NULL otherwise) */
+	struct lf_flag_item
+	    *flag_items; /**< mapping: flag overrides (NULL otherwise) */
 	int n_flag_items;
 };
 
