@@ -104,6 +104,29 @@ catalogue of available cross-compilation toolchains.
 | `make mrproper` | Remove all build artifacts and vendored deps |
 | `make help` | Show all build variables and targets |
 
+## Shell completion
+
+`ice` ships with completion support for bash, zsh, and fish.  Add the
+matching line to your shell's rc file:
+
+```bash
+# ~/.bashrc
+eval "$(ice completion bash)"
+
+# ~/.zshrc
+eval "$(ice completion zsh)"
+
+# ~/.config/fish/config.fish
+ice completion fish | source
+```
+
+Each `ice completion <shell>` invocation prints a tiny init snippet on
+stdout; `eval`-ing it binds a dispatch function to the `ice` command.
+Every `TAB` then re-invokes `ice` itself to list candidates —
+subcommands, long / short flags, aliases, chip targets, known config
+keys — so completion stays in sync with the binary automatically and
+there is nothing to regenerate after an upgrade.
+
 ## Contributing
 
 Contributions to **esp-ice** are welcome! Please follow these guidelines:
@@ -139,6 +162,12 @@ Before contributing, set up your development environment:
 3. Submit a pull request with a clear description of the changes
 
 For more details, see the pre-commit configuration in `.pre-commit-config.yaml`.
+
+### Adding a new subcommand
+
+See [cmd/README.md](cmd/README.md) for a step-by-step walkthrough --
+it covers the layout, the four wiring touchpoints, and a complete
+`ice greet` example.
 
 ## License
 
