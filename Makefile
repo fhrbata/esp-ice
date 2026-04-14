@@ -244,8 +244,11 @@ mrproper: clean
 	rm -rf $(CURDIR)/build
 	$(MAKE) -C deps mrproper
 
+# Routed through pre-commit so everyone uses the version pinned in
+# .pre-commit-config.yaml.  Raw clang-format output drifts between
+# releases even with the same .clang-format config.
 clang-format:
-	clang-format --style=file -i *.[ch] platform/posix/*.[ch] platform/win/*.[ch] cmd/*/*.[ch]
+	pre-commit run clang-format --all-files
 
 # Lint checks and WarningsAsErrors: see .clang-tidy in this directory.
 clang-tidy:

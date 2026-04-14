@@ -11,6 +11,17 @@ permissions:
   contents: write
 
 jobs:
+  format:
+    name: format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+      - run: python -m pip install pre-commit
+      - run: pre-commit run --all-files --show-diff-on-failure
+
   lint-linux:
     name: lint linux
     runs-on: ubuntu-latest
@@ -20,10 +31,10 @@ jobs:
       - name: install
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang-tidy clang-format libcurl4-openssl-dev
+          sudo apt-get install -y clang-tidy libcurl4-openssl-dev
 
       - name: lint
-        run: make CC=clang clang-format clang-tidy
+        run: make CC=clang clang-tidy
 
   lint-windows:
     name: lint windows
@@ -45,7 +56,7 @@ jobs:
 
       - name: lint
         shell: msys2 {0}
-        run: make CC=clang clang-format clang-tidy
+        run: make CC=clang clang-tidy
 
   lint-macos:
     name: lint macos
@@ -59,12 +70,13 @@ jobs:
           echo "$(brew --prefix llvm)/bin" >> $GITHUB_PATH
 
       - name: lint
-        run: make CC=clang clang-format clang-tidy
+        run: make CC=clang clang-tidy
 
   dist:
     runs-on: ${{ matrix.runner }}
     name: dist ${{ matrix.name }}
     needs:
+      - format
       - lint-linux
       - lint-windows
       - lint-macos
