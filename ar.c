@@ -119,24 +119,31 @@ int ar_reader_next(struct ar_reader *r, struct ar_member *m)
 
 		/* BSD long name: #1/len */
 		if (hdr[0] == '#' && hdr[1] == '1' && hdr[2] == '/') {
-			size_t name_len = parse_ar_decimal(hdr + 3, 13);
+			size_t field_len = parse_ar_decimal(hdr + 3, 13);
+			size_t name_len = field_len;
 			const char *nul;
 
-			if (name_len > size)
-				die("AR: BSD name length %zu "
+			if (field_len > size)
+				die("AR: BSD name field length %zu "
 				    "exceeds member size %zu",
-				    name_len, size);
+				    field_len, size);
 
-			/* BSD names may be NUL-padded; find actual end. */
-			nul = memchr(data, '\0', name_len);
+			/*
+			 * BSD ar reserves `field_len` bytes at the start of
+			 * the payload for the name, then pads the actual name
+			 * with NULs to align the following content (e.g. a
+			 * 7-char name may sit in a 12-byte field).  Trim
+			 * name_len to the first NUL for display, but skip the
+			 * whole field -- padding included -- when computing
+			 * where the member data begins.
+			 */
+			nul = memchr(data, '\0', field_len);
 			if (nul)
 				name_len = (size_t)(nul - (const char *)data);
 
 			m->name = sbuf_strndup((const char *)data, name_len);
-			m->data = data + name_len;
-			m->size =
-			    size -
-			    (size_t)((const unsigned char *)m->data - data);
+			m->data = data + field_len;
+			m->size = size - field_len;
 			return 1;
 		}
 
