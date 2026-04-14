@@ -375,7 +375,7 @@ help:
 	@echo ' CFLAGS_APPEND    - additional compiler options to append after CFLAGS'
 	@echo ' LDFLAGS_APPEND   - additional linker options to append after LDFLAGS'
 	@echo ' JOBS             - parallel build jobs; `-j N` on the command line wins (default: $(JOBS))'
-	@echo ' SANITIZE         - SANITIZE=1 enables AddressSanitizer + UBSan (incompatible with STATIC=1)'
+	@echo ' SANITIZE         - SANITIZE=1 enables AddressSanitizer (incompatible with STATIC=1)'
 	@echo ''
 	@echo 'test variables:'
 	@echo ' T                - test path(s) passed to prove; override to run a subset,'
