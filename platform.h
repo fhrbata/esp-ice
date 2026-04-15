@@ -39,6 +39,8 @@
 #ifndef PLATFORM_H
 #define PLATFORM_H
 
+#include <stdarg.h>
+#include <stdio.h>
 #include <sys/types.h>
 
 /** Mark a function as never returning (for die() and friends). */
