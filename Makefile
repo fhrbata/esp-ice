@@ -129,6 +129,7 @@ LIB_SRCS := \
 	cmd/help/help.c \
 	cmd/image/image.c \
 	cmd/image/elf2image.c \
+	cmd/image/info.c \
 	cmd/ldgen/ldgen.c \
 	cmd/ldgen/lf.c \
 	cmd/menuconfig/menuconfig.c \

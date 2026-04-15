@@ -21,6 +21,7 @@
 #include "ice.h"
 
 int cmd_image_elf2image(int argc, const char **argv);
+int cmd_image_info(int argc, const char **argv);
 
 struct image_sub {
 	const char *name;
@@ -31,6 +32,7 @@ struct image_sub {
 static const struct image_sub image_subs[] = {
     {"elf2image", cmd_image_elf2image,
      "convert an ELF executable to an ESP flash image"},
+    {"info", cmd_image_info, "display the structure of an ESP flash image"},
     {NULL, NULL, NULL},
 };
 
@@ -59,6 +61,10 @@ static const struct cmd_manual manual = {
 	H_ITEM("elf2image",
 	       "Convert an ELF executable to an ESP flash image.  "
 	       "Drop-in replacement for @b{esptool elf2image}.")
+	H_ITEM("info",
+	       "Pretty-print the structure of a flash image: chip, "
+	       "flash params, segments with memory-region labels, "
+	       "checksum / SHA-256 validity, @c esp_app_desc_t.")
 };
 /* clang-format on */
 
