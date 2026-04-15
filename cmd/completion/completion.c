@@ -91,9 +91,16 @@ static void complete_subcommands(const char *prefix)
 	svec_clear(&seen);
 }
 
-/* Long (--foo) and short (-x) flag names from @p opts. */
+/*
+ * Long (--foo) and short (-x) flag names from @p opts, plus the
+ * implicit -h / --help that parse_options_manual accepts for every
+ * command.
+ */
 static void complete_flags(const struct option *opts, const char *prefix)
 {
+	emit("-h", prefix);
+	emit("--help", prefix);
+
 	if (!opts)
 		return;
 	for (const struct option *o = opts; o->type != OPTION_END; o++) {

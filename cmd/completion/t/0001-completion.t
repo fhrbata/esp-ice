@@ -58,7 +58,14 @@ tap_done "config --<TAB> walks cmd_struct.opts"
 tap_check grep -qx -- '--build-dir' globflags.out
 tap_check grep -qx -- '-B'          globflags.out
 tap_check grep -qx -- '--verbose'   globflags.out
-tap_done "global flag completion walks ice_global_opts"
+tap_check grep -qx -- '-h'          globflags.out
+tap_check grep -qx -- '--help'      globflags.out
+tap_done "global flag completion walks ice_global_opts (plus -h/--help)"
+
+"$BINARY" __complete 2 ice config "-" >cfghelp.out
+tap_check grep -qx -- '-h'     cfghelp.out
+tap_check grep -qx -- '--help' cfghelp.out
+tap_done "per-subcommand flag completion emits -h/--help"
 
 # ---- `ice __complete`: positional candidates ----
 
