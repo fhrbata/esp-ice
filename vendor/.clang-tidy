@@ -1,0 +1,7 @@
+# Vendored code is imported as-is from upstream and should not be
+# retroactively linted against ice's style rules.  Disable all checks
+# for anything under vendor/.  Re-sync procedures (documented in each
+# module's README.md) stay trivial: we never need to re-apply
+# lint-motivated edits on top of a fresh import.
+Checks: "-*"
+WarningsAsErrors: ""

@@ -11,6 +11,11 @@ ci:
 minimum_pre_commit_version: 3.3.0
 default_install_hook_types: [pre-commit,commit-msg]
 
+# Paths excluded from every hook.  vendor/ holds third-party source
+# imported verbatim; re-applying local lint/format/copyright edits on
+# every sync would defeat the point of the convention.
+exclude: '^vendor/'
+
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v6.0.0

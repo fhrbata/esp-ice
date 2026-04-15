@@ -155,7 +155,8 @@ LIB_SRCS := \
 	gzip.c \
 	xz.c \
 	reader.c \
-	tar.c
+	tar.c \
+	vendor/sha256/sha256.c
 
 # MAIN_SRCS provide the program entry point.  Excluded from libice.a
 # so that unit tests (and any future external libice consumer) can
