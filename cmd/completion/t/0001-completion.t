@@ -98,4 +98,14 @@ tap_done "completion <TAB> lists supported shells"
 tap_check test ! -s bval.out
 tap_done "-B <TAB> emits nothing (shell handles file completion)"
 
+# ---- `ice __complete`: elf2image flag candidates ----
+
+"$BINARY" __complete 2 ice elf2image "--" >e2i_flags.out
+tap_check grep -qx -- '--chip'        e2i_flags.out
+tap_check grep -qx -- '--flash-mode'  e2i_flags.out
+tap_check grep -qx -- '--flash-freq'  e2i_flags.out
+tap_check grep -qx -- '--flash-size'  e2i_flags.out
+tap_check grep -qx -- '--output'      e2i_flags.out
+tap_done "elf2image --<TAB> lists expected flags"
+
 tap_result

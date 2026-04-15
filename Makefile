@@ -51,6 +51,7 @@ BUILD_DEFINES := -DVERSION=\"$(VERSION)\"
 # headers (e.g. cmd/ldgen/lf.h) in the source file's own directory.
 BUILD_CFLAGS += -I$(CURDIR)
 
+
 # SANITIZE=1: enable AddressSanitizer for the whole build (libice,
 # ice, and the test binaries via SAN_FLAGS below).  Incompatible with
 # STATIC=1 because libasan is dynamically linked; release builds
@@ -114,6 +115,11 @@ PKG_NAME := $(NAME)-$(VERSION)-$(S)-$(ARCH)$(PKG_SUFFIX)
 # need to know which .c files implement which transitive dependency.
 # Static-archive linking also drops dead code from the final binary
 # (today: ar.c, elf.c, http.c have no live callers from main()).
+ESF_DEP    := deps/esp-serial-flasher
+ESF_PREFIX := $(CURDIR)/deps/install/$(TRIPLE)
+ESF_STAMP  := $(ESF_PREFIX)/lib/libespserialflasher.a
+ESF_CFLAGS := -I$(ESF_PREFIX)/include
+
 LIB_SRCS := \
 	ar.c \
 	cmake.c \
@@ -124,6 +130,7 @@ LIB_SRCS := \
 	cmd/completion/completion.c \
 	cmd/config/config.c \
 	cmd/configdep/configdep.c \
+	cmd/elf2image/elf2image.c \
 	cmd/flash/flash.c \
 	cmd/fullclean/fullclean.c \
 	cmd/help/help.c \
@@ -184,7 +191,9 @@ LDFLAGS += -static
 endif
 else
 LIBS := -lcurl
+BUILD_CFLAGS += $(ESF_CFLAGS)
 endif
+
 
 ifeq ($(S), win)
 
@@ -228,6 +237,9 @@ OBJDIRS := $(sort $(patsubst %/,%,$(dir $(OBJS))))
 
 all: $(BINARY)
 
+$(ESF_STAMP):
+	$(MAKE) -C $(ESF_DEP) PREFIX=$(ESF_PREFIX)
+
 define MANIFEST_XML
 <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
@@ -263,7 +275,7 @@ $(DIST):
 $(O)/context: FORCE | $(O)
 	@echo $(CONTEXT) | md5sum | cmp -s - $@ || echo $(CONTEXT) | md5sum > $@
 
-$(O)/%.o: %.c Makefile $(O)/context | $(OBJDIRS)
+$(O)/%.o: %.c Makefile $(O)/context | $(OBJDIRS) $(ESF_STAMP)
 	$(CC) $(BUILD_DEFINES) $(BUILD_CFLAGS) -MD -MP -o $@ -c $<
 
 ifdef STATIC
@@ -272,8 +284,11 @@ $(DEPS_STAMP):
 	$(MAKE) -C deps PREFIX=$(DEPS_PREFIX) S=$(S) TRIPLE=$(TRIPLE) $(if $(CROSS),CROSS=1)
 endif
 
-$(LIBICE): $(LIB_OBJS)
-	$(AR) rcs $@ $^
+$(LIBICE): $(LIB_OBJS) $(ESF_STAMP)
+	$(AR) rcs $@ $(LIB_OBJS)
+	cd $(ESF_PREFIX)/lib && $(AR) x libespserialflasher.a
+	$(AR) rcs $@ $(ESF_PREFIX)/lib/esp_elf_image.o $(ESF_PREFIX)/lib/sha256.o
+	rm -f $(ESF_PREFIX)/lib/esp_elf_image.o $(ESF_PREFIX)/lib/sha256.o
 
 # Link MAIN_OBJS first so ld picks up only the libice.a members the
 # binary actually references; unused modules (e.g. http.o today) drop
@@ -336,7 +351,7 @@ clang-format:
 	pre-commit run clang-format --all-files
 
 # Lint checks and WarningsAsErrors: see .clang-tidy in this directory.
-clang-tidy:
+clang-tidy: $(ESF_STAMP)
 	clang-tidy \
 		--extra-arg="--target=$(TRIPLE)" \
 		$(SRCS) \

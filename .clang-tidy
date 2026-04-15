@@ -15,7 +15,8 @@ Checks: >-
   -bugprone-command-processor,
   performance-*,
   -performance-no-int-to-ptr,
-  portability-*
+  portability-*,
+  -portability-avoid-pragma-once
 WarningsAsErrors: "*"
 FormatStyle: file
 CheckOptions:

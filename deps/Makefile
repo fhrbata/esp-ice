@@ -22,7 +22,7 @@ export PREFIX NPROC S TRIPLE CONFIGURE_HOST CMAKE_CROSS_FLAGS
 
 all: $(STAMP)
 
-$(STAMP): curl libyaml
+$(STAMP): curl libyaml esp-serial-flasher
 	@touch $@
 
 curl: mbedtls zlib
@@ -37,11 +37,15 @@ zlib:
 libyaml:
 	$(MAKE) -C libyaml
 
+esp-serial-flasher:
+	$(MAKE) -C esp-serial-flasher PREFIX=$(PREFIX)
+
 clean:
 	$(MAKE) -C zlib clean
 	$(MAKE) -C mbedtls clean
 	$(MAKE) -C curl clean
 	$(MAKE) -C libyaml clean
+	$(MAKE) -C esp-serial-flasher clean
 	rm -rf $(PREFIX) $(STAMP)
 
 # mrproper wipes the entire install tree (all TRIPLEs) and all
@@ -51,6 +55,7 @@ mrproper:
 	$(MAKE) -C mbedtls clean
 	$(MAKE) -C curl clean
 	$(MAKE) -C libyaml clean
+	$(MAKE) -C esp-serial-flasher mrproper PREFIX=$(PREFIX)
 	rm -rf $(CURDIR)/install
 
-.PHONY: all clean mrproper zlib mbedtls curl libyaml
+.PHONY: all clean mrproper zlib mbedtls curl libyaml esp-serial-flasher

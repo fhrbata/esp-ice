@@ -378,7 +378,8 @@ out:
 }
 
 /* ------------------------------------------------------------------ */
-/*  build.ninja patching (gen_esp32part.py → ice partition-table)    */
+/*  build.ninja patching (gen_esp32part.py  → ice partition-table,   */
+/*                         esptool elf2image → ice elf2image)        */
 /* ------------------------------------------------------------------ */
 
 static const char *mem_find(const char *p, const char *end, const char *needle,
@@ -482,6 +483,163 @@ done:
 	sbuf_release(&out);
 }
 
+/*
+ * Walk back n whitespace-delimited tokens from position p (which must point
+ * at the start of a token) toward line_start, returning a pointer to the
+ * start of the token that is n positions back.
+ *
+ * Each iteration first skips the separating spaces, then the token itself,
+ * ending up at the start of that token.
+ */
+static const char *back_n_tokens(const char *p, const char *line_start, int n)
+{
+	while (n-- > 0) {
+		/* Skip separating spaces to the left. */
+		while (p > line_start && p[-1] == ' ')
+			p--;
+		/* Skip the token characters to the left. */
+		while (p > line_start && p[-1] != ' ')
+			p--;
+	}
+	return p;
+}
+
+/*
+ * Replace the esptool elf2image invocation on a COMMAND line with the
+ * native `ice elf2image` equivalent.
+ *
+ * IDF's COMMAND line has the form:
+ *   cd <dir> && <python> -m esptool --chip <chip> elf2image <args> \
+ *       -o <out.bin> <in.elf> && cmake -E echo "..." && cmake -E md5sum ...
+ *
+ * We replace `<python> -m esptool` with `ice`, keep `--chip <chip>` which
+ * sits between `esptool` and `elf2image`, and keep all arguments after it.
+ */
+static void patch_elf2image_line(struct sbuf *out, const char *line, size_t len)
+{
+	static const char e2i_needle[] = "elf2image";
+	static const size_t e2ilen = sizeof(e2i_needle) - 1;
+	static const char esptool_needle[] = "esptool";
+	static const size_t elen = sizeof(esptool_needle) - 1;
+	static const char chip_needle[] = "--chip";
+	static const size_t chip_nlen = sizeof(chip_needle) - 1;
+
+	const char *end = line + len;
+
+	/* Find "esptool" as a quick pre-filter. */
+	const char *etool = mem_find(line, end, esptool_needle, elen);
+	if (!etool)
+		goto passthrough;
+
+	/* Find "elf2image" after "esptool". */
+	const char *e2i = mem_find(etool + elen, end, e2i_needle, e2ilen);
+	if (!e2i)
+		goto passthrough;
+
+	/* Walk back to the start of the "esptool" token. */
+	const char *etool_start = etool;
+	while (etool_start > line && etool_start[-1] != ' ')
+		etool_start--;
+
+	/* Step back two more tokens to reach "<python>": skip "-m", skip
+	 * "<python>". */
+	const char *invoke_start = back_n_tokens(etool_start, line, 2);
+
+	/* Extract --chip <value> from the gap between esptool and elf2image. */
+	const char *chip_arg =
+	    mem_find(etool + elen, e2i, chip_needle, chip_nlen);
+	const char *chip_val_start = NULL;
+	const char *chip_val_end = NULL;
+	if (chip_arg) {
+		chip_val_start = chip_arg + chip_nlen;
+		while (chip_val_start < e2i && *chip_val_start == ' ')
+			chip_val_start++;
+		chip_val_end = chip_val_start;
+		while (chip_val_end < e2i && *chip_val_end != ' ')
+			chip_val_end++;
+	}
+
+	/* Emit everything before `<python>`. */
+	sbuf_add(out, line, invoke_start - line);
+
+	/* Emit `ice elf2image --chip <chip>` in place of `<python> -m esptool
+	 * --chip <chip>`. */
+	{
+		const char *exe = process_exe();
+		sbuf_addstr(out, exe ? exe : "ice");
+	}
+	sbuf_addstr(out, " elf2image");
+	if (chip_val_start && chip_val_end > chip_val_start) {
+		sbuf_addstr(out, " --chip ");
+		sbuf_add(out, chip_val_start, chip_val_end - chip_val_start);
+	}
+
+	/* Emit everything after "elf2image" (the flash arguments and && tail).
+	 */
+	sbuf_add(out, e2i + e2ilen, end - (e2i + e2ilen));
+	return;
+
+passthrough:
+	sbuf_add(out, line, len);
+}
+
+static void patch_ninja_elf2image(const char *build_dir)
+{
+	static const char esptool_needle[] = "esptool";
+	static const char e2i_needle[] = "elf2image";
+	static const size_t elen = sizeof(esptool_needle) - 1;
+	static const size_t e2ilen = sizeof(e2i_needle) - 1;
+
+	struct sbuf ninja_path = SBUF_INIT;
+	struct sbuf content = SBUF_INIT;
+	struct sbuf out = SBUF_INIT;
+	const char *p, *end, *nl;
+	int modified = 0;
+	FILE *fp;
+
+	sbuf_addf(&ninja_path, "%s/build.ninja", build_dir);
+
+	if (sbuf_read_file(&content, ninja_path.buf) < 0)
+		goto done;
+
+	p = content.buf;
+	end = content.buf + content.len;
+
+	while (p < end) {
+		nl = memchr(p, '\n', end - p);
+		if (!nl)
+			nl = end;
+
+		size_t line_len = (size_t)(nl - p);
+
+		if (line_len > 11 && !memcmp(p, "  COMMAND =", 11) &&
+		    mem_find(p, nl, esptool_needle, elen) &&
+		    mem_find(p, nl, e2i_needle, e2ilen)) {
+			patch_elf2image_line(&out, p, line_len);
+			modified = 1;
+		} else {
+			sbuf_add(&out, p, line_len);
+		}
+
+		if (nl < end)
+			sbuf_addch(&out, '\n');
+		p = nl + (nl < end ? 1 : 0);
+	}
+
+	if (modified) {
+		fp = fopen(ninja_path.buf, "w");
+		if (fp) {
+			fwrite(out.buf, 1, out.len, fp);
+			fclose(fp);
+		}
+	}
+
+done:
+	sbuf_release(&ninja_path);
+	sbuf_release(&content);
+	sbuf_release(&out);
+}
+
 int run_cmake_target(const char *target, const char *label, int interactive)
 {
 	const char *build_dir;
@@ -497,6 +655,8 @@ int run_cmake_target(const char *target, const char *label, int interactive)
 
 	/* Replace gen_esp32part.py with ice partition-table on every build. */
 	patch_ninja(build_dir);
+	/* Replace esptool elf2image with ice elf2image on every build. */
+	patch_ninja_elf2image(build_dir);
 
 	config_get_bool("core.verbose", &verbose);
 
