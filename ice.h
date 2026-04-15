@@ -36,7 +36,6 @@
 #include "options.h"
 #include "pager.h"
 #include "platform.h"
-#include "process.h"
 #include "sbuf.h"
 #include "svec.h"
 #include "term.h"
