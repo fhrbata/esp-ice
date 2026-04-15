@@ -291,7 +291,7 @@ int pt_parse_csv(const char *path, struct pt_entry *entries, int *count,
 				    r->lineno);
 				goto out;
 			}
-			e->subtype = 0x06; /* 'undefined' */
+			e->subtype = PT_SUBTYPE_DATA_UNDEFINED;
 		}
 
 		/* offset */
@@ -330,14 +330,17 @@ int pt_parse_csv(const char *path, struct pt_entry *entries, int *count,
 		} else if (size_f[0]) {
 			uint32_t v;
 			if (size_f[0] == '-') {
-				uint32_t end_addr;
-				if (parse_int(size_f + 1, &end_addr) != 0) {
+				if (parse_int(size_f + 1, &v) != 0) {
 					err("line %d: bad size '%s'", r->lineno,
 					    size_f);
 					goto out;
 				}
-				/* Marker: MSB set → resolved after offsets. */
-				e->size = (uint32_t)(-(int32_t)end_addr);
+				/*
+				 * Store the target end-address; resolved
+				 * against the real offset in Phase 2.
+				 */
+				e->size = v;
+				e->size_is_end_addr = 1;
 			} else {
 				if (parse_int(size_f, &v) != 0) {
 					err("line %d: bad size '%s'", r->lineno,
@@ -423,10 +426,21 @@ int pt_parse_csv(const char *path, struct pt_entry *entries, int *count,
 			goto out;
 		}
 
-		/* Resolve negative size: stored as -(end_addr) in uint32. */
-		if ((int32_t)e->size < 0) {
-			uint32_t end_addr = (uint32_t)(-(int32_t)e->size);
-			e->size = end_addr - e->offset;
+		/*
+		 * Resolve "fill to this address" (CSV "-<hex>" size form):
+		 * e->size currently holds the target end-address, convert
+		 * it to the real length.  Error out if the end address
+		 * doesn't actually follow the partition's offset.
+		 */
+		if (e->size_is_end_addr) {
+			if (e->size <= e->offset) {
+				err("partition '%s' end address 0x%x is not "
+				    "after offset 0x%x",
+				    e->name, e->size, e->offset);
+				goto out;
+			}
+			e->size -= e->offset;
+			e->size_is_end_addr = 0;
 		}
 
 		last_end = e->offset + e->size;

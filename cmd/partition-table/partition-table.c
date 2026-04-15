@@ -140,9 +140,14 @@ int cmd_partition_table(int argc, const char **argv)
 		pt_opts.has_recovery_boot = 1;
 	}
 
-	/* --flash-size (e.g. "4MB") */
+	/* --flash-size: strictly "<decimal>MB", matches gen_esp32part.py. */
 	if (flash_size_str) {
-		uint32_t mb = (uint32_t)strtoul(flash_size_str, NULL, 10);
+		char *end;
+		uint32_t mb = (uint32_t)strtoul(flash_size_str, &end, 10);
+		if (end == flash_size_str || strcmp(end, "MB") != 0)
+			die("invalid --flash-size '%s'; expected NMB (e.g. "
+			    "4MB)",
+			    flash_size_str);
 		pt_opts.flash_size = mb * 1024 * 1024;
 	}
 

@@ -28,6 +28,9 @@
 #define PT_TYPE_BOOT 0x02
 #define PT_TYPE_PTABLE 0x03
 
+/* Named data subtypes (default for an empty data subtype field). */
+#define PT_SUBTYPE_DATA_UNDEFINED 0x06
+
 /* Secure boot modes */
 #define PT_SECURE_NONE 0
 #define PT_SECURE_V1 1
@@ -38,10 +41,11 @@ struct pt_entry {
 	uint8_t type;
 	uint8_t subtype;
 	uint32_t offset; /* explicit offset, or 0 if auto */
-	uint32_t size;
+	uint32_t size;	 /* size in bytes, or end-address (see flag below) */
 	uint8_t encrypted;
 	uint8_t readonly;
-	int offset_set; /* 1 if offset was given in CSV */
+	int offset_set;	      /* 1 if offset was given in CSV */
+	int size_is_end_addr; /* 1 if @size holds an end-address to resolve */
 };
 
 struct pt_options {
