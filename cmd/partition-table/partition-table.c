@@ -5,7 +5,7 @@
  */
 
 /**
- * @file cmd/partition_table/part_cmd.c
+ * @file cmd/partition-table/partition-table.c
  * @brief "ice partition-table" subcommand.
  *
  * Drop-in replacement for gen_esp32part.py (CSV → binary).
