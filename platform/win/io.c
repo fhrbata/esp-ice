@@ -370,3 +370,47 @@ int mkdir_w(const char *path, int mode)
 
 	return rv;
 }
+
+int dir_foreach(const char *path, int (*cb)(const char *name, void *ud),
+		void *ud)
+{
+	struct sbuf pattern = SBUF_INIT;
+	wchar_t *wpattern;
+	WIN32_FIND_DATAW fd;
+	HANDLE h;
+	struct svec names = SVEC_INIT;
+	int rc = 0;
+
+	sbuf_addf(&pattern, "%s\\*", path);
+	wpattern = mbs_to_wcs(pattern.buf);
+	sbuf_release(&pattern);
+	if (!wpattern)
+		return -1;
+
+	h = FindFirstFileW(wpattern, &fd);
+	free(wpattern);
+	if (h == INVALID_HANDLE_VALUE)
+		return -1;
+
+	do {
+		char *utf8;
+
+		if (!wcscmp(fd.cFileName, L".") || !wcscmp(fd.cFileName, L".."))
+			continue;
+
+		utf8 = wcs_to_mbs(fd.cFileName);
+		if (utf8) {
+			svec_push(&names, utf8);
+			free(utf8);
+		}
+	} while (FindNextFileW(h, &fd));
+	FindClose(h);
+
+	for (size_t i = 0; i < names.nr; i++) {
+		rc = cb(names.v[i], ud);
+		if (rc)
+			break;
+	}
+	svec_clear(&names);
+	return rc;
+}

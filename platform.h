@@ -118,6 +118,27 @@ int putenv(char *);
 int term_width(int fd);
 
 /**
+ * @brief Iterate over the entries of a directory.
+ *
+ * Reads every entry in @p path (skipping "." and "..") into an
+ * internal buffer, closes the directory, and then calls @p cb once per
+ * entry.  The two-pass design lets the callback safely mutate @p path
+ * (unlink, rmdir, rename entries) -- single-pass readdir would be
+ * unspecified after modification.
+ *
+ * Iteration stops when the callback returns non-zero; that value is
+ * returned to the caller.
+ *
+ * @param path  Directory to enumerate (UTF-8 on Windows).
+ * @param cb    Invoked with each entry's bare name (no path prefix).
+ * @param ud    Opaque pointer passed through to @p cb.
+ * @return 0 on success, -1 if @p path cannot be opened, or the first
+ *         non-zero value returned by @p cb.
+ */
+int dir_foreach(const char *path, int (*cb)(const char *name, void *ud),
+		void *ud);
+
+/**
  * @brief Return the absolute path of the running executable.
  *
  * Resolved on first call via the platform's native mechanism:

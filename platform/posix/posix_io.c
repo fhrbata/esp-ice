@@ -12,6 +12,7 @@
  * pointers before ice.h overrides them. ice.h is NOT the first include.
  * (Same pattern as platform/win/wconv.c -- see its file-level comment.)
  */
+#include <dirent.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
@@ -79,4 +80,32 @@ int fputs_p(const char *s, FILE *stream)
 	n = real_fputs(expanded.buf, stream);
 	sbuf_release(&expanded);
 	return n;
+}
+
+int dir_foreach(const char *path, int (*cb)(const char *name, void *ud),
+		void *ud)
+{
+	DIR *dir;
+	struct dirent *de;
+	struct svec names = SVEC_INIT;
+	int rc = 0;
+
+	dir = opendir(path);
+	if (!dir)
+		return -1;
+
+	while ((de = readdir(dir)) != NULL) {
+		if (!strcmp(de->d_name, ".") || !strcmp(de->d_name, ".."))
+			continue;
+		svec_push(&names, de->d_name);
+	}
+	closedir(dir);
+
+	for (size_t i = 0; i < names.nr; i++) {
+		rc = cb(names.v[i], ud);
+		if (rc)
+			break;
+	}
+	svec_clear(&names);
+	return rc;
 }
