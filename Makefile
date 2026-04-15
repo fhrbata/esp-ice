@@ -127,6 +127,8 @@ LIB_SRCS := \
 	cmd/flash/flash.c \
 	cmd/fullclean/fullclean.c \
 	cmd/help/help.c \
+	cmd/image/image.c \
+	cmd/image/elf2image.c \
 	cmd/ldgen/ldgen.c \
 	cmd/ldgen/lf.c \
 	cmd/menuconfig/menuconfig.c \
