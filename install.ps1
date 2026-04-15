@@ -5,18 +5,18 @@
 # esp-ice installer for Windows (PowerShell 5.1+ / PowerShell 7+).
 #
 # Usage:
-#   irm https://raw.githubusercontent.com/espressif/esp-ice/main/install.ps1 | iex
+#   irm https://raw.githubusercontent.com/fhrbata/esp-ice/main/install.ps1 | iex
 #
 # Environment overrides:
 #   $env:ICE_VERSION       Release tag (default: latest). Accepts "v0.2.0" or "0.2.0".
 #   $env:ICE_INSTALL_DIR   Destination directory
 #                          (default: $env:LOCALAPPDATA\Programs\ice\bin).
 #   $env:ICE_ARCH          Override detected architecture.
-#   $env:ICE_REPO          GitHub repository (default: espressif/esp-ice).
+#   $env:ICE_REPO          GitHub repository (default: fhrbata/esp-ice).
 
 $ErrorActionPreference = 'Stop'
 
-$repo    = if ($env:ICE_REPO)    { $env:ICE_REPO }    else { 'espressif/esp-ice' }
+$repo    = if ($env:ICE_REPO)    { $env:ICE_REPO }    else { 'fhrbata/esp-ice' }
 $version = if ($env:ICE_VERSION) { $env:ICE_VERSION } else { 'latest' }
 $installDir = if ($env:ICE_INSTALL_DIR) {
     $env:ICE_INSTALL_DIR

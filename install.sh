@@ -6,17 +6,17 @@
 # esp-ice installer for Linux and macOS.
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/espressif/esp-ice/main/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/fhrbata/esp-ice/main/install.sh | sh
 #
 # Environment overrides:
 #   ICE_VERSION       Release tag (default: latest). Accepts "v0.2.0" or "0.2.0".
 #   ICE_INSTALL_DIR   Destination directory (default: $HOME/.local/bin).
 #   ICE_ARCH          Override detected architecture (e.g. for armel vs armhf).
-#   ICE_REPO          GitHub repository (default: espressif/esp-ice).
+#   ICE_REPO          GitHub repository (default: fhrbata/esp-ice).
 
 set -eu
 
-: "${ICE_REPO:=espressif/esp-ice}"
+: "${ICE_REPO:=fhrbata/esp-ice}"
 : "${ICE_VERSION:=latest}"
 : "${ICE_INSTALL_DIR:=$HOME/.local/bin}"
 

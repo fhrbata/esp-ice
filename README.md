@@ -17,20 +17,20 @@ setup hint tailored to your shell.
 #### Linux / macOS
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/espressif/esp-ice/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/fhrbata/esp-ice/main/install.sh | sh
 ```
 
 Default install location is `$HOME/.local/bin/ice`.  Override with
 `ICE_INSTALL_DIR`, or pin a specific version with `ICE_VERSION`:
 
 ```sh
-ICE_VERSION=0.2.0 ICE_INSTALL_DIR=/usr/local/bin curl -fsSL https://raw.githubusercontent.com/espressif/esp-ice/main/install.sh | sh
+ICE_VERSION=0.2.0 ICE_INSTALL_DIR=/usr/local/bin curl -fsSL https://raw.githubusercontent.com/fhrbata/esp-ice/main/install.sh | sh
 ```
 
 #### Windows
 
 ```powershell
-irm https://raw.githubusercontent.com/espressif/esp-ice/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/fhrbata/esp-ice/main/install.ps1 | iex
 ```
 
 Default install location is `%LOCALAPPDATA%\Programs\ice\bin\ice.exe`
@@ -179,7 +179,7 @@ Before contributing, set up your development environment:
 
 1. Clone the repository:
    ```bash
-   git clone https://github.com/espressif/esp-ice.git
+   git clone https://github.com/fhrbata/esp-ice.git
    cd esp-ice
    ```
 
