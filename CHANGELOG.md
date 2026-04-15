@@ -1,3 +1,11 @@
+## v0.3.0 (2026-04-15)
+
+### ✨ New Features
+
+- **install**: add curl|sh and iwr|iex release installer scripts *(Frantisek Hrbata - c113c85)*
+- **completion**: add PowerShell shell support *(Frantisek Hrbata - 4b27aae)*
+
+
 ## v0.2.0 (2026-04-15)
 
 ### ✨ New Features
