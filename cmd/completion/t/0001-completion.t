@@ -24,7 +24,11 @@ tap_done "ice completion zsh emits compdef registration"
 tap_check grep -q 'complete -c ice -f -a' fish.out
 tap_done "ice completion fish emits complete registration"
 
-tap_check ! "$BINARY" completion powershell 2>/dev/null
+"$BINARY" completion powershell >pwsh.out
+tap_check grep -q "Register-ArgumentCompleter -Native -CommandName 'ice'" pwsh.out
+tap_done "ice completion powershell emits Register-ArgumentCompleter registration"
+
+tap_check ! "$BINARY" completion nushell 2>/dev/null
 tap_done "unknown shell is rejected with non-zero exit"
 
 # ---- `ice __complete`: subcommand-name candidates ----
@@ -82,9 +86,10 @@ tap_check ! grep -qx '__complete' helpcmds.out
 tap_done "help <TAB> lists visible subcommands"
 
 "$BINARY" __complete 2 ice completion "" >shells.out
-tap_check grep -qx 'bash' shells.out
-tap_check grep -qx 'zsh'  shells.out
-tap_check grep -qx 'fish' shells.out
+tap_check grep -qx 'bash'       shells.out
+tap_check grep -qx 'zsh'        shells.out
+tap_check grep -qx 'fish'       shells.out
+tap_check grep -qx 'powershell' shells.out
 tap_done "completion <TAB> lists supported shells"
 
 # ---- `ice __complete`: option value falls through to file completion ----

@@ -10,13 +10,14 @@
  *
  * Two subcommands live here:
  *
- *   ice completion bash|zsh|fish
+ *   ice completion bash|zsh|fish|powershell
  *     Public.  Prints a tiny shell-specific init snippet on stdout,
  *     meant to be evaluated from the user's rc file:
  *
  *         eval "$(ice completion bash)"       # ~/.bashrc
  *         eval "$(ice completion zsh)"        # ~/.zshrc
  *         ice completion fish | source        # fish
+ *         ice completion powershell | Out-String | Invoke-Expression
  *
  *     The snippet binds a dispatch function to the `ice` command that
  *     re-invokes the hidden __complete backend on every TAB.
@@ -133,6 +134,7 @@ static void complete_completion_arg(const char *prefix)
 	emit("bash", prefix);
 	emit("zsh", prefix);
 	emit("fish", prefix);
+	emit("powershell", prefix);
 }
 
 /*
@@ -302,6 +304,31 @@ static const char fish_script[] =
 	"end\n"
 	"complete -c ice -f -a '(__ice_complete)'\n";
 
+static const char powershell_script[] =
+	"# ice PowerShell completion\n"
+	"# install: ice completion powershell | Out-String | Invoke-Expression\n"
+	"Register-ArgumentCompleter -Native -CommandName 'ice' -ScriptBlock {\n"
+	"    param($wordToComplete, $commandAst, $cursorPosition)\n"
+	"\n"
+	"    $words = @($commandAst.CommandElements | ForEach-Object { $_.ToString() })\n"
+	"    if ($wordToComplete -eq '') { $words += '' }\n"
+	"    $cword = $words.Count - 1\n"
+	"\n"
+	"    $results = @(& ice __complete $cword @words 2>$null | Where-Object { $_ })\n"
+	"    if ($results.Count -gt 0) {\n"
+	"        $results | ForEach-Object {\n"
+	"            [System.Management.Automation.CompletionResult]::new(\n"
+	"                $_, $_, 'ParameterValue', $_)\n"
+	"        }\n"
+	"    } else {\n"
+	"        Get-ChildItem -Path \"$wordToComplete*\" -ErrorAction SilentlyContinue |\n"
+	"            ForEach-Object {\n"
+	"                [System.Management.Automation.CompletionResult]::new(\n"
+	"                    $_.Name, $_.Name, 'ProviderItem', $_.FullName)\n"
+	"            }\n"
+	"    }\n"
+	"}\n";
+
 static const struct cmd_manual completion_manual = {
 	.description =
 	H_PARA("Emits a shell-specific completion script on standard "
@@ -319,7 +346,8 @@ static const struct cmd_manual completion_manual = {
 	.examples =
 	H_EXAMPLE("eval \"$(ice completion bash)\"    # ~/.bashrc")
 	H_EXAMPLE("eval \"$(ice completion zsh)\"     # ~/.zshrc")
-	H_EXAMPLE("ice completion fish | source       # fish"),
+	H_EXAMPLE("ice completion fish | source       # fish")
+	H_EXAMPLE("ice completion powershell | Out-String | Invoke-Expression   # $PROFILE"),
 
 	.extras =
 	H_SECTION("SUPPORTED SHELLS")
@@ -332,19 +360,24 @@ static const struct cmd_manual completion_manual = {
 	       "no candidates are produced.")
 	H_ITEM("fish",
 	       "Binds via @b{complete -c ice -f -a}.  Re-invokes the "
-	       "backend each @b{TAB}."),
+	       "backend each @b{TAB}.")
+	H_ITEM("powershell",
+	       "Binds via @b{Register-ArgumentCompleter -Native}.  Falls "
+	       "back to @b{Get-ChildItem} for filename completion when the "
+	       "backend produces no candidates.  Works in Windows PowerShell "
+	       "5.1 and PowerShell 7+."),
 };
 /* clang-format on */
 
 int cmd_completion(int argc, const char **argv)
 {
-	const char *usage[] = {"ice completion bash|zsh|fish", NULL};
+	const char *usage[] = {"ice completion bash|zsh|fish|powershell", NULL};
 	struct option opts[] = {OPT_END()};
 
 	argc =
 	    parse_options_manual(argc, argv, opts, usage, &completion_manual);
 	if (argc != 1)
-		die("usage: ice completion bash|zsh|fish");
+		die("usage: ice completion bash|zsh|fish|powershell");
 
 	if (!strcmp(argv[0], "bash"))
 		fputs(bash_script, stdout);
@@ -352,8 +385,12 @@ int cmd_completion(int argc, const char **argv)
 		fputs(zsh_script, stdout);
 	else if (!strcmp(argv[0], "fish"))
 		fputs(fish_script, stdout);
+	else if (!strcmp(argv[0], "powershell"))
+		fputs(powershell_script, stdout);
 	else
-		die("unknown shell '%s' (supported: bash, zsh, fish)", argv[0]);
+		die("unknown shell '%s' (supported: bash, zsh, fish, "
+		    "powershell)",
+		    argv[0]);
 	return EXIT_SUCCESS;
 }
 
