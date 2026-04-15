@@ -22,6 +22,7 @@
 
 int cmd_image_elf2image(int argc, const char **argv);
 int cmd_image_info(int argc, const char **argv);
+int cmd_image_merge(int argc, const char **argv);
 
 struct image_sub {
 	const char *name;
@@ -33,6 +34,8 @@ static const struct image_sub image_subs[] = {
     {"elf2image", cmd_image_elf2image,
      "convert an ELF executable to an ESP flash image"},
     {"info", cmd_image_info, "display the structure of an ESP flash image"},
+    {"merge", cmd_image_merge,
+     "combine multiple flash images at offsets into one"},
     {NULL, NULL, NULL},
 };
 
@@ -65,6 +68,9 @@ static const struct cmd_manual manual = {
 	       "Pretty-print the structure of a flash image: chip, "
 	       "flash params, segments with memory-region labels, "
 	       "checksum / SHA-256 validity, @c esp_app_desc_t.")
+	H_ITEM("merge",
+	       "Combine multiple flash images at given offsets into a "
+	       "single output file, padding gaps with 0xFF.")
 };
 /* clang-format on */
 

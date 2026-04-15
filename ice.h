@@ -80,6 +80,7 @@ int cmd_size(int argc, const char **argv);
 extern const struct option cmd_config_opts[];
 extern const struct option cmd_image_elf2image_opts[];
 extern const struct option cmd_image_info_opts[];
+extern const struct option cmd_image_merge_opts[];
 extern const struct option cmd_ldgen_opts[];
 extern const struct option cmd_partition_table_opts[];
 extern const struct option cmd_set_target_opts[];
