@@ -174,11 +174,11 @@ int cmd_image_elf2image(int argc, const char **argv)
 	if (!opt_flash_freq)
 		die("--flash-freq is required");
 
-	enum e2i_chip chip = e2i_chip_by_name(opt_chip);
+	enum bin_chip chip = bin_chip_by_name(opt_chip);
 
-	if (chip == E2I_CHIP_MAX) {
+	if (chip == BIN_CHIP_MAX) {
 		struct sbuf names = SBUF_INIT;
-		for (const char *const *n = e2i_chip_names(); *n; n++) {
+		for (const char *const *n = bin_chip_names(); *n; n++) {
 			if (names.len > 0)
 				sbuf_addstr(&names, ", ");
 			sbuf_addstr(&names, *n);

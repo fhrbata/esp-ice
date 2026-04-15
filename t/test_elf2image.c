@@ -119,7 +119,7 @@ int main(void)
 	cfg.flash_freq = "40m";
 	cfg.flash_size = "2MB";
 
-	e2i_build(elf.buf, elf.len, E2I_CHIP_ESP32, &cfg, &img);
+	e2i_build(elf.buf, elf.len, BIN_CHIP_ESP32, &cfg, &img);
 
 	/* Basic structural checks on the generated image. */
 	tap_check(img.len > 24);
@@ -162,7 +162,7 @@ int main(void)
 
 	/* Re-running with the same config should be deterministic. */
 	struct sbuf img2 = SBUF_INIT;
-	e2i_build(elf.buf, elf.len, E2I_CHIP_ESP32, &cfg, &img2);
+	e2i_build(elf.buf, elf.len, BIN_CHIP_ESP32, &cfg, &img2);
 	tap_check(img.len == img2.len);
 	tap_check(memcmp(img.buf, img2.buf, img.len) == 0);
 	tap_done("e2i_build is deterministic for a fixed ELF + config");
@@ -172,7 +172,7 @@ int main(void)
 	/* Flipping append_sha256 off drops 32 bytes. */
 	struct sbuf img3 = SBUF_INIT;
 	cfg.append_sha256 = false;
-	e2i_build(elf.buf, elf.len, E2I_CHIP_ESP32, &cfg, &img3);
+	e2i_build(elf.buf, elf.len, BIN_CHIP_ESP32, &cfg, &img3);
 	tap_check(img3.len + 32 == img.len);
 	tap_check((uint8_t)img3.buf[23] == 0); /* digest flag cleared */
 	tap_done("append_sha256=false removes the final 32-byte digest");
@@ -180,22 +180,22 @@ int main(void)
 	sbuf_release(&img3);
 
 	/* Chip-by-name: spot-check a few. */
-	tap_check(e2i_chip_by_name("esp32") == E2I_CHIP_ESP32);
-	tap_check(e2i_chip_by_name("esp32c3") == E2I_CHIP_ESP32C3);
-	tap_check(e2i_chip_by_name("esp32p4") == E2I_CHIP_ESP32P4);
-	tap_check(e2i_chip_by_name("nope") == E2I_CHIP_MAX);
-	tap_check(e2i_chip_by_name(NULL) == E2I_CHIP_MAX);
-	tap_done("e2i_chip_by_name resolves known chips and rejects unknown");
+	tap_check(bin_chip_by_name("esp32") == BIN_CHIP_ESP32);
+	tap_check(bin_chip_by_name("esp32c3") == BIN_CHIP_ESP32C3);
+	tap_check(bin_chip_by_name("esp32p4") == BIN_CHIP_ESP32P4);
+	tap_check(bin_chip_by_name("nope") == BIN_CHIP_MAX);
+	tap_check(bin_chip_by_name(NULL) == BIN_CHIP_MAX);
+	tap_done("bin_chip_by_name resolves known chips and rejects unknown");
 
-	tap_check(strcmp(e2i_chip_name(E2I_CHIP_ESP32C6), "esp32c6") == 0);
-	tap_done("e2i_chip_name round-trips");
+	tap_check(strcmp(bin_chip_name(BIN_CHIP_ESP32C6), "esp32c6") == 0);
+	tap_done("bin_chip_name round-trips");
 
-	const char *const *names = e2i_chip_names();
+	const char *const *names = bin_chip_names();
 	int listed = 0;
 	for (; *names != NULL; names++)
 		listed++;
-	tap_check(listed == E2I_CHIP_MAX);
-	tap_done("e2i_chip_names lists every supported chip");
+	tap_check(listed == BIN_CHIP_MAX);
+	tap_done("bin_chip_names lists every supported chip");
 
 	sbuf_release(&img);
 	sbuf_release(&elf);

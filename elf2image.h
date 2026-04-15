@@ -15,7 +15,9 @@
  *
  * The engine is independent of the CLI: @c cmd/image/elf2image.c
  * handles argument parsing, file I/O, and user-facing validation,
- * and calls into this module for the byte-level work.
+ * and calls into this module for the byte-level work.  Chip identity
+ * and the per-chip tables live in @ref binary.h so the image reader
+ * (@c ice @c image @c info) and writer share one source of truth.
  *
  * Scope: ESP32 family (ESP32, S2, S3, C2, C3, C5, C6, H2, P4).
  * ESP8266 uses a different image format (V1/V2, no extended header)
@@ -49,25 +51,9 @@
 #include <stddef.h>
 #include <stdint.h>
 
-struct sbuf;
+#include "binary.h"
 
-/**
- * Supported target chips.  Order matches the preferred listing for
- * help output (newest RISC-V families last).  Each entry corresponds
- * to one row in the per-chip tables inside elf2image.c.
- */
-enum e2i_chip {
-	E2I_CHIP_ESP32,
-	E2I_CHIP_ESP32S2,
-	E2I_CHIP_ESP32S3,
-	E2I_CHIP_ESP32C2,
-	E2I_CHIP_ESP32C3,
-	E2I_CHIP_ESP32C5,
-	E2I_CHIP_ESP32C6,
-	E2I_CHIP_ESP32H2,
-	E2I_CHIP_ESP32P4,
-	E2I_CHIP_MAX
-};
+struct sbuf;
 
 /**
  * Image configuration.  All fields are optional in the sense that
@@ -75,14 +61,13 @@ enum e2i_chip {
  * individual fields before calling @ref e2i_build.
  *
  * String fields match esptool's CLI vocabulary exactly:
- *   flash_mode: "qio" | "qout" | "dio" | "dout" | "keep"
+ *   flash_mode: "qio" | "qout" | "dio" | "dout"
  *   flash_size: "1MB" | "2MB" | "4MB" | "8MB" | "16MB" | "32MB"
- *               | "64MB" | "128MB" | "keep"
+ *               | "64MB" | "128MB"
  *   flash_freq: chip-dependent; common values include
- *               "80m" | "40m" | "26m" | "20m" | "keep"
+ *               "80m" | "40m" | "26m" | "20m"
  *               (ESP32-C2:  "60m" | "30m" | "20m" | "15m")
  *               (ESP32-H2:  "48m" | "24m" | "16m" | "12m")
- *               ("keep" leaves the byte already in flash untouched.)
  *
  * e2i_build() dies with a descriptive error if a value is not valid
  * for the target chip.
@@ -99,54 +84,27 @@ struct e2i_config {
 
 /**
  * Initialiser producing esptool-compatible defaults: DIO flash mode,
- * "keep" for freq and size, no chip-revision constraints, digest
- * appended (required by ROM bootloader on ESP32+), no ELF hash
- * patching.
+ * undefined flash_freq/flash_size (caller must set), no
+ * chip-revision constraints, digest appended (required by ROM
+ * bootloader on ESP32+), no ELF hash patching.
  *
  * Usage:
  *   struct e2i_config cfg = E2I_CONFIG_DEFAULT();
  *   cfg.flash_mode = "qio";
+ *   cfg.flash_freq = "40m";
+ *   cfg.flash_size = "2MB";
  *   ...
  */
 #define E2I_CONFIG_DEFAULT()                                                   \
 	{                                                                      \
 	    .flash_mode = "dio",                                               \
-	    .flash_freq = "keep",                                              \
-	    .flash_size = "keep",                                              \
+	    .flash_freq = NULL,                                                \
+	    .flash_size = NULL,                                                \
 	    .min_rev_full = 0,                                                 \
 	    .max_rev_full = 0xFFFF,                                            \
 	    .append_sha256 = true,                                             \
 	    .elf_sha256_offset = 0,                                            \
 	}
-
-/**
- * @brief Look up a chip by its canonical short name.
- *
- * Accepts the lower-case IDF-style identifiers (@c esp32,
- * @c esp32s2, @c esp32c3, …).  Returns @c E2I_CHIP_MAX if the name
- * is unknown, so the caller can report a user-friendly error.
- *
- * @param name  Canonical chip name (e.g. "esp32c3").
- * @return      A valid @ref e2i_chip, or @c E2I_CHIP_MAX if no match.
- */
-enum e2i_chip e2i_chip_by_name(const char *name);
-
-/**
- * @brief Reverse of @ref e2i_chip_by_name.
- *
- * @param chip  Chip identifier.
- * @return      Canonical short name, or "?" if @p chip is out of range.
- */
-const char *e2i_chip_name(enum e2i_chip chip);
-
-/**
- * @brief NULL-terminated list of all supported chip names.
- *
- * Useful for CLI help text and shell completion.  The array and the
- * strings it points to have static storage duration; callers must
- * not free them.
- */
-const char *const *e2i_chip_names(void);
 
 /**
  * @brief Convert an ELF executable to an ESP flash image.
@@ -171,7 +129,7 @@ const char *const *e2i_chip_names(void);
  * @param cfg      Image configuration.
  * @param out      sbuf to receive the generated image (grown as needed).
  */
-void e2i_build(const void *elf, size_t elf_len, enum e2i_chip chip,
+void e2i_build(const void *elf, size_t elf_len, enum bin_chip chip,
 	       const struct e2i_config *cfg, struct sbuf *out);
 
 #endif /* ELF2IMAGE_H */
