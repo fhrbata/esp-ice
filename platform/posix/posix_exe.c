@@ -18,21 +18,27 @@
 #include <mach-o/dyld.h>
 #endif
 
-const char *get_executable_path(const char *argv0)
+const char *process_exe(void)
 {
 	static char buf[4096];
+	static const char *result;
+	static int initialized;
+
+	if (initialized)
+		return result;
+	initialized = 1;
 
 #ifdef __APPLE__
 	uint32_t size = (uint32_t)sizeof(buf);
 	if (_NSGetExecutablePath(buf, &size) == 0)
-		return buf;
+		result = buf;
 #else
 	ssize_t n = readlink("/proc/self/exe", buf, sizeof(buf) - 1);
 	if (n > 0) {
 		buf[n] = '\0';
-		return buf;
+		result = buf;
 	}
 #endif
 
-	return argv0;
+	return result;
 }

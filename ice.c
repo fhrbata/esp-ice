@@ -14,8 +14,6 @@
  */
 #include "ice.h"
 
-const char *ice_executable;
-
 const struct cmd_struct ice_commands[] = {
     {.name = "build", .fn = cmd_build, .summary = "build the default target"},
     {.name = "clean", .fn = cmd_clean, .summary = "remove build artifacts"},

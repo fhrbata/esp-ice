@@ -15,11 +15,18 @@
 
 #include "../../ice.h"
 
-const char *get_executable_path(const char *argv0)
+const char *process_exe(void)
 {
 	static char buf[4096];
+	static const char *result;
+	static int initialized;
+
+	if (initialized)
+		return result;
+	initialized = 1;
+
 	DWORD n = GetModuleFileNameA(NULL, buf, (DWORD)sizeof(buf));
 	if (n > 0 && n < (DWORD)sizeof(buf))
-		return buf;
-	return argv0;
+		result = buf;
+	return result;
 }

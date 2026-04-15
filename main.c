@@ -196,8 +196,6 @@ int main(int argc, const char **argv)
 	const char *build_override = NULL;
 	const struct cmd_struct *cmd;
 
-	ice_executable = get_executable_path(argv[0]);
-
 	/* Enable color early so die() in parse_options is colored. */
 	color_init(STDERR_FILENO);
 

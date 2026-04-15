@@ -399,8 +399,8 @@ static void patch_command_line(struct sbuf *out, const char *line, size_t len)
 		 *   2nd call: display   -- replace with true
 		 */
 		if (occurrence == 0) {
-			sbuf_addstr(out,
-				    ice_executable ? ice_executable : "ice");
+			const char *exe = process_exe();
+			sbuf_addstr(out, exe ? exe : "ice");
 			sbuf_addstr(out, " partition-table");
 		} else {
 			sbuf_addstr(out, "true");

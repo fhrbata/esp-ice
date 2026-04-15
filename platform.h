@@ -120,14 +120,16 @@ int term_width(int fd);
 /**
  * @brief Return the absolute path of the running executable.
  *
- * Uses the platform's native mechanism (/proc/self/exe on Linux,
- * _NSGetExecutablePath on macOS, GetModuleFileNameA on Windows).
- * Falls back to @p argv0 if the native query fails.
+ * Resolved on first call via the platform's native mechanism:
+ * /proc/self/exe on Linux, _NSGetExecutablePath on macOS,
+ * GetModuleFileName on Windows.  Cached for the lifetime of the
+ * process.
  *
- * @param argv0  argv[0] from main(), used as fallback.
- * @return Pointer to a static buffer holding the path.
+ * @return Pointer to a static buffer holding the path, or NULL if
+ *   the native query failed.  Callers that need a usable name on
+ *   failure should fall back to "ice" and rely on PATH lookup.
  */
-const char *get_executable_path(const char *argv0);
+const char *process_exe(void);
 
 /* ------------------------------------------------------------------ */
 /*  Child process API                                                 */

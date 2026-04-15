@@ -40,12 +40,6 @@
 #include "svec.h"
 #include "term.h"
 
-/** Absolute path to the running ice binary (set early in main()). */
-extern const char *ice_executable;
-
-/** Return the absolute path of the running binary; argv0 is a fallback. */
-const char *get_executable_path(const char *argv0);
-
 /* Subcommands -- cmake wrappers (see cmake.h) */
 int cmd_build(int argc, const char **argv);
 int cmd_clean(int argc, const char **argv);
