@@ -97,6 +97,9 @@ if ($pathUpdated) {
   # Enable tab completion (add to `$PROFILE)
   ice completion powershell | Out-String | Invoke-Expression
 
+  # Get started
+  ice
+
 Note: the binary is currently unsigned (PoC).  On first launch,
 Windows SmartScreen may warn "Windows protected your PC" -- click
 "More info" then "Run anyway".

@@ -140,4 +140,10 @@ EOF
 EOF
 		;;
 esac
+
+cat <<'EOF'
+
+  # Get started
+  ice
+EOF
 echo
