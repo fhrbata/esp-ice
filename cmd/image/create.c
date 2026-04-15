@@ -5,12 +5,13 @@
  */
 
 /**
- * @file cmd/image/elf2image.c
- * @brief "ice image elf2image" subcommand.
+ * @file cmd/image/create.c
+ * @brief "ice image create" subcommand.
  *
  * Thin CLI wrapper around the @ref elf2image.h engine.  Parses the
- * esptool-style flag set, reads the input ELF, calls e2i_build, and
- * writes the generated image to disk.
+ * esptool-compatible flag set, reads the input ELF, calls e2i_build,
+ * and writes the generated image to disk.  Aliased as @c elf2image
+ * for drop-in compatibility with @c esptool invocations.
  */
 #include "elf2image.h"
 #include "ice.h"
@@ -21,7 +22,9 @@ static const struct cmd_manual manual = {
 	H_PARA("Drop-in replacement for @b{esptool elf2image}.  Reads an "
 	       "ELF executable produced by the IDF toolchain and writes "
 	       "the corresponding ESP flash image.  Output is bootable "
-	       "on the target chip's ROM bootloader.")
+	       "on the target chip's ROM bootloader.  Invocable as "
+	       "@b{ice image create} or @b{ice image elf2image} "
+	       "(compatibility alias).")
 	H_PARA("@b{--chip} and @b{--flash-freq} are required; everything "
 	       "else has sensible defaults or is silently accepted for "
 	       "compatibility with @b{esptool}'s CLI (so invocations "
@@ -29,10 +32,10 @@ static const struct cmd_manual manual = {
 	       "to @b{ice image} unchanged)."),
 
 	.examples =
-	H_EXAMPLE("ice image elf2image --chip esp32 --flash-mode dio "
+	H_EXAMPLE("ice image create --chip esp32 --flash-mode dio "
 		  "--flash-freq 40m --flash-size 4MB "
 		  "-o build/app.bin build/app.elf")
-	H_EXAMPLE("ice image elf2image --chip esp32c3 --flash-mode dio "
+	H_EXAMPLE("ice image create --chip esp32c3 --flash-mode dio "
 		  "--flash-freq 80m --flash-size 2MB "
 		  "--elf-sha256-offset 0xb0 "
 		  "-o build/app.bin build/app.elf"),
@@ -46,12 +49,12 @@ static const struct cmd_manual manual = {
 /* clang-format on */
 
 static const char *usage[] = {
-    "ice image elf2image --chip <chip> [options] -o <out.bin> <in.elf>",
+    "ice image create --chip <chip> [options] -o <out.bin> <in.elf>",
     NULL,
 };
 
 /* File-scope so the option table is const and the completion backend
- * can walk it through cmd_image_elf2image_opts. */
+ * can walk it through cmd_image_create_opts. */
 static const char *opt_chip;
 static const char *opt_out;
 static const char *opt_flash_mode = "dio";
@@ -72,7 +75,7 @@ static int opt_ram_only_header;
 static int opt_min_rev_legacy;
 static const char *opt_version;
 
-const struct option cmd_image_elf2image_opts[] = {
+const struct option cmd_image_create_opts[] = {
     OPT_STRING(0, "chip", &opt_chip, "name",
 	       "target chip (e.g. esp32, esp32s3, esp32c3)"),
     OPT_STRING('o', NULL, &opt_out, "path", "output image path"),
@@ -154,13 +157,13 @@ static size_t flash_size_bytes(const char *s)
 	return (size_t)mb * 1024u * 1024u;
 }
 
-int cmd_image_elf2image(int argc, const char **argv)
+int cmd_image_create(int argc, const char **argv)
 {
 	struct sbuf elf = SBUF_INIT;
 	struct sbuf img = SBUF_INIT;
 	FILE *fp;
 
-	argc = parse_options_manual(argc, argv, cmd_image_elf2image_opts, usage,
+	argc = parse_options_manual(argc, argv, cmd_image_create_opts, usage,
 				    &manual);
 
 	if (argc < 1)

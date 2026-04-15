@@ -380,7 +380,7 @@ out:
 /* ------------------------------------------------------------------ */
 /*  build.ninja patching                                              */
 /*    gen_esp32part.py   → ice partition-table                        */
-/*    esptool elf2image  → ice image elf2image                        */
+/*    esptool elf2image  → ice image create                           */
 /* ------------------------------------------------------------------ */
 
 static const char *mem_find(const char *p, const char *end, const char *needle,
@@ -504,13 +504,13 @@ static const char *back_n_tokens(const char *p, const char *line_start, int n)
 
 /*
  * Replace the esptool elf2image invocation on a COMMAND line with
- * the native `ice image elf2image` equivalent.  IDF's COMMAND line
- * has the form:
+ * the native `ice image create` equivalent.  IDF's COMMAND line has
+ * the form:
  *
  *   cd <dir> && <python> -m esptool --chip <chip> elf2image <args> \
  *       -o <out.bin> <in.elf> && cmake -E echo "..." && ...
  *
- * We rewrite `<python> -m esptool` to `ice image elf2image`, then
+ * We rewrite `<python> -m esptool` to `ice image create`, then
  * re-emit the captured `--chip <chip>` argument (which lives between
  * `esptool` and `elf2image`) plus everything after `elf2image`.
  */
@@ -561,7 +561,7 @@ static void patch_elf2image_line(struct sbuf *out, const char *line, size_t len)
 
 		sbuf_addstr(out, exe ? exe : "ice");
 	}
-	sbuf_addstr(out, " image elf2image");
+	sbuf_addstr(out, " image create");
 	if (chip_val_start && chip_val_end > chip_val_start) {
 		sbuf_addstr(out, " --chip ");
 		sbuf_add(out, chip_val_start, chip_val_end - chip_val_start);
@@ -642,7 +642,7 @@ int run_cmake_target(const char *target, const char *label, int interactive)
 	/* Replace gen_esp32part.py with ice partition-table on every build. */
 	patch_ninja(build_dir);
 	/* Replace `<python> -m esptool ... elf2image` with `ice image
-	 * elf2image` on every build. */
+	 * create` on every build. */
 	patch_ninja_elf2image(build_dir);
 
 	config_get_bool("core.verbose", &verbose);

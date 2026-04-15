@@ -128,7 +128,7 @@ LIB_SRCS := \
 	cmd/fullclean/fullclean.c \
 	cmd/help/help.c \
 	cmd/image/image.c \
-	cmd/image/elf2image.c \
+	cmd/image/create.c \
 	cmd/image/info.c \
 	cmd/image/merge.c \
 	cmd/ldgen/ldgen.c \

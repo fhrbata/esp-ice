@@ -20,7 +20,7 @@
  */
 #include "ice.h"
 
-int cmd_image_elf2image(int argc, const char **argv);
+int cmd_image_create(int argc, const char **argv);
 int cmd_image_info(int argc, const char **argv);
 int cmd_image_merge(int argc, const char **argv);
 
@@ -28,15 +28,20 @@ struct image_sub {
 	const char *name;
 	int (*fn)(int argc, const char **argv);
 	const char *summary;
+	int hidden; /* alias -- not listed in bare help, still dispatchable */
 };
 
 static const struct image_sub image_subs[] = {
-    {"elf2image", cmd_image_elf2image,
-     "convert an ELF executable to an ESP flash image"},
-    {"info", cmd_image_info, "display the structure of an ESP flash image"},
+    {"create", cmd_image_create, "create a flash image from an ELF executable",
+     0},
+    {"info", cmd_image_info, "display the structure of an ESP flash image", 0},
     {"merge", cmd_image_merge,
-     "combine multiple flash images at offsets into one"},
-    {NULL, NULL, NULL},
+     "combine multiple flash images at offsets into one", 0},
+    /* Compatibility alias for esptool muscle memory -- same handler
+     * as "create", hidden from listings so the help text stays clean. */
+    {"elf2image", cmd_image_create,
+     "alias for 'create' (esptool compatibility)", 1},
+    {NULL, NULL, NULL, 0},
 };
 
 static const char *image_usage[] = {
@@ -56,14 +61,15 @@ static const struct cmd_manual manual = {
 	       "a specific subcommand."),
 
 	.examples =
-	H_EXAMPLE("ice image elf2image --chip esp32 --flash-mode dio "
+	H_EXAMPLE("ice image create --chip esp32 --flash-mode dio "
 		  "--flash-freq 40m --flash-size 2MB -o app.bin app.elf"),
 
 	.extras =
 	H_SECTION("SUBCOMMANDS")
-	H_ITEM("elf2image",
-	       "Convert an ELF executable to an ESP flash image.  "
-	       "Drop-in replacement for @b{esptool elf2image}.")
+	H_ITEM("create",
+	       "Create a flash image from an ELF executable.  "
+	       "Drop-in replacement for @b{esptool elf2image}; also "
+	       "accepts the name @b{elf2image} as a compatibility alias.")
 	H_ITEM("info",
 	       "Pretty-print the structure of a flash image: chip, "
 	       "flash params, segments with memory-region labels, "
@@ -78,7 +84,8 @@ static void print_subs(FILE *fp)
 {
 	fprintf(fp, "Subcommands:\n");
 	for (const struct image_sub *s = image_subs; s->name; s++)
-		fprintf(fp, "  %-12s  %s\n", s->name, s->summary);
+		if (!s->hidden)
+			fprintf(fp, "  %-12s  %s\n", s->name, s->summary);
 }
 
 int cmd_image(int argc, const char **argv)

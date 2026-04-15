@@ -4,11 +4,11 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 #
-# Golden byte-diff: `ice image elf2image` vs `esptool elf2image
+# Golden byte-diff: `ice image create` vs `esptool elf2image
 # --use-segments` on a real ESP-IDF ELF.  Skipped if esptool is not on
 # PATH or no pre-built IDF example ELF is present on this machine --
 # the image engine also has a self-contained structural test at
-# t/0011-elf2image.t that runs unconditionally.
+# t/0011-image-create.t that runs unconditionally.
 
 # Locate a usable ELF.
 ELF=""
@@ -39,7 +39,7 @@ n=0
 check() {
     local desc="$1" ff="$2" fs="$3" fm="$4"
     n=$((n + 1))
-    "$ICE" image elf2image --chip esp32 --flash-mode "$fm" \
+    "$ICE" image create --chip esp32 --flash-mode "$fm" \
         --flash-freq "$ff" --flash-size "$fs" --elf-sha256-offset 0xb0 \
         -o "$O/ice.bin" "$ELF" >/dev/null 2>&1 || {
             echo "not ok $n - ice failed: $desc"; fail=$((fail + 1)); return

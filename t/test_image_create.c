@@ -5,7 +5,8 @@
  */
 
 /*
- * Unit tests for elf2image.c.
+ * Unit tests for the elf2image.c engine that backs `ice image create`
+ * (and its `ice image elf2image` alias).
  *
  * We synthesise a minimal ELF32-LE ET_EXEC file in memory with a few
  * PT_LOAD segments at canonical ESP32 addresses, then exercise

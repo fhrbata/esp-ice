@@ -5,7 +5,7 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Smoke-test `ice image info` against an image we produced ourselves
-# with `ice image elf2image`.  Skipped when no ESP-IDF example ELF is
+# with `ice image create`.  Skipped when no ESP-IDF example ELF is
 # available on the machine (same gate as the esptool golden-diff
 # test) -- we need a real ESP-IDF ELF because info's most interesting
 # output (chip auto-detection, app_desc parsing) only makes sense for
@@ -32,9 +32,9 @@ ICE="$BINARY"
 BIN="$O/app.bin"
 OUT="$O/info.txt"
 
-"$ICE" image elf2image --chip esp32 --flash-mode dio --flash-freq 40m \
+"$ICE" image create --chip esp32 --flash-mode dio --flash-freq 40m \
     --flash-size 4MB --elf-sha256-offset 0xb0 -o "$BIN" "$ELF" \
-    >/dev/null 2>&1 || { echo "Bail out! ice image elf2image failed"; exit 1; }
+    >/dev/null 2>&1 || { echo "Bail out! ice image create failed"; exit 1; }
 
 "$ICE" image info "$BIN" > "$OUT" 2>&1 || {
     echo "Bail out! ice image info failed"
