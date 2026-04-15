@@ -33,35 +33,6 @@ static const char *pt_usage[] = {
     NULL,
 };
 
-/* Create the directory portion of a file path (mkdir -p equivalent). */
-static void mkdirp_for_file(const char *filepath)
-{
-	struct sbuf dir = SBUF_INIT;
-	char *p;
-
-	sbuf_addstr(&dir, filepath);
-
-	p = dir.buf + dir.len;
-	while (p > dir.buf && *p != '/' && *p != '\\')
-		p--;
-
-	if (p > dir.buf) {
-		*p = '\0';
-		/* Try to create every component. */
-		for (p = dir.buf + 1; *p; p++) {
-			if (*p == '/' || *p == '\\') {
-				char c = *p;
-				*p = '\0';
-				mkdir(dir.buf, 0755);
-				*p = c;
-			}
-		}
-		mkdir(dir.buf, 0755);
-	}
-
-	sbuf_release(&dir);
-}
-
 int cmd_partition_table(int argc, const char **argv)
 {
 	const char *offset_str = "0x8000";

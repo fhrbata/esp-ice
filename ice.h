@@ -29,6 +29,7 @@
 #include "config.h"
 #include "elf.h"
 #include "error.h"
+#include "fs.h"
 #include "help.h"
 #include "http.h"
 #include "json.h"

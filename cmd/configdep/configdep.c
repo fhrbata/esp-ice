@@ -262,20 +262,13 @@ static int scan_deps(struct sdk_opts *cfg, struct depfile *d)
 
 /**
  * Create an empty file at @p path, creating parent directories as
- * needed.  The path buffer is temporarily modified during directory
- * creation, then restored.
+ * needed.
  */
-static int touch_file(char *path)
+static int touch_file(const char *path)
 {
 	FILE *fp;
 
-	for (char *s = path; *s; s++) {
-		if (*s != '/' || s == path)
-			continue;
-		*s = '\0';
-		(void)mkdir(path, 0755);
-		*s = '/';
-	}
+	mkdirp_for_file(path);
 
 	fp = fopen(path, "wb");
 	if (!fp) {

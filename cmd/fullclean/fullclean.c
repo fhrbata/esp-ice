@@ -49,66 +49,6 @@ static const struct cmd_manual manual = {
 };
 /* clang-format on */
 
-/*
- * Recursively delete the contents of @p path (a directory).  The
- * directory itself is not removed -- the caller decides that; fullclean
- * keeps the top-level build dir, matching idf.py's behaviour.
- *
- * readdir() is done in one pass into @p names; deletion is a second
- * pass so we never mutate a directory while iterating it.
- */
-static int rmtree(const char *path, int verbose)
-{
-	DIR *dir;
-	struct dirent *de;
-	struct svec names = SVEC_INIT;
-	int rc = 0;
-
-	dir = opendir(path);
-	if (!dir) {
-		warn_errno("cannot open '%s'", path);
-		return -1;
-	}
-	while ((de = readdir(dir)) != NULL) {
-		if (strcmp(de->d_name, ".") != 0 &&
-		    strcmp(de->d_name, "..") != 0)
-			svec_push(&names, de->d_name);
-	}
-	closedir(dir);
-
-	for (size_t i = 0; i < names.nr; i++) {
-		struct sbuf child = SBUF_INIT;
-		struct stat st;
-
-		sbuf_addf(&child, "%s/%s", path, names.v[i]);
-
-		if (stat(child.buf, &st) < 0) {
-			warn_errno("cannot stat '%s'", child.buf);
-			rc = -1;
-			sbuf_release(&child);
-			continue;
-		}
-		if (verbose)
-			printf("Removing: %s\n", child.buf);
-
-		if (S_ISDIR(st.st_mode)) {
-			if (rmtree(child.buf, verbose) < 0)
-				rc = -1;
-			if (rmdir(child.buf) < 0) {
-				warn_errno("cannot remove '%s'", child.buf);
-				rc = -1;
-			}
-		} else if (unlink(child.buf) < 0) {
-			warn_errno("cannot remove '%s'", child.buf);
-			rc = -1;
-		}
-
-		sbuf_release(&child);
-	}
-	svec_clear(&names);
-	return rc;
-}
-
 int fullclean_run(void)
 {
 	const char *build_dir;
