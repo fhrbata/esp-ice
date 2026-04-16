@@ -427,12 +427,15 @@ int cmd_complete(int argc, const char **argv)
 
 	/*
 	 * Value of a preceding -X / --foo that takes a separate value:
-	 * emit nothing and let the shell's file completion take over
-	 * (bash '-o default', zsh '_files' fallback).
+	 * emit custom candidates when known, otherwise let the shell's
+	 * file completion take over (bash '-o default', zsh '_files').
 	 */
 	if (cword > 0 && words[cword - 1][0] == '-' &&
-	    opt_takes_value(opts_ctx, words[cword - 1]))
+	    opt_takes_value(opts_ctx, words[cword - 1])) {
+		if (!strcmp(words[cword - 1], "--target"))
+			complete_target_arg(cur);
 		return EXIT_SUCCESS;
+	}
 
 	/* Before the subcommand: complete the subcommand name itself. */
 	if (subpos < 0) {

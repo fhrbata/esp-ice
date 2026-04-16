@@ -335,6 +335,12 @@ static struct reader *open_reader_for_path(const char *path)
 
 int tar_extract(const char *src, const char *dest_dir)
 {
+	return tar_extract_progress(src, dest_dir, NULL, NULL);
+}
+
+int tar_extract_progress(const char *src, const char *dest_dir,
+			 tar_progress_fn progress, void *ctx)
+{
 	struct reader *r = open_reader_for_path(src);
 	if (!r) {
 		err_errno("open '%s'", src);
@@ -444,23 +450,34 @@ int tar_extract(const char *src, const char *dest_dir)
 				err("extract failed: %s", name);
 				rc = -1;
 				goto done;
+			} else if (progress) {
+				progress(name, ctx);
 			}
 			break;
 
 		case '5':
-			if (is_safe_name(name))
+			if (is_safe_name(name)) {
 				extract_directory(dest_dir, name, e.mode);
+				if (progress)
+					progress(name, ctx);
+			}
 			break;
 
 		case '1':
 			if (is_safe_name(name) && is_safe_name(linkname) &&
-			    linkname[0])
+			    linkname[0]) {
 				extract_hardlink(dest_dir, name, linkname);
+				if (progress)
+					progress(name, ctx);
+			}
 			break;
 
 		case '2':
-			if (is_safe_name(name) && linkname[0])
+			if (is_safe_name(name) && linkname[0]) {
 				extract_symlink(dest_dir, name, linkname);
+				if (progress)
+					progress(name, ctx);
+			}
 			break;
 
 		default:

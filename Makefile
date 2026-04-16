@@ -43,7 +43,7 @@ WINDRES := $(CROSS_COMPILE)windres
 
 BUILD_CFLAGS = $(CFLAGS) $(CFLAGS_APPEND)
 BUILD_LDFLAGS = $(LDFLAGS) $(LDFLAGS_APPEND)
-BUILD_DEFINES := -DVERSION=\"$(VERSION)\"
+BUILD_DEFINES = -DVERSION=\"$(VERSION)\" -DICE_PLATFORM_OS=\"$(S)\" -DICE_PLATFORM_ARCH=\"$(ARCH)\"
 
 # Project root on the include search path so sources under cmd/<name>/
 # and platform/<os>/ can #include "ice.h" directly instead of reaching
@@ -131,6 +131,7 @@ LIB_SRCS := \
 	cmd/image/create.c \
 	cmd/image/info.c \
 	cmd/image/merge.c \
+	cmd/install/install.c \
 	cmd/ldgen/ldgen.c \
 	cmd/ldgen/lf.c \
 	cmd/monitor/monitor.c \

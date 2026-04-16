@@ -19,6 +19,16 @@
 #define TAR_H
 
 /**
+ * @brief Progress callback for tar extraction.
+ *
+ * Called once for each entry (file, directory, link) extracted.
+ *
+ * @param name  Entry name being extracted.
+ * @param ctx   Opaque context passed to tar_extract_progress.
+ */
+typedef void (*tar_progress_fn)(const char *name, void *ctx);
+
+/**
  * @brief Extract @p src into @p dest_dir.
  *
  * @p dest_dir must exist.  Missing intermediate directories under it
@@ -30,5 +40,14 @@
  * @return 0 on success, -1 on any I/O, decode, or format error.
  */
 int tar_extract(const char *src, const char *dest_dir);
+
+/**
+ * @brief Extract with a per-entry progress callback.
+ *
+ * Same as tar_extract(), but calls @p progress after each entry.
+ * Pass NULL for @p progress for silent extraction.
+ */
+int tar_extract_progress(const char *src, const char *dest_dir,
+			 tar_progress_fn progress, void *ctx);
 
 #endif /* TAR_H */
