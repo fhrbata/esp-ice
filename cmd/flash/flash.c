@@ -9,10 +9,9 @@
  * @brief The "ice flash" subcommand -- porcelain wrapper around
  * `ice target flash`.
  *
- * Resolves the serial port (auto-detection or config), chip target,
- * baud rate, and the list of images to flash from the project's
- * flasher_args.json, then delegates to cmd_target_flash() which
- * carries out the actual connection and write.
+ * Calls project_load() to resolve port, chip, baud rate, and flash
+ * file list from the active profile, then delegates to
+ * cmd_target_flash() which carries out the actual connection and write.
  */
 #include "cmake.h"
 #include "esf_port.h"
@@ -99,59 +98,28 @@ int cmd_flash(int argc, const char **argv)
 	if (argc > 1)
 		die("too many arguments");
 
-	const char *name = argc >= 1 ? argv[0] : "default";
+	project_load(argc >= 1 ? argv[0] : "default");
 
-	load_profile(name);
-	require_project_initialized();
+	const char *chip_str = config_get("project.chip");
 
-	unsigned baud = (unsigned)opt_baud;
-
-	const char *build_dir = config_get("project.build-dir");
-	if (!build_dir)
-		build_dir = "build";
-
-	/* ---- locate and parse flasher_args.json ---- */
-	struct sbuf args_path = SBUF_INIT;
-	sbuf_addf(&args_path, "%s/flasher_args.json", build_dir);
-
-	struct sbuf args_buf = SBUF_INIT;
-	if (sbuf_read_file(&args_buf, args_path.buf) < 0) {
-		fprintf(
-		    stderr,
-		    "ice flash: cannot read %s\n"
-		    "  Run 'ice build' first to generate build artifacts.\n",
-		    args_path.buf);
-		sbuf_release(&args_path);
-		return 1;
-	}
-	sbuf_release(&args_path);
-
-	struct json_value *root = json_parse(args_buf.buf, args_buf.len);
-	sbuf_release(&args_buf);
-	if (!root) {
+	struct config_entry **flash_files;
+	int n_files = config_get_all("project.flash-file", &flash_files);
+	if (n_files == 0) {
 		fprintf(stderr,
-			"ice flash: failed to parse flasher_args.json\n");
+			"ice flash: no flash files in flasher_args.json\n"
+			"  Run 'ice build' first to generate build "
+			"artifacts.\n");
 		return 1;
 	}
-
-	struct json_value *files = json_get(root, "flash_files");
-	if (!files || files->type != JSON_OBJECT || files->u.object.nr == 0) {
-		fprintf(stderr, "ice flash: 'flash_files' not found in "
-				"flasher_args.json\n");
-		json_free(root);
-		return 1;
-	}
-
-	/* ---- resolve target chip ---- */
-	target_chip_t required_chip = esf_chip_from_flasher_args(build_dir);
 
 	/* ---- resolve serial port ---- */
+	target_chip_t required_chip = esf_chip_from_name(chip_str);
 	const char *port_path = opt_port;
 	char *autoport = NULL;
 
 	if (!port_path) {
 		if (required_chip != ESP_UNKNOWN_CHIP)
-			printf("Scanning for @b{%s}...\n",
+			printf("Scanning for %s...\n",
 			       esf_chip_name(required_chip));
 		else
 			printf("Scanning for ESP device...\n");
@@ -161,78 +129,47 @@ int cmd_flash(int argc, const char **argv)
 		if (!autoport) {
 			fprintf(stderr,
 				"ice flash: no matching device found.\n"
-				"  Use --port to specify a port explicitly.\n");
-			json_free(root);
+				"  Use --port to specify a port "
+				"explicitly.\n");
+			free(flash_files);
 			return 1;
 		}
 		port_path = autoport;
 	}
 
 	/* ---- build argv for ice target flash ---- */
-	int n_files = files->u.object.nr;
-
 	/*
-	 * Maximum argv size: "ice target flash" + --port <p> + --chip <c> +
+	 * Maximum argv size: argv[0] + --port <p> + --chip <c> +
 	 * --baud <b> + n_files entries + NULL sentinel.
 	 */
 	int max_argc = 8 + n_files;
-	const char **flash_argv = malloc((size_t)(max_argc + 1) * sizeof(*flash_argv));
-	char **file_entries = malloc((size_t)n_files * sizeof(*file_entries));
-	if (!flash_argv || !file_entries)
+	const char **flash_argv =
+	    malloc((size_t)(max_argc + 1) * sizeof(*flash_argv));
+	if (!flash_argv)
 		die_errno("malloc");
+
+	char baud_str[32];
+	snprintf(baud_str, sizeof(baud_str), "%u", (unsigned)opt_baud);
 
 	int fa = 0;
 	flash_argv[fa++] = "ice target flash";
 	flash_argv[fa++] = "--port";
 	flash_argv[fa++] = port_path;
-
-	const char *chip_str = json_as_string(json_get(
-	    json_get(root, "extra_esptool_args"), "chip"));
 	if (chip_str) {
 		flash_argv[fa++] = "--chip";
 		flash_argv[fa++] = chip_str;
 	}
-
-	char baud_str[32];
-	snprintf(baud_str, sizeof(baud_str), "%u", baud);
 	flash_argv[fa++] = "--baud";
 	flash_argv[fa++] = baud_str;
-
-	int n_entries = 0;
-	for (int i = 0; i < n_files; i++) {
-		const char *offset_str = files->u.object.members[i].key;
-		const char *rel_path =
-		    json_as_string(files->u.object.members[i].value);
-
-		if (!rel_path) {
-			fprintf(stderr,
-				"ice flash: bad entry in flash_files\n");
-			json_free(root);
-			free(autoport);
-			for (int j = 0; j < n_entries; j++)
-				free(file_entries[j]);
-			free(file_entries);
-			free(flash_argv);
-			return 1;
-		}
-
-		struct sbuf entry = SBUF_INIT;
-		sbuf_addf(&entry, "%s=%s/%s", offset_str, build_dir, rel_path);
-		file_entries[n_entries] = entry.buf; /* transfer ownership */
-		flash_argv[fa++] = file_entries[n_entries++];
-	}
+	for (int i = 0; i < n_files; i++)
+		flash_argv[fa++] = flash_files[i]->value; /* "offset=path" */
 	flash_argv[fa] = NULL;
-
-	json_free(root);
 
 	/* ---- delegate to plumbing ---- */
 	int rc = cmd_target_flash(fa, flash_argv);
 
+	free(flash_files);
 	free(autoport);
 	free(flash_argv);
-	for (int i = 0; i < n_entries; i++)
-		free(file_entries[i]);
-	free(file_entries);
-
 	return rc;
 }

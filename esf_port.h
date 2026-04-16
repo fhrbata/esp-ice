@@ -13,6 +13,7 @@
 
 #include <stdint.h>
 #include "esp_loader_io.h"
+#include "esp_loader.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -51,6 +52,30 @@ typedef struct {
 
 /** Operations vtable for esf_port_t. */
 extern const esp_loader_port_ops_t esf_port_ops;
+
+/**
+ * @brief Human-readable name for a chip, e.g. "ESP32-S3".
+ * Returns "unknown" for unrecognised values.
+ */
+const char *esf_chip_name(target_chip_t chip);
+
+/**
+ * @brief Parse an IDF chip string (e.g. "esp32s3") into a target_chip_t.
+ * Returns ESP_UNKNOWN_CHIP for NULL, empty, or unrecognised strings.
+ */
+target_chip_t esf_chip_from_name(const char *name);
+
+/**
+ * @brief Probe available serial ports and return the path of the first
+ * one that responds as an ESP device matching @p required.
+ *
+ * Pass @c ESP_UNKNOWN_CHIP to accept any ESP chip.  The device is reset
+ * back to normal run mode before this function returns.
+ *
+ * Status lines are written to stderr.  Returns a heap-allocated string
+ * the caller must free(), or NULL if nothing was found.
+ */
+char *esf_find_esp_port(target_chip_t required);
 
 #ifdef __cplusplus
 }

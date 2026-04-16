@@ -187,3 +187,80 @@ int serial_flush_input(struct serial *s)
 		return -EIO;
 	return 0;
 }
+
+int serial_list_ports(char ***out)
+{
+	HKEY key;
+	DWORD index = 0;
+	DWORD count = 0;
+	char **ports;
+	LONG r;
+
+	*out = NULL;
+
+	r = RegOpenKeyExA(HKEY_LOCAL_MACHINE, "HARDWARE\\DEVICEMAP\\SERIALCOMM",
+			  0, KEY_READ, &key);
+	if (r != ERROR_SUCCESS)
+		return (r == ERROR_FILE_NOT_FOUND) ? 0 : -EIO;
+
+	for (;;) {
+		char name[256], value[256];
+		DWORD name_sz = sizeof name, value_sz = sizeof value, type;
+
+		r = RegEnumValueA(key, index++, name, &name_sz, NULL, &type,
+				  (LPBYTE)value, &value_sz);
+		if (r == ERROR_NO_MORE_ITEMS)
+			break;
+		if (r == ERROR_SUCCESS && type == REG_SZ)
+			count++;
+	}
+
+	if (count == 0) {
+		RegCloseKey(key);
+		return 0;
+	}
+
+	ports = calloc(count + 1, sizeof(char *));
+	if (!ports) {
+		RegCloseKey(key);
+		return -ENOMEM;
+	}
+
+	index = 0;
+	DWORD filled = 0;
+	for (;;) {
+		char name[256], value[256];
+		DWORD name_sz = sizeof name, value_sz = sizeof value, type;
+		size_t len;
+
+		r = RegEnumValueA(key, index++, name, &name_sz, NULL, &type,
+				  (LPBYTE)value, &value_sz);
+		if (r == ERROR_NO_MORE_ITEMS)
+			break;
+		if (r == ERROR_SUCCESS && type == REG_SZ) {
+			len = strlen(value);
+			ports[filled] = malloc(len + 1);
+			if (!ports[filled]) {
+				serial_free_port_list(ports);
+				RegCloseKey(key);
+				return -ENOMEM;
+			}
+			memcpy(ports[filled], value, len + 1);
+			filled++;
+		}
+	}
+	ports[filled] = NULL;
+
+	RegCloseKey(key);
+	*out = ports;
+	return (int)filled;
+}
+
+void serial_free_port_list(char **ports)
+{
+	if (!ports)
+		return;
+	for (char **p = ports; *p; p++)
+		free(*p);
+	free(ports);
+}

@@ -322,30 +322,6 @@ target_chip_t esf_chip_from_name(const char *name)
 	return ESP_UNKNOWN_CHIP;
 }
 
-target_chip_t esf_chip_from_flasher_args(const char *build_dir)
-{
-	target_chip_t chip = ESP_UNKNOWN_CHIP;
-	struct sbuf path = SBUF_INIT;
-	struct sbuf buf = SBUF_INIT;
-
-	sbuf_addf(&path, "%s/flasher_args.json", build_dir);
-
-	if (sbuf_read_file(&buf, path.buf) >= 0) {
-		struct json_value *root = json_parse(buf.buf, buf.len);
-
-		if (root) {
-			const char *s = json_as_string(json_get(
-			    json_get(root, "extra_esptool_args"), "chip"));
-			chip = esf_chip_from_name(s);
-			json_free(root);
-		}
-	}
-
-	sbuf_release(&buf);
-	sbuf_release(&path);
-	return chip;
-}
-
 char *esf_find_esp_port(target_chip_t required)
 {
 	char **ports;

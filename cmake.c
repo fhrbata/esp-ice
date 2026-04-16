@@ -114,6 +114,67 @@ void load_profile(const char *name)
 	putenv((char *)"IDF_COMPONENT_MANAGER=0");
 }
 
+void project_load(const char *name)
+{
+	load_profile(name);
+	require_project_initialized();
+
+	const char *build_dir = config_get("project.build-dir");
+	if (!build_dir || !*build_dir)
+		build_dir = "build";
+
+	/*
+	 * config_load_profile() (called by load_profile()) clears the entire
+	 * PROJECT scope before re-populating it, so any project.chip /
+	 * project.flash-file entries from a previous call are gone.  We add
+	 * ours after it returns, so there is no need to unset them here.
+	 *
+	 * Best-effort: if the build directory has no flasher_args.json yet
+	 * (project initialised but not built), silently skip and leave the
+	 * keys absent.  The caller can check config_has("project.chip") etc.
+	 */
+	struct sbuf path = SBUF_INIT;
+	struct sbuf buf = SBUF_INIT;
+	sbuf_addf(&path, "%s/flasher_args.json", build_dir);
+
+	if (sbuf_read_file(&buf, path.buf) >= 0) {
+		struct json_value *root = json_parse(buf.buf, buf.len);
+		if (root) {
+			/* project.chip */
+			const char *chip = json_as_string(json_get(
+			    json_get(root, "extra_esptool_args"), "chip"));
+			if (chip && *chip)
+				config_set(&config, "project.chip", chip,
+					   CONFIG_SCOPE_PROJECT);
+
+			/* project.flash-file: "offset=full_path" per image */
+			struct json_value *files =
+			    json_get(root, "flash_files");
+			if (files && files->type == JSON_OBJECT) {
+				for (int i = 0; i < files->u.object.nr; i++) {
+					const char *offset =
+					    files->u.object.members[i].key;
+					const char *rel = json_as_string(
+					    files->u.object.members[i].value);
+					if (!offset || !rel)
+						continue;
+					struct sbuf entry = SBUF_INIT;
+					sbuf_addf(&entry, "%s=%s/%s", offset,
+						  build_dir, rel);
+					config_add(
+					    &config, "project.flash-file",
+					    entry.buf, CONFIG_SCOPE_PROJECT);
+					sbuf_release(&entry);
+				}
+			}
+			json_free(root);
+		}
+	}
+
+	sbuf_release(&buf);
+	sbuf_release(&path);
+}
+
 void require_project_initialized(void)
 {
 	const char *build_dir = config_get("project.build-dir");

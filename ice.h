@@ -123,6 +123,7 @@ extern const struct cmd_desc cmd_idf_desc;
 extern const struct cmd_desc cmd_image_desc;
 extern const struct cmd_desc cmd_init_desc;
 extern const struct cmd_desc cmd_menuconfig_desc;
+extern const struct cmd_desc cmd_monitor_desc;
 extern const struct cmd_desc cmd_repo_desc;
 extern const struct cmd_desc cmd_status_desc;
 extern const struct cmd_desc cmd_target_desc;

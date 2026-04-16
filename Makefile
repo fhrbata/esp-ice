@@ -149,6 +149,7 @@ LIB_SRCS := \
 	cmd/repo/info/info.c \
 	cmd/status/status.c \
 	cmd/target/target.c \
+	cmd/monitor/monitor.c \
 	cmd/target/flash.c \
 	cmd/target/list/list.c \
 	cmd/target/monitor/monitor.c \

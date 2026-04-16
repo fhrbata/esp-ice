@@ -6,53 +6,63 @@
 
 /**
  * @file cmd/target/monitor/monitor.c
- * @brief The "ice target monitor" subcommand -- serial port monitor.
+ * @brief `ice target monitor` -- plumbing serial port monitor.
  *
- * Connects to a serial port, displays device output in real time,
- * and forwards keyboard input to the device.  Press Ctrl-] to exit.
+ * Opens an explicit serial port and bridges it to the terminal.
+ * Has no knowledge of project profiles, build directories, or
+ * config files.  The porcelain wrapper `ice monitor` resolves those
+ * details and calls into this command with the resulting port path.
+ *
+ * Usage:
+ *   ice target monitor --port <dev> [--baud <rate>] [--no-reset]
  */
-#include "esf_port.h"
 #include "ice.h"
 #include "serial.h"
 
 static const char *opt_port;
 static int opt_baud = 115200;
+static int opt_no_reset;
 
 /* clang-format off */
 static const struct option cmd_target_monitor_opts[] = {
-	OPT_STRING_CFG('p', "port", &opt_port, "path",
-		       "serial.port", "ESPPORT",
-		       "serial port device path",
-		       "Serial device path "
-		       "(@b{/dev/ttyUSB0}, @b{COM3}, ...).", NULL),
-	OPT_INT_CFG('b', "baud", &opt_baud, "rate",
-		    "serial.baud", "ESPBAUD",
-		    "baud rate",
-		    "Monitor baud rate (default @b{115200}).", NULL),
+	OPT_STRING('p', "port", &opt_port, "dev",
+		   "serial port device (required)", NULL),
+	OPT_INT('b', "baud", &opt_baud, "rate",
+		"baud rate (default: 115200)", NULL),
+	OPT_BOOL(0, "no-reset", &opt_no_reset,
+		 "open port without touching DTR/RTS"),
 	OPT_END(),
 };
 
-int cmd_target_monitor(int argc, const char **argv);
-
 static const struct cmd_manual target_monitor_manual = {
 	.name = "ice target monitor",
-	.summary = "display serial output from the device",
+	.summary = "open a serial port for monitoring",
 
 	.description =
-	H_PARA("Connects to a serial port and displays device output "
-	       "in real time.  Keyboard input is forwarded to the "
-	       "device.  Press @b{Ctrl-]} to exit."),
+	H_PARA("Low-level serial port monitor.  Opens @b{--port}, "
+	       "optionally deasserts DTR/RTS to prevent an accidental "
+	       "reset, then bridges the port to the terminal.  "
+	       "Press @b{Ctrl-]} to exit.")
+	H_PARA("This command reads no project configuration.  It is the "
+	       "plumbing behind @b{ice monitor}, which resolves the port "
+	       "and baud rate from the project profile."),
 
 	.examples =
-	H_EXAMPLE("ice target monitor")
-	H_EXAMPLE("ice target monitor -p /dev/ttyUSB0")
-	H_EXAMPLE("ice target monitor -p /dev/ttyUSB0 -b 460800"),
+	H_EXAMPLE("ice target monitor --port /dev/ttyUSB0")
+	H_EXAMPLE("ice target monitor -p /dev/ttyACM0 -b 460800")
+	H_EXAMPLE("ice target monitor -p /dev/ttyUSB0 --no-reset"),
 
 	.extras =
 	H_SECTION("KEY BINDINGS")
-	H_ITEM("Ctrl-]", "Exit the monitor."),
+	H_ITEM("Ctrl-]", "Exit the monitor.")
+
+	H_SECTION("SEE ALSO")
+	H_ITEM("ice monitor",
+	       "Porcelain wrapper: resolves port from project profile."),
 };
 /* clang-format on */
+
+int cmd_target_monitor(int argc, const char **argv);
 
 const struct cmd_desc cmd_target_monitor_desc = {
     .name = "monitor",
@@ -63,29 +73,46 @@ const struct cmd_desc cmd_target_monitor_desc = {
 
 int cmd_target_monitor(int argc, const char **argv)
 {
+	opt_port = NULL;
+	opt_baud = 115200;
+	opt_no_reset = 0;
+
+	argc = parse_options(argc, argv, &cmd_target_monitor_desc);
+	if (argc > 0)
+		die("unexpected argument '%s'", argv[0]);
+
+	if (!opt_port)
+		die("--port is required");
+
+	unsigned baud = (unsigned)opt_baud;
 	struct serial *s;
 	unsigned char buf[1024];
 	int rc;
-
-	parse_options(argc, argv, &cmd_target_monitor_desc);
-
-	if (!opt_port)
-		die("serial.port is not set; use -p or "
-		    "'ice config serial.port <path>'");
 
 	rc = serial_open(&s, opt_port);
 	if (rc)
 		die("cannot open %s: %s", opt_port, strerror(-rc));
 
-	rc = serial_set_baud(s, (unsigned)opt_baud);
+	/*
+	 * Deassert DTR and RTS so the auto-reset circuit is not triggered.
+	 * The OS may assert DTR on open, which on ESP32 dev boards drives
+	 * BOOT low and can reset the chip into bootloader mode.
+	 * --no-reset skips this entirely so the device is not disturbed.
+	 */
+	if (!opt_no_reset) {
+		serial_set_dtr(s, 0);
+		serial_set_rts(s, 0);
+	}
+
+	rc = serial_set_baud(s, baud);
 	if (rc) {
 		serial_close(s);
-		die("cannot set baud rate %d on %s: %s", opt_baud, opt_port,
+		die("cannot set baud rate %u on %s: %s", baud, opt_port,
 		    strerror(-rc));
 	}
 
-	fprintf(stderr, "--- ice target monitor on %s at %d baud ---" EOL,
-		opt_port, opt_baud);
+	fprintf(stderr, "--- ice monitor on %s at %u baud ---" EOL, opt_port,
+		baud);
 	fprintf(stderr, "--- Quit: Ctrl-] ---" EOL);
 
 	rc = console_raw_enter();

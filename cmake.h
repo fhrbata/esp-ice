@@ -45,6 +45,32 @@
 void load_profile(const char *name);
 
 /**
+ * Full project setup for porcelain commands.
+ *
+ * Equivalent to calling load_profile(@p name), require_project_initialized(),
+ * then parsing the build directory's @b{flasher_args.json} and
+ * populating derived-state config keys at @c CONFIG_SCOPE_PROJECT:
+ *
+ *   - @b{project.chip}       — chip string from
+ *                              @c extra_esptool_args.chip (e.g. "esp32c6").
+ *   - @b{project.flash-file} — one multi-valued entry per image, each
+ *                              formatted as @c "offset=full_path"
+ *                              (e.g. @c "0x10000=build/app.bin").
+ *
+ * @b{flasher_args.json} parsing is best-effort: missing or unparseable
+ * files are silently skipped so the function still succeeds when the
+ * project has been initialised but not yet built.
+ *
+ * Porcelain call sites collapse to a single line:
+ *
+ * @code
+ *   project_load(argc >= 1 ? argv[0] : "default");
+ *   const char *chip = config_get("project.chip");
+ * @endcode
+ */
+void project_load(const char *name);
+
+/**
  * Print profile names from @b{[project "<name>"]} sections of the
  * loaded config to stdout, one per line.  Always emits "default"
  * even when no @b{[project "default"]} section exists yet.
