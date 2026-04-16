@@ -118,10 +118,16 @@ int link_w(const char *target, const char *linkpath);
 /** End-of-line sequence (CRLF on Windows). */
 #define EOL "\r\n"
 
+/** Environment variable that holds the user's home directory. */
+#define HOME_ENV "USERPROFILE"
+
 #else /* POSIX */
 
 /** End-of-line sequence (LF on POSIX). */
 #define EOL "\n"
+
+/** Environment variable that holds the user's home directory. */
+#define HOME_ENV "HOME"
 
 #include <unistd.h>
 

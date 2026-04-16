@@ -39,7 +39,7 @@ static const struct cmd_manual manual = {
 	       "against the SHA-256 digest in the manifest, and extracted to "
 	       "@b{<tools-path>/tools/<name>/<version>/}.  Tools that are "
 	       "already installed are skipped unless @b{--force} is given.")
-	H_PARA("The tools path defaults to @b{~/.espressif} and can be "
+	H_PARA("The tools path defaults to @b{~/.ice} and can be "
 	       "overridden with the @b{tools.path} config key."),
 
 	.examples =
@@ -66,7 +66,7 @@ const struct option cmd_install_opts[] = {
     OPT_STRING(0, "tool", &opt_tool, "name",
 	       "install a specific tool (includes on_request tools)"),
     OPT_STRING(0, "path", &opt_path, "dir",
-	       "tools install directory (default: ~/.espressif)"),
+	       "tools install directory (default: ~/.ice)"),
     OPT_BOOL(0, "force", &opt_force,
 	     "re-download and overwrite existing installations"),
     OPT_END(),
@@ -119,35 +119,9 @@ static const char *platform_key(void)
 
 static const char *tools_dir(void)
 {
-	static struct sbuf path = SBUF_INIT;
-	const char *configured;
-	const char *home;
-
-	if (path.len)
-		return path.buf;
-
-	if (opt_path && *opt_path) {
-		sbuf_addstr(&path, opt_path);
-		return path.buf;
-	}
-
-	configured = config_get("tools.path");
-	if (configured && *configured) {
-		sbuf_addstr(&path, configured);
-		return path.buf;
-	}
-
-#ifdef _WIN32
-	home = getenv("USERPROFILE");
-#else
-	home = getenv("HOME");
-#endif
-	if (!home || !*home)
-		die("cannot determine home directory; set tools.path in "
-		    "config");
-
-	sbuf_addf(&path, "%s/.espressif", home);
-	return path.buf;
+	if (opt_path && *opt_path)
+		return opt_path;
+	return ice_home();
 }
 
 /* ------------------------------------------------------------------ */

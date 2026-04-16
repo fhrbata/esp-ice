@@ -168,6 +168,19 @@ const char *user_config_path(void);
 const char *local_config_path(void);
 
 /**
+ * @brief Return the ice home directory (~/.ice).
+ *
+ * Resolution order:
+ *   1. ICE_HOME environment variable
+ *   2. "$HOME/.ice" (POSIX) / "%USERPROFILE%/.ice" (Windows)
+ *
+ * Backed by static storage -- the returned pointer is valid for
+ * the lifetime of the process.  Dies if the home environment
+ * variable cannot be determined.
+ */
+const char *ice_home(void);
+
+/**
  * @brief Load an INI-style config file into @p c at @p scope.
  *
  * Grammar:

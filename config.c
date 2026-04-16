@@ -224,11 +224,7 @@ const char *user_config_path(void)
 	if (path.len)
 		return path.buf;
 
-#ifdef _WIN32
-	home = getenv("USERPROFILE");
-#else
-	home = getenv("HOME");
-#endif
+	home = getenv(HOME_ENV);
 	if (!home || !*home)
 		return NULL;
 
@@ -239,6 +235,29 @@ const char *user_config_path(void)
 }
 
 const char *local_config_path(void) { return "./.iceconfig"; }
+
+const char *ice_home(void)
+{
+	static struct sbuf path = SBUF_INIT;
+	const char *env;
+	const char *home;
+
+	if (path.len)
+		return path.buf;
+
+	env = getenv("ICE_HOME");
+	if (env && *env) {
+		sbuf_addstr(&path, env);
+		return path.buf;
+	}
+
+	home = getenv(HOME_ENV);
+	if (!home || !*home)
+		die("cannot determine home directory; set ICE_HOME");
+
+	sbuf_addf(&path, "%s/.ice", home);
+	return path.buf;
+}
 
 /* ------------------------------------------------------------------ */
 /*  INI parser                                                        */
