@@ -1,0 +1,68 @@
+menu "ESP serial flasher"
+    config SERIAL_FLASHER_RESET_HOLD_TIME_MS
+        int "Time for which the reset pin is asserted when doing a hard reset"
+        default 100
+
+    config SERIAL_FLASHER_BOOT_HOLD_TIME_MS
+        int "Time for which the boot pin is asserted when doing a hard reset"
+        default 50
+
+    config SERIAL_FLASHER_DEBUG_TRACE
+        bool "Enable debug tracing output (only transfer data tracing is supported at the time)"
+        default n
+
+    config SERIAL_FLASHER_WRITE_BLOCK_RETRIES
+        int "Number of retries when writing blocks either to target flash or RAM"
+        default 3
+
+    config SERIAL_FLASHER_RESET_INVERT
+        bool "Invert reset signal"
+        default n
+        help
+           Enable this option if there is an inverting connection between
+           the output of the serial-flasher and the reset pin of the ESP chip.
+
+    config SERIAL_FLASHER_BOOT_INVERT
+        bool "Invert boot signal"
+        default n
+        help
+           Enable this option if there is an inverting connection between
+           the output of the serial-flasher and the boot pin of the ESP chip.
+
+    menu "Port selection"
+        comment "Select which built-in port implementations to compile into the library."
+        comment "Enable multiple ports to allow runtime switching between interfaces."
+
+        config SERIAL_FLASHER_PORT_UART
+            bool "ESP32 UART port"
+            default y
+            help
+                Compile the ESP32 UART port (esp32_port.c).
+                Required for flashing over a UART connection.
+
+        config SERIAL_FLASHER_PORT_SPI
+            bool "ESP32 SPI port"
+            default n
+            help
+                Compile the ESP32 SPI port (esp32_spi_port.c).
+                Required for flashing over a SPI connection.
+
+        config SERIAL_FLASHER_PORT_SDIO
+            bool "ESP32 SDIO port"
+            default n
+            help
+                Compile the ESP32 SDIO port (esp32_sdio_port.c).
+                Only available on targets with SDIO host support.
+                Required for flashing over an SDIO connection.
+
+        config SERIAL_FLASHER_PORT_USB_CDC_ACM
+            bool "ESP32 USB CDC-ACM port"
+            default n
+            depends on SOC_USB_OTG_SUPPORTED
+            help
+                Compile the ESP32 USB CDC-ACM port (esp32_usb_cdc_acm_port.c).
+                Only available on targets with USB OTG support.
+                Requires the espressif/usb_host_cdc_acm managed component.
+    endmenu
+
+endmenu
