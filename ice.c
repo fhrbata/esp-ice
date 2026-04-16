@@ -41,10 +41,6 @@ const struct cmd_struct ice_commands[] = {
     {.name = "image",
      .fn = cmd_image,
      .summary = "host-only image manipulation (elf2image, ...)"},
-    {.name = "install",
-     .fn = cmd_install,
-     .summary = "install ESP-IDF tools from a manifest",
-     .opts = cmd_install_opts},
     {.name = "ldgen",
      .fn = cmd_ldgen,
      .summary = "analyse linker fragment (.lf) files",
@@ -63,16 +59,12 @@ const struct cmd_struct ice_commands[] = {
     {.name = "reconfigure",
      .fn = cmd_reconfigure,
      .summary = "regenerate the build system"},
-    {.name = "set-target",
-     .fn = cmd_set_target,
-     .summary = "switch the chip target (alias for 'target set')",
-     .opts = cmd_set_target_opts,
-     .hidden = 1},
     {.name = "size",
      .fn = cmd_size,
      .summary = "analyse firmware memory usage by region",
      .opts = cmd_size_opts},
     {.name = "target", .fn = cmd_target, .summary = "manage the chip target"},
+    {.name = "tools", .fn = cmd_tools, .summary = "manage ESP-IDF toolchains"},
     /*
      * Hidden backend invoked by the bash/zsh/fish glue printed by
      * `ice completion`.  Kept out of help listings and top-level

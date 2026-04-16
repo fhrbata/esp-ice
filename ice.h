@@ -71,6 +71,7 @@ int cmd_idf(int argc, const char **argv);
 int cmd_image(int argc, const char **argv);
 int cmd_install(int argc, const char **argv);
 int cmd_ldgen(int argc, const char **argv);
+int cmd_tools(int argc, const char **argv);
 int cmd_monitor(int argc, const char **argv);
 int cmd_partition_table(int argc, const char **argv);
 int cmd_size(int argc, const char **argv);

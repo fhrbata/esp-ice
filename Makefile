@@ -141,6 +141,7 @@ LIB_SRCS := \
 	cmd/reconfigure/reconfigure.c \
 	cmd/set-target/set-target.c \
 	cmd/target/target.c \
+	cmd/tools/tools.c \
 	cmd/size/chip.c \
 	cmd/size/size.c \
 	config.c \
