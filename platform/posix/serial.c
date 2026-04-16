@@ -7,17 +7,11 @@
 /**
  * @file platform/posix/serial.c
  * @brief POSIX termios implementation of @ref serial.h.
- *
- * Covers Linux and macOS.  Baud rates are resolved through a table
- * of @c B<rate> constants; non-standard rates return @c -EINVAL.  On
- * Linux the @c BOTHER / @c TCSETS2 path would let us set arbitrary
- * integer rates, but every baud the ESPLoader protocol actually uses
- * (115200, 230400, 460800, 921600, 1500000) has a @c B constant so we
- * do not need that complication yet.
  */
 #include <errno.h>
 #include <fcntl.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
 #include <sys/select.h>
@@ -25,6 +19,12 @@
 #include <unistd.h>
 
 #include "serial.h"
+
+struct serial {
+	int fd;
+	unsigned baud;
+	char path[256];
+};
 
 /* ------------------------------------------------------------------ */
 /*  Baud-rate table                                                    */
@@ -78,45 +78,24 @@ static speed_t baud_lookup(unsigned baud)
 /*  API                                                                */
 /* ------------------------------------------------------------------ */
 
-void serial_init(struct serial *s)
-{
-	memset(s, 0, sizeof(*s));
-	s->fd = -1;
-}
-
-int serial_open(struct serial *s, const char *path)
+int serial_open(struct serial **out, const char *path)
 {
 	struct termios tio;
+	struct serial *s;
 	int fd;
 
-	serial_init(s);
+	*out = NULL;
 
 	fd = open(path, O_RDWR | O_NOCTTY);
 	if (fd < 0)
 		return -errno;
 
-	/* FD_CLOEXEC via fcntl — portable across POSIX.1-2001 and later
-	 * (the O_CLOEXEC open flag requires POSIX.1-2008 which ice's
-	 * -D_POSIX_C_SOURCE=200112L does not expose). */
-	if (fcntl(fd, F_SETFD, FD_CLOEXEC) < 0) {
-		int err = -errno;
+	if (fcntl(fd, F_SETFD, FD_CLOEXEC) < 0)
+		goto fail;
 
-		close(fd);
-		return err;
-	}
+	if (tcgetattr(fd, &tio) < 0)
+		goto fail;
 
-	if (tcgetattr(fd, &tio) < 0) {
-		int err = -errno;
-
-		close(fd);
-		return err;
-	}
-
-	/*
-	 * Raw mode: clear every input/output/line-discipline bit that
-	 * could alter the byte stream, then force 8 bits / no parity /
-	 * one stop bit / receiver enabled / ignore modem status.
-	 */
 	tio.c_iflag &= (tcflag_t) ~(IGNBRK | BRKINT | PARMRK | ISTRIP | INLCR |
 				    IGNCR | ICRNL | IXON | IXOFF | IXANY);
 	tio.c_oflag &= (tcflag_t)~OPOST;
@@ -128,32 +107,35 @@ int serial_open(struct serial *s, const char *path)
 #endif
 	tio.c_cflag |= CS8 | CREAD | CLOCAL;
 
-	/*
-	 * Timeouts are enforced via select() in serial_read(); configure
-	 * the terminal for immediate returns so read() does not block.
-	 */
 	tio.c_cc[VMIN] = 0;
 	tio.c_cc[VTIME] = 0;
 
-	if (tcsetattr(fd, TCSANOW, &tio) < 0) {
-		int err = -errno;
+	if (tcsetattr(fd, TCSANOW, &tio) < 0)
+		goto fail;
 
-		close(fd);
-		return err;
-	}
+	s = calloc(1, sizeof(*s));
+	if (!s)
+		goto fail;
 
 	s->fd = fd;
 	strncpy(s->path, path, sizeof s->path - 1);
-	s->path[sizeof s->path - 1] = '\0';
+	*out = s;
 	return 0;
+
+fail:;
+	int err = errno;
+
+	close(fd);
+	return -err;
 }
 
 void serial_close(struct serial *s)
 {
-	if (s->fd >= 0) {
+	if (!s)
+		return;
+	if (s->fd >= 0)
 		close(s->fd);
-		s->fd = -1;
-	}
+	free(s);
 }
 
 int serial_set_baud(struct serial *s, unsigned baud)
@@ -195,7 +177,7 @@ ssize_t serial_read(struct serial *s, void *buf, size_t n, unsigned timeout_ms)
 	if (rc < 0)
 		return -1;
 	if (rc == 0)
-		return 0; /* timeout */
+		return 0;
 
 	return read(s->fd, buf, n);
 }
