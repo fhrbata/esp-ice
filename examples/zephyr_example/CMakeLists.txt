@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: Apache-2.0
+
+cmake_minimum_required(VERSION 3.22)
+
+find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
+project(zephyr_flasher)
+
+zephyr_library_sources(
+  ../common/example_common.c
+  )
+
+zephyr_library_include_directories(
+  ../common
+  )
+
+# Convert binary files to C source files using bin2array.cmake
+include(${CMAKE_SOURCE_DIR}/../common/bin2array.cmake)
+create_resources(${CMAKE_SOURCE_DIR}/target-firmware ${CMAKE_BINARY_DIR}/target_firmware_data.c)
+set_property(SOURCE ${CMAKE_BINARY_DIR}/target_firmware_data.c PROPERTY GENERATED 1)
+
+target_sources(app PRIVATE
+    src/main.c
+    ${CMAKE_BINARY_DIR}/target_firmware_data.c
+)
