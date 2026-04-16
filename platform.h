@@ -182,6 +182,44 @@ int dir_foreach(const char *path, int (*cb)(const char *name, void *ud),
 const char *process_exe(void);
 
 /* ------------------------------------------------------------------ */
+/*  Raw console API                                                   */
+/* ------------------------------------------------------------------ */
+
+/**
+ * @brief Enter raw console mode.
+ *
+ * Puts stdin into character-at-a-time, no-echo mode with signal
+ * generation disabled.  Control characters (Ctrl-C, Ctrl-], ...)
+ * arrive as regular bytes / key events.  Output processing is left
+ * enabled so that '\n' still produces a carriage return.
+ *
+ * Registers an atexit handler on the first call to restore the
+ * original mode when the process exits.
+ *
+ * @return 0 on success, -errno on failure (-ENOTTY when stdin is
+ *         not a terminal).
+ */
+int console_raw_enter(void);
+
+/**
+ * @brief Leave raw console mode.
+ *
+ * Restores the terminal settings saved by console_raw_enter().
+ * Safe to call when raw mode is not active (no-op).
+ */
+void console_raw_leave(void);
+
+/**
+ * @brief Read from the console (stdin) with a timeout.
+ *
+ * Returns immediately if @p timeout_ms is 0 and no input is
+ * available.  Only meaningful after console_raw_enter().
+ *
+ * @return bytes read (> 0), 0 on timeout, -1 on error.
+ */
+ssize_t console_read(void *buf, size_t n, unsigned timeout_ms);
+
+/* ------------------------------------------------------------------ */
 /*  Child process API                                                 */
 /* ------------------------------------------------------------------ */
 

@@ -69,6 +69,7 @@ int cmd_configdep(int argc, const char **argv);
 int cmd_help(int argc, const char **argv);
 int cmd_image(int argc, const char **argv);
 int cmd_ldgen(int argc, const char **argv);
+int cmd_monitor(int argc, const char **argv);
 int cmd_partition_table(int argc, const char **argv);
 int cmd_size(int argc, const char **argv);
 
@@ -78,6 +79,7 @@ int cmd_size(int argc, const char **argv);
  * options don't expose a table; cmd_struct.opts is NULL for those.
  */
 extern const struct option cmd_config_opts[];
+extern const struct option cmd_monitor_opts[];
 extern const struct option cmd_image_create_opts[];
 extern const struct option cmd_image_info_opts[];
 extern const struct option cmd_image_merge_opts[];
