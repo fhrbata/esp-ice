@@ -221,8 +221,13 @@ else
 LIB_SRCS += platform/posix/io.c platform/posix/process.c platform/posix/serial.c
 SRCS     := $(MAIN_SRCS) $(LIB_SRCS)
 BINARY := $(O)/$(NAME)
-# readlink() requires _POSIX_C_SOURCE >= 200112L under -std=c99
+# glibc hides POSIX symbols (readlink, popen, …) under -std=c99
+# unless _POSIX_C_SOURCE is defined.  macOS exposes everything by
+# default; defining _POSIX_C_SOURCE there would *restrict* visibility
+# and hide Darwin extensions like B115200 in <termios.h>.
+ifeq ($(S),linux)
 CFLAGS_APPEND += -D_POSIX_C_SOURCE=200112L
+endif
 
 endif
 
