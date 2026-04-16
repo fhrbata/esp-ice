@@ -30,5 +30,5 @@ EOF
 $CC -c "$O/stub.c" -o "$O/stub.o" || exit 1
 $CC       "$O/stub.c" -o "$O/stub.elf" || exit 1
 
-$CC -std=c99 $SAN_FLAGS -I. -It -o "$O/test_elf" t/test_elf.c "$LIBICE" || exit 1
+$CC -std=c99 $SAN_FLAGS -I. -It -o "$O/test_elf" t/test_elf.c "$LIBICE" $LINK_LIBS || exit 1
 cd "$O" && ./test_elf

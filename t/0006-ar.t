@@ -28,5 +28,5 @@ fi
 	ar rcs test.a foo.txt bar.txt
 ) || exit 1
 
-$CC -std=c99 $SAN_FLAGS -I. -It -o "$O/test_ar" t/test_ar.c "$LIBICE" || exit 1
+$CC -std=c99 $SAN_FLAGS -I. -It -o "$O/test_ar" t/test_ar.c "$LIBICE" $LINK_LIBS || exit 1
 cd "$O" && ./test_ar

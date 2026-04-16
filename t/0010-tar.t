@@ -55,5 +55,5 @@ fi
 ) || exit 1
 
 $CC -std=c99 $SAN_FLAGS -I. -It \
-	-o "$O/test_tar" t/test_tar.c "$LIBICE" -lcurl -lz -llzma || exit 1
+	-o "$O/test_tar" t/test_tar.c "$LIBICE" $LINK_LIBS || exit 1
 cd "$O" && ./test_tar

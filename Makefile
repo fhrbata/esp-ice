@@ -400,6 +400,7 @@ SAN_TEST_ENV := LSAN_OPTIONS=detect_leaks=0
 
 test: $(BINARY) $(LIBICE)
 	T_OUT=$(T_OUT) BINARY=$(BINARY_ABS) LIBICE=$(LIBICE_ABS) \
+		LINK_LIBS="$(LIBS)" \
 		SAN_FLAGS="$(SAN_FLAGS)" $(if $(SANITIZE),$(SAN_TEST_ENV)) \
 		CC=${CC} S=$(S) prove $(PFLAGS) $(T)
 

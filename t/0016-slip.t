@@ -9,5 +9,5 @@
 O="$T_OUT/$(basename "$0" .t)"
 rm -rf "$O" && mkdir -p "$O"
 
-$CC -std=c99 $SAN_FLAGS -I. -It -o "$O/test_slip" t/test_slip.c "$LIBICE" || exit 1
+$CC -std=c99 $SAN_FLAGS -I. -It -o "$O/test_slip" t/test_slip.c "$LIBICE" $LINK_LIBS || exit 1
 cd "$O" && ./test_slip

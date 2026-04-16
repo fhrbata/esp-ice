@@ -19,5 +19,5 @@ if [ "$S" = "win" ]; then
 	esac
 fi
 
-$CC -std=c99 $SAN_FLAGS -I. -It -o "$O/test_options" t/test_options.c "$LIBICE" || exit 1
+$CC -std=c99 $SAN_FLAGS -I. -It -o "$O/test_options" t/test_options.c "$LIBICE" $LINK_LIBS || exit 1
 cd "$O" && ./test_options

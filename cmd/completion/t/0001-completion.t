@@ -37,7 +37,8 @@ tap_done "unknown shell is rejected with non-zero exit"
 tap_check grep -qx 'build'      cmds.out
 tap_check grep -qx 'config'     cmds.out
 tap_check grep -qx 'completion' cmds.out
-tap_check grep -qx 'set-target' cmds.out
+tap_check grep -qx 'target'    cmds.out
+tap_check grep -qx 'tools'     cmds.out
 tap_check ! grep -qx '__complete' cmds.out
 tap_done "subcommand list includes visible commands and hides __complete"
 
@@ -73,11 +74,11 @@ tap_done "per-subcommand flag completion emits -h/--help"
 
 # ---- `ice __complete`: positional candidates ----
 
-"$BINARY" __complete 2 ice set-target "" >targets.out
-tap_check grep -qx 'esp32'    targets.out
-tap_check grep -qx 'esp32s3'  targets.out
-tap_check grep -qx 'linux'    targets.out
-tap_done "set-target <TAB> uses shared chip list"
+"$BINARY" __complete 1 ice "t" >tpref.out
+tap_check grep -qx 'target'    tpref.out
+tap_check grep -qx 'tools'     tpref.out
+tap_check ! grep -qx 'build'   tpref.out
+tap_done "prefix 't' matches target and tools but not build"
 
 "$BINARY" __complete 2 ice help "" >helpcmds.out
 tap_check grep -qx 'build'       helpcmds.out
