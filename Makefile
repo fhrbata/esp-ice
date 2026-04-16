@@ -203,6 +203,13 @@ else
 LIBS := -lcurl -lz -llzma
 endif
 
+# Vendor libraries (always built from source, unlike deps which are
+# only needed for static/release builds).
+VENDOR_PREFIX := $(CURDIR)/vendor/install/$(TRIPLE)
+VENDOR_STAMP := $(VENDOR_PREFIX)/.stamp
+BUILD_CFLAGS += -I$(VENDOR_PREFIX)/include
+LIBS += -L$(VENDOR_PREFIX)/lib -lflasher
+
 ifeq ($(S), win)
 
 # wmain.c provides the Windows wide-char entry point that calls into
@@ -294,6 +301,10 @@ $(DEPS_STAMP):
 	$(MAKE) -C deps PREFIX=$(DEPS_PREFIX) S=$(S) TRIPLE=$(TRIPLE) $(if $(CROSS),CROSS=1)
 endif
 
+$(OBJS): | $(VENDOR_STAMP)
+$(VENDOR_STAMP):
+	$(MAKE) -C vendor PREFIX=$(VENDOR_PREFIX) S=$(S) TRIPLE=$(TRIPLE) $(if $(CROSS),CROSS=1)
+
 $(LIBICE): $(LIB_OBJS)
 	$(AR) rcs $@ $^
 
@@ -304,7 +315,7 @@ $(LIBICE): $(LIB_OBJS)
 $(BINARY): $(MAIN_OBJS) $(LIBICE) | $(O)
 	$(CC) -o $@ $(MAIN_OBJS) $(LIBICE) $(BUILD_LDFLAGS) $(LIBS)
 
-.PHONY: clean mrproper deps \
+.PHONY: clean mrproper deps vendor \
 	libice \
 	targz-pkg \
 	tarxz-pkg \
@@ -344,12 +355,16 @@ $(DIST)/$(PKG_NAME).zip: $(STAGE) | $(DIST)
 deps:
 	$(MAKE) -C deps PREFIX=$(CURDIR)/deps/install/$(TRIPLE) S=$(S) TRIPLE=$(TRIPLE) $(if $(CROSS),CROSS=1)
 
+vendor:
+	$(MAKE) -C vendor PREFIX=$(CURDIR)/vendor/install/$(TRIPLE) S=$(S) TRIPLE=$(TRIPLE) $(if $(CROSS),CROSS=1)
+
 clean:
 	rm -rf $(O) $(DIST) $(STAGE) $(T_OUT)
 
 mrproper: clean
 	rm -rf $(CURDIR)/build
 	$(MAKE) -C deps mrproper
+	$(MAKE) -C vendor mrproper
 
 # Routed through pre-commit so everyone uses the version pinned in
 # .pre-commit-config.yaml.  Raw clang-format output drifts between
@@ -431,7 +446,8 @@ help:
 	@echo ' clang-tidy       - run clang tidy'
 	@echo ''
 	@echo 'dependency targets:'
-	@echo ' deps             - build vendored deps (zlib, mbedTLS, curl, libyaml, xz)'
+	@echo ' deps             - build external deps (zlib, mbedTLS, curl, libyaml, xz)'
+	@echo ' vendor           - build vendor libs (esp-serial-flasher)'
 	@echo ''
 	@echo 'misc targets:'
 	@echo ' clean            - remove: $(O) $(DIST) $(STAGE) $(T_OUT)'

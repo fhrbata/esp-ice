@@ -1,6 +1,8 @@
 /build/
 /deps/install/
 /deps/.stamp
+/vendor/install/
+/vendor/*/build/
 /deps/*/yaml-*/
 /deps/*/zlib-*/
 /deps/*/mbedtls-*/
