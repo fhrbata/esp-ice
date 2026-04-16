@@ -67,6 +67,7 @@ int cmd_completion(int argc, const char **argv);
 int cmd_config(int argc, const char **argv);
 int cmd_configdep(int argc, const char **argv);
 int cmd_help(int argc, const char **argv);
+int cmd_idf(int argc, const char **argv);
 int cmd_image(int argc, const char **argv);
 int cmd_install(int argc, const char **argv);
 int cmd_ldgen(int argc, const char **argv);

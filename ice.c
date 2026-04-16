@@ -37,6 +37,7 @@ const struct cmd_struct ice_commands[] = {
      .fn = cmd_fullclean,
      .summary = "wipe the build directory"},
     {.name = "help", .fn = cmd_help, .summary = "show help for a subcommand"},
+    {.name = "idf", .fn = cmd_idf, .summary = "manage the ESP-IDF source tree"},
     {.name = "image",
      .fn = cmd_image,
      .summary = "host-only image manipulation (elf2image, ...)"},
