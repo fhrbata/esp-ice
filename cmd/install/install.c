@@ -254,24 +254,39 @@ static const char *url_basename(const char *url)
 /* Progress callbacks                                                  */
 /* ------------------------------------------------------------------ */
 
+/** Erase the current line and return the cursor to column 0. */
+static void erase_line(void) { fputs_p("\033[2K\r", stderr); }
+
+struct install_progress {
+	const char *name;
+	const char *version;
+	int files;
+};
+
 static void download_progress(size_t total, size_t now, void *ctx)
 {
-	(void)ctx;
+	struct install_progress *p = ctx;
 
 	if (!total)
-		fprintf(stderr, "\r  @b{%zu} bytes", now);
+		fprintf(stderr, "\r  @b{%s} %s - downloading %zu bytes",
+			p->name, p->version, now);
 	else
-		fprintf(stderr, "\r  @b{%3d%%}  %zu / %zu bytes",
-			(int)(now * 100 / total), now, total);
+		fprintf(
+		    stderr,
+		    "\r  @b{%s} %s - downloading @b{%3d%%}  %zu / %zu bytes",
+		    p->name, p->version, (int)(now * 100 / total), now, total);
 }
 
-static void extract_progress(const char *name, void *ctx)
+static void extract_progress(const char *entry, void *ctx)
 {
-	int *count = ctx;
+	struct install_progress *p = ctx;
 
-	(*count)++;
-	fprintf(stderr, "\r  Extracting @b{%d} files", *count);
-	(void)name;
+	if (p->files == 0)
+		erase_line();
+	p->files++;
+	fprintf(stderr, "\r  @b{%s} %s - extracting @b{%d} files", p->name,
+		p->version, p->files);
+	(void)entry;
 }
 
 /* ------------------------------------------------------------------ */
@@ -344,11 +359,13 @@ static int install_tool(struct json_value *tool, const char *platform,
 	/* Already installed? */
 	sbuf_addf(&dest, "%s/tools/%s/%s", base_dir, name, ver_name);
 	if (!force && !access(dest.buf, F_OK)) {
-		fprintf(stderr, "  @g{%s %s} -- already installed\n\n", name,
+		fprintf(stderr, "  @g{%s %s} - already installed\n", name,
 			ver_name);
 		ret = 0;
 		goto out;
 	}
+
+	struct install_progress progress = {.name = name, .version = ver_name};
 
 	/* Download */
 	sbuf_addf(&archive, "%s/dist/%s", base_dir, url_basename(url));
@@ -357,22 +374,24 @@ static int install_tool(struct json_value *tool, const char *platform,
 		goto out;
 	}
 
-	fprintf(stderr, "  @b{%s} %s\n", name, ver_name);
-	if (http_download(url, archive.buf, download_progress, NULL) < 0) {
-		fprintf(stderr, "\n");
+	if (http_download(url, archive.buf, download_progress, &progress) < 0) {
+		erase_line();
+		fprintf(stderr, "  @b{%s} %s - @r{failed}\n", name, ver_name);
 		warn("download failed: %s", name);
 		goto out;
 	}
 
 	/* Verify SHA-256 */
 	if (sha256_file(archive.buf, hash) < 0) {
-		fprintf(stderr, "\n");
+		erase_line();
+		fprintf(stderr, "  @b{%s} %s - @r{failed}\n", name, ver_name);
 		warn_errno("cannot read downloaded archive for %s", name);
 		goto cleanup_archive;
 	}
 	hex_encode(hash, SHA256_BLOCK_SIZE, hex);
 	if (strcmp(hex, expected_sha) != 0) {
-		fprintf(stderr, "\n");
+		erase_line();
+		fprintf(stderr, "  @b{%s} %s - @r{failed}\n", name, ver_name);
 		warn("%s: SHA-256 mismatch: expected %s, got %s", name,
 		     expected_sha, hex);
 		goto cleanup_archive;
@@ -380,19 +399,20 @@ static int install_tool(struct json_value *tool, const char *platform,
 
 	/* Extract */
 	if (mkdirp(dest.buf) < 0) {
-		fprintf(stderr, "\n");
+		erase_line();
+		fprintf(stderr, "  @b{%s} %s - @r{failed}\n", name, ver_name);
 		warn_errno("cannot create install directory for %s", name);
 		goto cleanup_archive;
 	}
-	int file_count = 0;
 	if (tar_extract_progress(archive.buf, dest.buf, extract_progress,
-				 &file_count) < 0) {
-		fprintf(stderr, "\n");
+				 &progress) < 0) {
+		erase_line();
+		fprintf(stderr, "  @b{%s} %s - @r{failed}\n", name, ver_name);
 		warn("extraction failed: %s", name);
 		goto cleanup_archive;
 	}
-	fprintf(stderr, "\r  Extracting @b{%d} files @g{done}%*s\n\n",
-		file_count, 20, "");
+	erase_line();
+	fprintf(stderr, "  @g{%s %s} - done\n", name, ver_name);
 
 	ret = 0;
 
@@ -450,7 +470,7 @@ int cmd_install(int argc, const char **argv)
 	base_dir = tools_dir();
 	n = json_array_size(tools);
 
-	fprintf(stderr, "Platform: @b{%s}  Tools path: @b{%s}\n\n", platform,
+	fprintf(stderr, "Platform: @b{%s}  Tools path: @b{%s}\n", platform,
 		base_dir);
 
 	for (int i = 0; i < n; i++) {

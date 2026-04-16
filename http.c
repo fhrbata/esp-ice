@@ -114,9 +114,6 @@ int http_download(const char *url, const char *path, http_progress_fn progress,
 	curl_easy_cleanup(curl);
 	fclose(fp);
 
-	if (progress)
-		fprintf(stderr, "\n");
-
 	if (res != CURLE_OK) {
 		err("download failed: %s: %s", url, curl_easy_strerror(res));
 		return -1;
