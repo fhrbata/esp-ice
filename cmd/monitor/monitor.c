@@ -15,11 +15,11 @@
 #include "serial.h"
 
 /* clang-format off */
-const struct option cmd_monitor_opts[] = {
+static const struct option cmd_monitor_opts[] = {
 	OPT_CONFIG('p', "port", "serial.port", "path",
-		   "serial port device path"),
+		   "serial port device path", NULL),
 	OPT_CONFIG('b', "baud", "serial.baud", "rate",
-		   "baud rate (default: 115200)"),
+		   "baud rate (default: 115200)", NULL),
 	OPT_END(),
 };
 
@@ -58,7 +58,6 @@ static const struct cmd_manual manual = {
 
 int cmd_monitor(int argc, const char **argv)
 {
-	const char *usage[] = {"ice monitor [-p <port>] [-b <baud>]", NULL};
 	const char *port;
 	const char *baud_str;
 	unsigned baud = 115200;
@@ -66,7 +65,7 @@ int cmd_monitor(int argc, const char **argv)
 	unsigned char buf[1024];
 	int rc;
 
-	parse_options_manual(argc, argv, cmd_monitor_opts, usage, &manual);
+	parse_options_manual(argc, argv, cmd_monitor_opts, &manual);
 
 	port = config_get("serial.port");
 	if (!port)

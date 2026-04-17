@@ -48,11 +48,6 @@ static const struct cmd_manual manual = {
 };
 /* clang-format on */
 
-static const char *usage[] = {
-    "ice image create --chip <chip> [options] -o <out.bin> <in.elf>",
-    NULL,
-};
-
 /* File-scope so the option table is const and the completion backend
  * can walk it through cmd_image_create_opts. */
 static const char *opt_chip;
@@ -75,30 +70,30 @@ static int opt_ram_only_header;
 static int opt_min_rev_legacy;
 static const char *opt_version;
 
-const struct option cmd_image_create_opts[] = {
+static const struct option cmd_image_create_opts[] = {
     OPT_STRING(0, "chip", &opt_chip, "name",
-	       "target chip (e.g. esp32, esp32s3, esp32c3)"),
-    OPT_STRING('o', NULL, &opt_out, "path", "output image path"),
+	       "target chip (e.g. esp32, esp32s3, esp32c3)", NULL),
+    OPT_STRING('o', NULL, &opt_out, "path", "output image path", NULL),
     OPT_STRING(0, "flash-mode", &opt_flash_mode, "mode",
-	       "qio | qout | dio | dout (default dio)"),
+	       "qio | qout | dio | dout (default dio)", NULL),
     OPT_STRING(0, "flash-freq", &opt_flash_freq, "freq",
-	       "flash clock, chip-specific (e.g. 80m, 40m, 20m)"),
+	       "flash clock, chip-specific (e.g. 80m, 40m, 20m)", NULL),
     OPT_STRING(0, "flash-size", &opt_flash_size, "size",
-	       "1MB | 2MB | 4MB | 8MB | 16MB | ...  (default 2MB)"),
+	       "1MB | 2MB | 4MB | 8MB | 16MB | ...  (default 2MB)", NULL),
     OPT_STRING(0, "elf-sha256-offset", &opt_elf_sha256_offset, "hex",
-	       "patch ELF SHA-256 at this absolute image offset"),
+	       "patch ELF SHA-256 at this absolute image offset", NULL),
     OPT_INT(0, "min-rev-full", &opt_min_rev_full, "n",
-	    "minimum chip revision (full form)"),
+	    "minimum chip revision (full form)", NULL),
     OPT_INT(0, "max-rev-full", &opt_max_rev_full, "n",
-	    "maximum chip revision (full form)"),
+	    "maximum chip revision (full form)", NULL),
     OPT_BOOL(0, "no-append-digest", &opt_no_append_digest,
 	     "do not append the 32-byte SHA-256 digest"),
 
     /* Accepted for esptool CLI compatibility; see comments in body. */
     OPT_STRING(0, "pad-to-size", &opt_pad_to_size, "size",
-	       "pad output to this flash size with 0xFF"),
+	       "pad output to this flash size with 0xFF", NULL),
     OPT_STRING(0, "flash-mmu-page-size", &opt_mmu_page_size, "size",
-	       "(accepted, only 64KB is implemented today)"),
+	       "(accepted, only 64KB is implemented today)", NULL),
     OPT_BOOL(0, "secure-pad", &opt_secure_pad,
 	     "(accepted, no-op in this release)"),
     OPT_BOOL(0, "secure-pad-v2", &opt_secure_pad_v2,
@@ -108,9 +103,9 @@ const struct option cmd_image_create_opts[] = {
     OPT_BOOL(0, "ram-only-header", &opt_ram_only_header,
 	     "(accepted, no-op in this release)"),
     OPT_INT(0, "min-rev", &opt_min_rev_legacy, "n",
-	    "deprecated; use --min-rev-full"),
+	    "deprecated; use --min-rev-full", NULL),
     OPT_STRING(0, "version", &opt_version, "N",
-	       "ESP8266 image version (ESP8266 is not supported)"),
+	       "ESP8266 image version (ESP8266 is not supported)", NULL),
     OPT_END(),
 };
 
@@ -163,8 +158,7 @@ int cmd_image_create(int argc, const char **argv)
 	struct sbuf img = SBUF_INIT;
 	FILE *fp;
 
-	argc = parse_options_manual(argc, argv, cmd_image_create_opts, usage,
-				    &manual);
+	argc = parse_options_manual(argc, argv, cmd_image_create_opts, &manual);
 
 	if (argc < 1)
 		die("missing input ELF path");

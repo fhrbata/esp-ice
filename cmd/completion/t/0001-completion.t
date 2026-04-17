@@ -46,8 +46,7 @@ tap_done "subcommand list includes visible commands and hides __complete"
 tap_check grep -qx 'completion' pref.out
 tap_check grep -qx 'config'     pref.out
 tap_check grep -qx 'configdep'  pref.out
-tap_check ! grep -qx 'build'    pref.out
-tap_done "prefix filtering matches subcommands starting with 'co'"
+tap_done "subcommand list includes all visible commands (shell does prefix filtering)"
 
 # ---- `ice __complete`: per-subcommand flag candidates ----
 
@@ -77,8 +76,7 @@ tap_done "per-subcommand flag completion emits -h/--help"
 "$BINARY" __complete 1 ice "t" >tpref.out
 tap_check grep -qx 'target'    tpref.out
 tap_check grep -qx 'tools'     tpref.out
-tap_check ! grep -qx 'build'   tpref.out
-tap_done "prefix 't' matches target and tools but not build"
+tap_done "subcommand list includes target and tools (shell does prefix filtering)"
 
 "$BINARY" __complete 2 ice help "" >helpcmds.out
 tap_check grep -qx 'build'       helpcmds.out

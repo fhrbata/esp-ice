@@ -42,9 +42,8 @@ static const struct cmd_manual manual = {
 
 int cmd_reconfigure(int argc, const char **argv)
 {
-	const char *usage[] = {"ice reconfigure", NULL};
 	struct option opts[] = {OPT_END()};
 
-	parse_options_manual(argc, argv, opts, usage, &manual);
+	parse_options_manual(argc, argv, opts, &manual);
 	return ensure_build_directory(1);
 }

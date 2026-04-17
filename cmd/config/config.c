@@ -21,15 +21,6 @@
  */
 #include "ice.h"
 
-static const char *usage[] = {
-    "ice config [--list]",
-    "ice config [--user | --local] <key>",
-    "ice config [--user | --local] <key> <value>",
-    "ice config [--user | --local] --add <key> <value>",
-    "ice config [--user | --local] --unset <key>",
-    NULL,
-};
-
 /* clang-format off */
 static const struct cmd_manual manual = {
 	.description =
@@ -158,14 +149,20 @@ static int opt_unset;
 static int opt_user;
 static int opt_local;
 
-const struct option cmd_config_opts[] = {
+static void complete_config_keys(void)
+{
+	for (int i = 0; i < config.nr; i++)
+		printf("%s\n", config.entries[i].key);
+}
+
+static const struct option cmd_config_opts[] = {
     OPT_BOOL('l', "list", &opt_list, "list entries with scope"),
     OPT_BOOL(0, "add", &opt_add, "append a value (multi-value keys)"),
     OPT_BOOL(0, "unset", &opt_unset, "remove all entries for a key"),
     OPT_BOOL(0, "user", &opt_user, "act on the user config (~/.iceconfig)"),
     OPT_BOOL(0, "local", &opt_local,
 	     "act on the local config (./.iceconfig) [default]"),
-    OPT_END(),
+    OPT_END_COMPLETE("key", complete_config_keys),
 };
 
 static enum config_scope target_scope(int user, int local)
@@ -268,8 +265,7 @@ int cmd_config(int argc, const char **argv)
 	int modes;
 	enum config_scope scope;
 
-	argc =
-	    parse_options_manual(argc, argv, cmd_config_opts, usage, &manual);
+	argc = parse_options_manual(argc, argv, cmd_config_opts, &manual);
 
 	modes = opt_list + opt_add + opt_unset;
 	if (modes > 1)

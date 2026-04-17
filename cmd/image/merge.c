@@ -48,22 +48,16 @@ static const struct cmd_manual manual = {
 };
 /* clang-format on */
 
-static const char *usage[] = {
-    "ice image merge [options] -o <out.bin> "
-    "<off1> <in1.bin> [<off2> <in2.bin> ...]",
-    NULL,
-};
-
 static const char *opt_out;
 static const char *opt_pad_to_size;
 static const char *opt_target_offset;
 
-const struct option cmd_image_merge_opts[] = {
-    OPT_STRING('o', NULL, &opt_out, "path", "output image path"),
+static const struct option cmd_image_merge_opts[] = {
+    OPT_STRING('o', NULL, &opt_out, "path", "output image path", NULL),
     OPT_STRING(0, "pad-to-size", &opt_pad_to_size, "size",
-	       "pad output to this flash size (e.g. 4MB) with 0xFF"),
+	       "pad output to this flash size (e.g. 4MB) with 0xFF", NULL),
     OPT_STRING(0, "target-offset", &opt_target_offset, "hex",
-	       "subtract this base offset from every placement"),
+	       "subtract this base offset from every placement", NULL),
     OPT_END(),
 };
 
@@ -105,8 +99,7 @@ static size_t flash_size_bytes(const char *s)
 
 int cmd_image_merge(int argc, const char **argv)
 {
-	argc = parse_options_manual(argc, argv, cmd_image_merge_opts, usage,
-				    &manual);
+	argc = parse_options_manual(argc, argv, cmd_image_merge_opts, &manual);
 
 	if (!opt_out)
 		die("-o <output.bin> is required");

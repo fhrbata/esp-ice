@@ -6,90 +6,102 @@
 
 /**
  * @file ice.c
- * @brief Subcommand dispatch table, global option table, and root manual.
+ * @brief Top-level command entry point, global option table, and root manual.
  *
  * This file is part of libice.a so tests and any future external
- * libice consumer can reach @c ice_commands[] and friends without
- * pulling in the program's main() -- which lives in main.c.
+ * libice consumer can reach cmd_ice() and friends without pulling
+ * in the program's main() -- which lives in main.c.
  */
 #include "ice.h"
 
-const struct cmd_struct ice_commands[] = {
-    {.name = "build", .fn = cmd_build, .summary = "build the default target"},
-    {.name = "clean", .fn = cmd_clean, .summary = "remove build artifacts"},
-    {.name = "cmake",
-     .fn = cmd_cmake,
-     .summary = "run an arbitrary cmake target"},
-    {.name = "completion",
-     .fn = cmd_completion,
-     .summary = "print shell completion script"},
-    {.name = "config",
-     .fn = cmd_config,
-     .summary = "inspect and modify configuration entries",
-     .opts = cmd_config_opts},
-    {.name = "configdep",
-     .fn = cmd_configdep,
-     .summary = "sdkconfig-aware compiler wrapper"},
-    {.name = "flash",
-     .fn = cmd_flash,
-     .summary = "flash firmware to the device"},
-    {.name = "fullclean",
-     .fn = cmd_fullclean,
-     .summary = "wipe the build directory"},
-    {.name = "help", .fn = cmd_help, .summary = "show help for a subcommand"},
-    {.name = "idf", .fn = cmd_idf, .summary = "manage the ESP-IDF source tree"},
-    {.name = "image",
-     .fn = cmd_image,
-     .summary = "host-only image manipulation (elf2image, ...)"},
-    {.name = "ldgen",
-     .fn = cmd_ldgen,
-     .summary = "analyse linker fragment (.lf) files",
-     .opts = cmd_ldgen_opts},
-    {.name = "monitor",
-     .fn = cmd_monitor,
-     .summary = "display serial output from the device",
-     .opts = cmd_monitor_opts},
-    {.name = "menuconfig",
-     .fn = cmd_menuconfig,
-     .summary = "open the project configuration UI"},
-    {.name = "partition-table",
-     .fn = cmd_partition_table,
-     .summary = "generate partition table binary from CSV",
-     .opts = cmd_partition_table_opts},
-    {.name = "reconfigure",
-     .fn = cmd_reconfigure,
-     .summary = "regenerate the build system"},
-    {.name = "size",
-     .fn = cmd_size,
-     .summary = "analyse firmware memory usage by region",
-     .opts = cmd_size_opts},
-    {.name = "target", .fn = cmd_target, .summary = "manage the chip target"},
-    {.name = "tools", .fn = cmd_tools, .summary = "manage ESP-IDF toolchains"},
-    /*
-     * Hidden backend invoked by the bash/zsh/fish glue printed by
-     * `ice completion`.  Kept out of help listings and top-level
-     * completion output; dispatchable like any other command.
-     */
-    {.name = "__complete",
-     .fn = cmd_complete,
-     .summary = "shell completion backend (internal)",
-     .hidden = 1},
-    {0},
-};
-
-const char *ice_cmd_summary(const char *name)
+/*
+ * Run a shell alias ("!<cmd>") via /bin/sh -c (POSIX) or cmd.exe /c
+ * (Windows) and exit with its status.  Never returns.
+ */
+static NORETURN void run_shell_alias(const char *cmd)
 {
-	for (const struct cmd_struct *c = ice_commands; c->name; c++)
-		if (!strcmp(name, c->name))
-			return c->summary;
-	return NULL;
+	const char *sh_argv[4];
+	struct process proc = PROCESS_INIT;
+	int rc;
+
+#ifdef _WIN32
+	sh_argv[0] = "cmd.exe";
+	sh_argv[1] = "/c";
+#else
+	sh_argv[0] = "/bin/sh";
+	sh_argv[1] = "-c";
+#endif
+	sh_argv[2] = cmd;
+	sh_argv[3] = NULL;
+
+	proc.argv = sh_argv;
+	rc = process_run(&proc);
+	exit(rc < 0 ? EXIT_FAILURE : rc);
 }
 
-const char *ice_global_usage[] = {
-    "ice [-B <path>] [-G <name>] [-D <key=val>] [-v] [-C <dir>] [--no-color] "
-    "<command> [<args>]",
-    NULL,
-};
+/*
+ * Try to expand argv[0] as an alias (config key alias.<name>).
+ *
+ * Value starting with '!' is a shell alias: passed straight to the
+ * platform shell and the process exits with its status.
+ *
+ * Otherwise the value is split on whitespace; the tokens replace
+ * argv[0], with the remaining args from argv[1..] appended.
+ *
+ * Returns 1 if expansion happened, 0 otherwise.
+ */
+static int try_expand_alias(int *argcp, const char ***argvp)
+{
+	static struct svec tokens = SVEC_INIT;
+	struct sbuf key = SBUF_INIT;
+	struct svec prev_args = SVEC_INIT;
+	const char *value;
+	char *copy;
+	char *p;
+
+	sbuf_addf(&key, "alias.%s", (*argvp)[0]);
+	value = config_get(key.buf);
+	sbuf_release(&key);
+
+	if (!value)
+		return 0;
+
+	if (value[0] == '!')
+		run_shell_alias(value + 1);
+
+	for (int i = 1; i < *argcp; i++)
+		svec_push(&prev_args, (*argvp)[i]);
+
+	svec_clear(&tokens);
+
+	copy = sbuf_strdup(value);
+	p = copy;
+	while (*p) {
+		char *tok;
+
+		while (*p == ' ' || *p == '\t')
+			p++;
+		if (!*p)
+			break;
+		tok = p;
+		while (*p && *p != ' ' && *p != '\t')
+			p++;
+		if (*p)
+			*p++ = '\0';
+		svec_push(&tokens, tok);
+	}
+	free(copy);
+
+	for (size_t i = 0; i < prev_args.nr; i++)
+		svec_push(&tokens, prev_args.v[i]);
+	svec_clear(&prev_args);
+
+	*argcp = (int)tokens.nr;
+	*argvp = tokens.v;
+	return 1;
+}
+
+/* Dispatch: parse globals then fire the matched subcommand. */
 
 /*
  * Written to by parse_options_manual(); checked in main() (in main.c)
@@ -100,18 +112,107 @@ const char *ice_global_usage[] = {
 int global_no_color;
 int global_version;
 
+static subcmd_fn ice_fn;
+
 const struct option ice_global_opts[] = {
     OPT_CONFIG('B', "build-dir", "core.build-dir", "path",
-	       "build directory (default: build)"),
+	       "build directory (default: build)", NULL),
     OPT_CONFIG_LIST('D', "define", "cmake.define", "key=val",
-		    "cmake cache entry (repeatable)"),
+		    "cmake cache entry (repeatable)", NULL),
     OPT_CONFIG('G', "generator", "core.generator", "name",
-	       "cmake generator (default: Ninja)"),
+	       "cmake generator (default: Ninja)", NULL),
     OPT_BOOL(0, "no-color", &global_no_color, "disable colored output"),
     OPT_CONFIG_BOOL('v', "verbose", "core.verbose", "show full command output"),
     OPT_BOOL(0, "version", &global_version, "show version"),
+
+    OPT_SUBCOMMAND("build", &ice_fn, cmd_build, "build the default target"),
+    OPT_SUBCOMMAND("clean", &ice_fn, cmd_clean, "remove build artifacts"),
+    OPT_SUBCOMMAND("cmake", &ice_fn, cmd_cmake,
+		   "run an arbitrary cmake target"),
+    OPT_SUBCOMMAND("completion", &ice_fn, cmd_completion,
+		   "print shell completion script"),
+    OPT_SUBCOMMAND("config", &ice_fn, cmd_config,
+		   "inspect and modify configuration entries"),
+    OPT_SUBCOMMAND("configdep", &ice_fn, cmd_configdep,
+		   "sdkconfig-aware compiler wrapper"),
+    OPT_SUBCOMMAND("flash", &ice_fn, cmd_flash, "flash firmware to the device"),
+    OPT_SUBCOMMAND("fullclean", &ice_fn, cmd_fullclean,
+		   "wipe the build directory"),
+    OPT_SUBCOMMAND("help", &ice_fn, cmd_help, "show help for a subcommand"),
+    OPT_SUBCOMMAND("idf", &ice_fn, cmd_idf, "manage the ESP-IDF source tree"),
+    OPT_SUBCOMMAND("image", &ice_fn, cmd_image, "host-only image manipulation"),
+    OPT_SUBCOMMAND("ldgen", &ice_fn, cmd_ldgen,
+		   "analyse linker fragment (.lf) files"),
+    OPT_SUBCOMMAND("menuconfig", &ice_fn, cmd_menuconfig,
+		   "open the project configuration UI"),
+    OPT_SUBCOMMAND("monitor", &ice_fn, cmd_monitor,
+		   "display serial output from the device"),
+    OPT_SUBCOMMAND("partition-table", &ice_fn, cmd_partition_table,
+		   "generate partition table binary from CSV"),
+    OPT_SUBCOMMAND("reconfigure", &ice_fn, cmd_reconfigure,
+		   "regenerate the build system"),
+    OPT_SUBCOMMAND("size", &ice_fn, cmd_size,
+		   "analyse firmware memory usage by region"),
+    OPT_SUBCOMMAND("target", &ice_fn, cmd_target, "manage the chip target"),
+    OPT_SUBCOMMAND("tools", &ice_fn, cmd_tools, "manage ESP-IDF toolchains"),
+    OPT_SUBCOMMAND("__complete", &ice_fn, cmd_complete,
+		   "shell completion backend (internal)"),
     OPT_END(),
 };
+
+const char *ice_cmd_summary(const char *name)
+{
+	for (const struct option *o = ice_global_opts; o->type != OPTION_END;
+	     o++) {
+		if (o->type == OPTION_SUBCOMMAND && !strcmp(name, o->long_opt))
+			return o->help;
+	}
+	return NULL;
+}
+
+int cmd_ice(int argc, const char **argv)
+{
+	argc =
+	    parse_options_manual(argc, argv, ice_global_opts, &ice_root_manual);
+
+	if (global_no_color)
+		use_color = 0;
+
+	if (global_version) {
+		printf("%sice %s\n", use_vt ? "\xf0\x9f\xa7\x8a " : "",
+		       VERSION);
+		return 0;
+	}
+
+	if (ice_fn)
+		return ice_fn(argc, argv);
+
+	if (argc < 1) {
+		print_manual(argv[0], &ice_root_manual, ice_global_opts);
+		return 1;
+	}
+
+	/*
+	 * Unrecognised command -- try alias expansion.  On success the
+	 * first token is replaced with the alias value, and we look up
+	 * the resulting subcommand name directly.  Global flags inside
+	 * alias values are intentionally NOT re-parsed.
+	 */
+	for (int depth = 0; depth < 10; depth++) {
+		if (!try_expand_alias(&argc, &argv))
+			break;
+	}
+	if (argc >= 1) {
+		for (const struct option *o = ice_global_opts;
+		     o->type != OPTION_END; o++) {
+			if (o->type == OPTION_SUBCOMMAND &&
+			    !strcmp(argv[0], o->long_opt))
+				return o->subcommand_fn(argc, argv);
+		}
+	}
+
+	die("'%s' is not a command. See 'ice --help'.", argc ? argv[0] : "");
+}
 
 /* clang-format off */
 const struct cmd_manual ice_root_manual = {

@@ -374,11 +374,7 @@ int cmd_configdep(int argc, const char **argv)
 	 */
 	if (argc >= 2 &&
 	    (!strcmp(argv[1], "--help") || !strcmp(argv[1], "-h"))) {
-		const char *usage[] = {
-		    "ice configdep <compiler> [<arg>...]",
-		    NULL,
-		};
-		print_manual("configdep", &manual, NULL, usage);
+		print_manual("configdep", &manual, NULL);
 		return EXIT_SUCCESS;
 	}
 

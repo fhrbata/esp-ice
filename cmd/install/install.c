@@ -47,24 +47,18 @@ static const struct cmd_manual manual = {
 };
 /* clang-format on */
 
-static const char *usage[] = {
-    "ice install [--target <chip>] [--tool <name>] [--path <dir>] [--force] "
-    "<tools.json>",
-    NULL,
-};
-
 static const char *opt_tool;
 static const char *opt_target;
 static const char *opt_path;
 static int opt_force;
 
-const struct option cmd_install_opts[] = {
+static const struct option cmd_install_opts[] = {
     OPT_STRING(0, "target", &opt_target, "chip",
-	       "only install tools that support this chip target"),
+	       "only install tools that support this chip target", NULL),
     OPT_STRING(0, "tool", &opt_tool, "name",
-	       "install a specific tool (includes on_request tools)"),
+	       "install a specific tool (includes on_request tools)", NULL),
     OPT_STRING(0, "path", &opt_path, "dir",
-	       "tools install directory (default: ~/.ice)"),
+	       "tools install directory (default: ~/.ice)", NULL),
     OPT_BOOL(0, "force", &opt_force,
 	     "re-download and overwrite existing installations"),
     OPT_END(),
@@ -412,8 +406,7 @@ int cmd_install(int argc, const char **argv)
 	int installed = 0, skipped = 0, failed = 0;
 	int tool_found = 0;
 
-	argc =
-	    parse_options_manual(argc, argv, cmd_install_opts, usage, &manual);
+	argc = parse_options_manual(argc, argv, cmd_install_opts, &manual);
 	if (argc != 1)
 		die("expected exactly one argument: path to tools.json");
 

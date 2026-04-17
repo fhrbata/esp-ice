@@ -56,9 +56,8 @@ static const struct cmd_manual manual = {
 
 int cmd_build(int argc, const char **argv)
 {
-	const char *usage[] = {"ice build", NULL};
 	struct option opts[] = {OPT_END()};
 
-	parse_options_manual(argc, argv, opts, usage, &manual);
+	parse_options_manual(argc, argv, opts, &manual);
 	return run_cmake_target("all", "build", 0);
 }

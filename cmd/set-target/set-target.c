@@ -65,7 +65,7 @@ static const struct cmd_manual manual = {
 /* File-scope so the table can be const and reachable via cmd_struct.opts. */
 static int opt_preview;
 
-const struct option cmd_set_target_opts[] = {
+static const struct option cmd_set_target_opts[] = {
     OPT_BOOL(0, "preview", &opt_preview, "allow preview targets"),
     OPT_END(),
 };
@@ -90,16 +90,11 @@ int cmd_set_target(int argc, const char **argv)
 	 * outlive the call -- a function-static array provides that.
 	 */
 	static char envstr[] = "_IDF_PY_SET_TARGET_ACTION=1";
-	const char *usage[] = {
-	    "ice set-target [--preview] <target>",
-	    NULL,
-	};
 	const char *target;
 	struct sbuf define = SBUF_INIT;
 	int rc;
 
-	argc = parse_options_manual(argc, argv, cmd_set_target_opts, usage,
-				    &manual);
+	argc = parse_options_manual(argc, argv, cmd_set_target_opts, &manual);
 
 	if (argc < 1)
 		die("missing <target> argument");

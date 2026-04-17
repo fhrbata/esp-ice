@@ -64,10 +64,10 @@ static const struct cmd_manual manual = {
 static const char *opt_target;
 static const char *opt_format = "table";
 
-const struct option cmd_size_opts[] = {
-    OPT_STRING('t', "target", &opt_target, "chip",
-	       "target chip (e.g. esp32s3)"),
-    OPT_STRING(0, "format", &opt_format, "fmt", "output format (table)"),
+static const struct option cmd_size_opts[] = {
+    OPT_STRING('t', "target", &opt_target, "chip", "target chip (e.g. esp32s3)",
+	       NULL),
+    OPT_STRING(0, "format", &opt_format, "fmt", "output format (table)", NULL),
     OPT_END(),
 };
 
@@ -573,12 +573,7 @@ static void output_table(struct memmap *mm)
 
 int cmd_size(int argc, const char **argv)
 {
-	const char *usage[] = {
-	    "ice size [--format <fmt>] [--target <chip>] <map-file>",
-	    NULL,
-	};
-
-	argc = parse_options_manual(argc, argv, cmd_size_opts, usage, &manual);
+	argc = parse_options_manual(argc, argv, cmd_size_opts, &manual);
 	if (argc < 1)
 		die("no map file; see 'ice size --help'");
 

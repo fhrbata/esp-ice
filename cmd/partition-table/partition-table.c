@@ -45,11 +45,6 @@ static const struct cmd_manual manual = {
 };
 /* clang-format on */
 
-static const char *pt_usage[] = {
-    "ice partition-table [options] [--] <input.csv> <output.bin>",
-    NULL,
-};
-
 /*
  * File-scope so the completion backend can walk the option table via
  * cmd_struct.opts.  Defaults live on the variables; parse_options
@@ -66,21 +61,21 @@ static int quiet;
 /* --extra-partition-subtypes: accepted, ignored (numeric always works). */
 static const char *extra_subtypes;
 
-const struct option cmd_partition_table_opts[] = {
+static const struct option cmd_partition_table_opts[] = {
     OPT_BOOL('q', "quiet", &quiet, "suppress non-error output"),
     OPT_STRING(0, "offset", &offset_str, "hex",
-	       "partition table offset in flash (default 0x8000)"),
+	       "partition table offset in flash (default 0x8000)", NULL),
     OPT_STRING(0, "primary-bootloader-offset", &pbl_offset_str, "hex",
-	       "primary bootloader offset in flash"),
+	       "primary bootloader offset in flash", NULL),
     OPT_STRING(0, "recovery-bootloader-offset", &rbl_offset_str, "hex",
-	       "recovery bootloader offset in flash"),
+	       "recovery bootloader offset in flash", NULL),
     OPT_BOOL(0, "disable-md5sum", &disable_md5, "disable MD5 checksum entry"),
     OPT_BOOL(0, "no-verify", &no_verify, "skip partition table validation"),
     OPT_STRING(0, "flash-size", &flash_size_str, "NMB",
-	       "flash size for validation (e.g. 4MB)"),
-    OPT_STRING(0, "secure", &secure_str, "v1|v2", "secure boot version"),
+	       "flash size for validation (e.g. 4MB)", NULL),
+    OPT_STRING(0, "secure", &secure_str, "v1|v2", "secure boot version", NULL),
     OPT_STRING(0, "extra-partition-subtypes", &extra_subtypes, "...",
-	       "extra subtype definitions (ignored)"),
+	       "extra subtype definitions (ignored)", NULL),
     OPT_END(),
 };
 
@@ -94,8 +89,8 @@ int cmd_partition_table(int argc, const char **argv)
 	const char *output_path;
 	FILE *fp;
 
-	argc = parse_options_manual(argc, argv, cmd_partition_table_opts,
-				    pt_usage, &manual);
+	argc =
+	    parse_options_manual(argc, argv, cmd_partition_table_opts, &manual);
 
 	if (argc < 2)
 		die("usage: ice partition-table [options] <input.csv> "

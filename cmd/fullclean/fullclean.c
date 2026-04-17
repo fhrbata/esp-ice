@@ -107,9 +107,8 @@ int fullclean_run(void)
 
 int cmd_fullclean(int argc, const char **argv)
 {
-	const char *usage[] = {"ice fullclean", NULL};
 	struct option opts[] = {OPT_END()};
 
-	parse_options_manual(argc, argv, opts, usage, &manual);
+	parse_options_manual(argc, argv, opts, &manual);
 	return fullclean_run();
 }

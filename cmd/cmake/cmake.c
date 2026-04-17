@@ -51,10 +51,9 @@ static const struct cmd_manual manual = {
 
 int cmd_cmake(int argc, const char **argv)
 {
-	const char *usage[] = {"ice cmake <target>", NULL};
 	struct option opts[] = {OPT_END()};
 
-	argc = parse_options_manual(argc, argv, opts, usage, &manual);
+	argc = parse_options_manual(argc, argv, opts, &manual);
 
 	if (argc < 1)
 		die("missing target argument");

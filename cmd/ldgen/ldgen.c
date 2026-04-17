@@ -41,19 +41,14 @@ static const struct cmd_manual manual = {
 /* File-scope so the table can be const and reachable via cmd_struct.opts. */
 static int opt_dump;
 
-const struct option cmd_ldgen_opts[] = {
+static const struct option cmd_ldgen_opts[] = {
     OPT_BOOL('d', "dump", &opt_dump, "dump parsed AST"),
     OPT_END(),
 };
 
 int cmd_ldgen(int argc, const char **argv)
 {
-	const char *usage[] = {
-	    "ice ldgen [--dump] <file.lf> [...]",
-	    NULL,
-	};
-
-	argc = parse_options_manual(argc, argv, cmd_ldgen_opts, usage, &manual);
+	argc = parse_options_manual(argc, argv, cmd_ldgen_opts, &manual);
 	if (argc < 1)
 		die("no input files; see 'ice ldgen --help'");
 

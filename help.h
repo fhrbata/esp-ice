@@ -113,6 +113,6 @@ struct cmd_manual {
  *                  from ice_commands[] when @p m->summary is NULL.
  */
 void print_manual(const char *cmd_name, const struct cmd_manual *m,
-		  const struct option *opts, const char **usage);
+		  const struct option *opts);
 
 #endif /* HELP_H */

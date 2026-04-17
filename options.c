@@ -15,20 +15,62 @@ static int is_bool_opt(enum option_type t)
 	return t == OPTION_BOOL || t == OPTION_CONFIG_BOOL;
 }
 
-static void print_usage(const struct option *opts, const char **usage)
+static void print_usage(const char *argv0, const struct option *opts)
 {
-	fprintf(stderr, "@b{usage}: ");
-	for (int i = 0; usage[i]; i++) {
-		if (i > 0)
-			fprintf(stderr, "   @b{or}: ");
-		fprintf(stderr, "%s\n", usage[i]);
+	int has_flags = 0;
+	int has_subcmds = 0;
+	const char *positional = NULL;
+
+	for (const struct option *o = opts; o->type != OPTION_END; o++) {
+		if (o->type == OPTION_SUBCOMMAND)
+			has_subcmds = 1;
+		else
+			has_flags = 1;
 	}
 
-	fprintf(stderr, "\n");
+	/* OPT_END's argh names the positional argument. */
+	{
+		const struct option *end = opts;
+		while (end->type != OPTION_END)
+			end++;
+		positional = end->argh;
+	}
 
+	fprintf(stderr, "@b{usage}: %s", argv0);
+	if (has_flags)
+		fprintf(stderr, " [<options>]");
+	if (has_subcmds)
+		fprintf(stderr, " <subcommand> [<args>]");
+	else if (positional)
+		fprintf(stderr, " <%s>", positional);
+	fprintf(stderr, "\n\n");
+
+	/* Print subcommands first, then options. */
+	has_subcmds = 0;
+	for (const struct option *o = opts; o->type != OPTION_END; o++) {
+		if (o->type == OPTION_SUBCOMMAND) {
+			if (!has_subcmds) {
+				fprintf(stderr, "Subcommands:\n");
+				has_subcmds = 1;
+			}
+			fprintf(stderr, "    @b{%-20s} %s\n", o->long_opt,
+				o->help ? o->help : "");
+		}
+	}
+
+	int has_opts = 0;
 	for (const struct option *o = opts; o->type != OPTION_END; o++) {
 		char short_str[8] = "";
 		char long_str[64] = "";
+
+		if (o->type == OPTION_SUBCOMMAND)
+			continue;
+
+		if (!has_opts) {
+			if (has_subcmds)
+				fprintf(stderr, "\n");
+			has_opts = 1;
+		}
 
 		if (o->short_opt)
 			snprintf(short_str, sizeof(short_str), "-%c",
@@ -54,6 +96,38 @@ static void print_usage(const struct option *opts, const char **usage)
 			fprintf(stderr, "        @b{%-20s} %s\n", long_str,
 				o->help ? o->help : "");
 	}
+}
+
+/**
+ * Print all completion candidates for this option table and exit.
+ * Called when --ice-complete is encountered as a standalone argument.
+ */
+static NORETURN void print_completions(const struct option *opts)
+{
+	printf("-h\n");
+	printf("--help\n");
+
+	for (const struct option *o = opts; o->type != OPTION_END; o++) {
+		if (o->type == OPTION_SUBCOMMAND) {
+			/* Skip internal commands (leading underscore). */
+			if (o->long_opt[0] != '_')
+				printf("%s\n", o->long_opt);
+		} else {
+			if (o->long_opt)
+				printf("--%s\n", o->long_opt);
+			if (o->short_opt)
+				printf("-%c\n", o->short_opt);
+		}
+	}
+
+	/* Positional completions from OPT_END's callback. */
+	const struct option *end = opts;
+	while (end->type != OPTION_END)
+		end++;
+	if (end->complete)
+		end->complete();
+
+	exit(0);
 }
 
 static const struct option *find_short(const struct option *opts, int c)
@@ -121,7 +195,7 @@ static int set_value(const struct option *o, const char *val)
 }
 
 int parse_options_manual(int argc, const char **argv, const struct option *opts,
-			 const char **usage, const struct cmd_manual *manual)
+			 const struct cmd_manual *manual)
 {
 	int out = 0;
 	int i;
@@ -135,22 +209,36 @@ int parse_options_manual(int argc, const char **argv, const struct option *opts,
 			break;
 		}
 
-		/* Not an option -- stop parsing */
-		if (arg[0] != '-' || arg[1] == '\0')
+		/* Not an option -- check for subcommand, else stop. */
+		if (arg[0] != '-' || arg[1] == '\0') {
+			const struct option *sub;
+			for (sub = opts; sub->type != OPTION_END; sub++) {
+				if (sub->type == OPTION_SUBCOMMAND &&
+				    !strcmp(arg, sub->long_opt)) {
+					*(subcmd_fn *)sub->value =
+					    sub->subcommand_fn;
+					goto done;
+				}
+			}
 			break;
+		}
 
 		/* -h: short usage always; --help: full manual if provided. */
 		if (!strcmp(arg, "-h")) {
-			print_usage(opts, usage);
+			print_usage(argv[0], opts);
 			exit(0);
 		}
 		if (!strcmp(arg, "--help")) {
 			if (manual)
-				print_manual(argv[0], manual, opts, usage);
+				print_manual(argv[0], manual, opts);
 			else
-				print_usage(opts, usage);
+				print_usage(argv[0], opts);
 			exit(0);
 		}
+
+		/* --ice-complete: dump all candidates and exit. */
+		if (!strcmp(arg, "--ice-complete"))
+			print_completions(opts);
 
 		/* Long option */
 		if (arg[1] == '-') {
@@ -164,6 +252,13 @@ int parse_options_manual(int argc, const char **argv, const struct option *opts,
 				if (i + 1 >= argc)
 					die("option '%s' requires a value",
 					    arg);
+				/* Complete value: next arg is --ice-complete.
+				 */
+				if (!strcmp(argv[i + 1], "--ice-complete")) {
+					if (o->complete)
+						o->complete();
+					exit(0);
+				}
 				val = argv[++i];
 			}
 
@@ -188,12 +283,19 @@ int parse_options_manual(int argc, const char **argv, const struct option *opts,
 		if (!val) {
 			if (i + 1 >= argc)
 				die("option '%s' requires a value", arg);
+			/* Complete value: next arg is --ice-complete. */
+			if (!strcmp(argv[i + 1], "--ice-complete")) {
+				if (o->complete)
+					o->complete();
+				exit(0);
+			}
 			val = argv[++i];
 		}
 
 		set_value(o, val);
 	}
 
+done:
 	/* Pack remaining args to the front. */
 	for (; i < argc; i++)
 		argv[out++] = argv[i];
@@ -202,8 +304,7 @@ int parse_options_manual(int argc, const char **argv, const struct option *opts,
 	return out;
 }
 
-int parse_options(int argc, const char **argv, const struct option *opts,
-		  const char **usage)
+int parse_options(int argc, const char **argv, const struct option *opts)
 {
-	return parse_options_manual(argc, argv, opts, usage, NULL);
+	return parse_options_manual(argc, argv, opts, NULL);
 }

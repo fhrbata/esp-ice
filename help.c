@@ -300,20 +300,27 @@ static void print_commands_body(void)
 {
 	size_t maxlen = 0;
 
-	for (const struct cmd_struct *c = ice_commands; c->name; c++) {
+	for (const struct option *o = ice_global_opts; o->type != OPTION_END;
+	     o++) {
 		size_t l;
-		if (c->hidden)
+		if (o->type != OPTION_SUBCOMMAND)
 			continue;
-		l = strlen(c->name);
+		/* Skip internal commands (leading underscore). */
+		if (o->long_opt[0] == '_')
+			continue;
+		l = strlen(o->long_opt);
 		if (l > maxlen)
 			maxlen = l;
 	}
 
-	for (const struct cmd_struct *c = ice_commands; c->name; c++) {
-		if (c->hidden)
+	for (const struct option *o = ice_global_opts; o->type != OPTION_END;
+	     o++) {
+		if (o->type != OPTION_SUBCOMMAND)
 			continue;
-		printf(INDENT "@b{%-*s}   %s\n", (int)maxlen, c->name,
-		       c->summary ? c->summary : "");
+		if (o->long_opt[0] == '_')
+			continue;
+		printf(INDENT "@b{%-*s}   %s\n", (int)maxlen, o->long_opt,
+		       o->help ? o->help : "");
 	}
 	fputs("\n", stdout);
 }
@@ -386,14 +393,33 @@ static const char *basename_of(const char *p)
 }
 
 void print_manual(const char *cmd_name, const struct cmd_manual *m,
-		  const struct option *opts, const char **usage)
+		  const struct option *opts)
 {
 	const char *summary;
+	int has_flags = 0;
+	int has_subcmds = 0;
+	const char *positional = NULL;
 
 	cmd_name = basename_of(cmd_name);
 	summary = m && m->summary
 		      ? m->summary
 		      : (cmd_name ? ice_cmd_summary(cmd_name) : NULL);
+
+	if (opts) {
+		for (const struct option *o = opts; o->type != OPTION_END;
+		     o++) {
+			if (o->type == OPTION_SUBCOMMAND)
+				has_subcmds = 1;
+			else
+				has_flags = 1;
+		}
+		{
+			const struct option *end = opts;
+			while (end->type != OPTION_END)
+				end++;
+			positional = end->argh;
+		}
+	}
 
 	pager_start();
 
@@ -408,12 +434,15 @@ void print_manual(const char *cmd_name, const struct cmd_manual *m,
 	fputs("\n\n", stdout);
 
 	/* SYNOPSIS */
-	if (usage && usage[0]) {
-		fputs("@b{SYNOPSIS}\n", stdout);
-		for (int i = 0; usage[i]; i++)
-			printf(INDENT "%s\n", usage[i]);
-		fputs("\n", stdout);
-	}
+	fputs("@b{SYNOPSIS}\n" INDENT, stdout);
+	printf("%s", cmd_name ? cmd_name : "ice");
+	if (has_flags)
+		printf(" [<options>]");
+	if (has_subcmds)
+		printf(" <subcommand> [<args>]");
+	else if (positional)
+		printf(" <%s>", positional);
+	fputs("\n\n", stdout);
 
 	/* DESCRIPTION */
 	if (m && m->description) {

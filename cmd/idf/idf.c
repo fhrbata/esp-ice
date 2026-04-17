@@ -33,22 +33,29 @@
 /* Helpers                                                             */
 /* ------------------------------------------------------------------ */
 
-/**
- * Return the managed repo path (~/.ice/esp-idf/repo).
- * Backed by static storage.
- */
-static const char *managed_repo_path(void)
+/** Return ~/.ice/esp-idf/base.git (bare object store). */
+static const char *base_repo_path(void)
 {
 	static struct sbuf path = SBUF_INIT;
 
 	if (!path.len)
-		sbuf_addf(&path, "%s/esp-idf/repo", ice_home());
+		sbuf_addf(&path, "%s/esp-idf/base.git", ice_home());
+	return path.buf;
+}
+
+/** Return ~/.ice/esp-idf/current (active working tree). */
+static const char *current_tree_path(void)
+{
+	static struct sbuf path = SBUF_INIT;
+
+	if (!path.len)
+		sbuf_addf(&path, "%s/esp-idf/current", ice_home());
 	return path.buf;
 }
 
 /**
- * Return the active IDF path: idf.path config > managed repo fallback.
- * Returns NULL if neither is available.
+ * Return the active IDF path.
+ * idf.path config > managed current tree > NULL.
  */
 static const char *idf_path(void)
 {
@@ -57,9 +64,8 @@ static const char *idf_path(void)
 	if (configured && *configured)
 		return configured;
 
-	/* Fall back to managed repo if it exists. */
-	if (!access(managed_repo_path(), F_OK))
-		return managed_repo_path();
+	if (!access(current_tree_path(), F_OK))
+		return current_tree_path();
 
 	return NULL;
 }
@@ -107,27 +113,185 @@ static int run_git_capture(const char *dir, const char **argv, struct sbuf *out)
 	return rc;
 }
 
+/**
+ * Populate submodules in @p tree_path for version @p version.
+ *
+ * For each gitlink (160000) entry in the tree, create a --shared
+ * clone from the base repo's .git/modules/<path>/ and checkout
+ * the pinned commit.  Handles one level of nested submodules.
+ *
+ * @p base is the path to a repo that has .git/modules/ populated
+ * (either the base.git bare repo or a user-provided repo).
+ */
+static int populate_submodules(const char *base, const char *tree_path,
+			       const char *version)
+{
+	struct sbuf ls = SBUF_INIT;
+	size_t pos;
+	char *line;
+	int errors = 0;
+
+	/* Get all gitlink entries for this version. */
+	{
+		const char *argv[] = {"git", "ls-tree", "-r", version, NULL};
+		if (run_git_capture(base, argv, &ls) != 0) {
+			sbuf_release(&ls);
+			return -1;
+		}
+	}
+
+	pos = 0;
+	while ((line = sbuf_getline(ls.buf, ls.len, &pos))) {
+		char mode[8], type[8], sha[64], path[1024];
+
+		if (sscanf(line, "%7s %7s %63s %1023[^\n]", mode, type, sha,
+			   path) != 4)
+			continue;
+		if (strcmp(mode, "160000") != 0)
+			continue;
+
+		struct sbuf mod_git = SBUF_INIT;
+		struct sbuf dest = SBUF_INIT;
+
+		sbuf_addf(&mod_git, "%s/.git/modules/%s", base, path);
+		sbuf_addf(&dest, "%s/%s", tree_path, path);
+
+		/* If the module object store doesn't exist, skip. */
+		if (!is_directory(mod_git.buf)) {
+			/* Try bare repo layout (modules/ at top level). */
+			sbuf_release(&mod_git);
+			sbuf_addf(&mod_git, "%s/modules/%s", base, path);
+			if (!is_directory(mod_git.buf)) {
+				warn("submodule '%s': no local objects, "
+				     "skipping",
+				     path);
+				errors++;
+				goto next;
+			}
+		}
+
+		/* Remove existing dir and clone --shared. */
+		if (is_directory(dest.buf))
+			rmtree(dest.buf, 0);
+		mkdirp_for_file(dest.buf);
+
+		{
+			const char *clone_argv[] = {
+			    "git",     "clone",	    "--shared", "--no-checkout",
+			    "--quiet", mod_git.buf, dest.buf,	NULL};
+			if (run_git(NULL, clone_argv) != 0) {
+				warn("submodule '%s': clone failed", path);
+				errors++;
+				goto next;
+			}
+		}
+
+		{
+			const char *co_argv[] = {"git", "checkout", "--quiet",
+						 sha, NULL};
+			if (run_git(dest.buf, co_argv) != 0) {
+				warn("submodule '%s': checkout %s failed", path,
+				     sha);
+				errors++;
+				goto next;
+			}
+		}
+
+		/* Handle nested submodules (one level deep). */
+		{
+			struct sbuf nested_ls = SBUF_INIT;
+			const char *nested_argv[] = {"git", "ls-tree", sha,
+						     NULL};
+
+			if (run_git_capture(mod_git.buf, nested_argv,
+					    &nested_ls) == 0) {
+				size_t npos = 0;
+				char *nline;
+
+				while ((nline = sbuf_getline(nested_ls.buf,
+							     nested_ls.len,
+							     &npos))) {
+					char nm[8], nt[8], ns[64], np[1024];
+					if (sscanf(nline,
+						   "%7s %7s %63s "
+						   "%1023[^\n]",
+						   nm, nt, ns, np) != 4)
+						continue;
+					if (strcmp(nm, "160000") != 0)
+						continue;
+
+					struct sbuf nmod = SBUF_INIT;
+					struct sbuf ndest = SBUF_INIT;
+
+					sbuf_addf(&nmod, "%s/modules/%s",
+						  mod_git.buf, np);
+					sbuf_addf(&ndest, "%s/%s", dest.buf,
+						  np);
+
+					if (!is_directory(nmod.buf)) {
+						sbuf_release(&nmod);
+						sbuf_release(&ndest);
+						continue;
+					}
+
+					if (is_directory(ndest.buf))
+						rmtree(ndest.buf, 0);
+					mkdirp_for_file(ndest.buf);
+
+					const char *nc[] = {
+					    "git",	"clone",
+					    "--shared", "--no-checkout",
+					    "--quiet",	nmod.buf,
+					    ndest.buf,	NULL};
+					if (run_git(NULL, nc) == 0) {
+						const char *nco[] = {
+						    "git", "checkout",
+						    "--quiet", ns, NULL};
+						run_git(ndest.buf, nco);
+					}
+
+					sbuf_release(&nmod);
+					sbuf_release(&ndest);
+				}
+			}
+			sbuf_release(&nested_ls);
+		}
+
+	next:
+		sbuf_release(&mod_git);
+		sbuf_release(&dest);
+	}
+
+	sbuf_release(&ls);
+	return errors ? -1 : 0;
+}
+
 /* ------------------------------------------------------------------ */
 /* Subcommands                                                         */
 /* ------------------------------------------------------------------ */
 
+static const char *clone_reference;
+
+static const struct option clone_opts[] = {
+    OPT_STRING(0, "reference", &clone_reference, "path",
+	       "borrow objects from an existing esp-idf clone", NULL),
+    OPT_END(),
+};
+
 static int cmd_idf_clone(int argc, const char **argv)
 {
-	const char *dest = managed_repo_path();
+	const char *base = base_repo_path();
 	const char *url = IDF_CLONE_URL;
 
-	(void)argc;
-	(void)argv;
+	argc = parse_options(argc, argv, clone_opts);
 
-	if (!access(dest, F_OK)) {
+	if (!access(base, F_OK)) {
 		fprintf(stderr,
 			"ESP-IDF already cloned at @b{%s}\n"
 			"hint: use @b{ice idf pull} to update\n",
-			dest);
+			base);
 		return 0;
 	}
-
-	fprintf(stderr, "Cloning ESP-IDF into @b{%s} ...\n", dest);
 
 	{
 		struct sbuf parent = SBUF_INIT;
@@ -137,11 +301,62 @@ static int cmd_idf_clone(int argc, const char **argv)
 		sbuf_release(&parent);
 	}
 
-	const char *git_argv[] = {"git", "clone", "--filter=blob:none",
-				  url,	 dest,	  NULL};
-	int rc = run_git(NULL, git_argv);
-	if (rc != 0)
-		die("git clone failed");
+	/* Step 1: Bare clone of the main repo. */
+	fprintf(stderr, "Cloning ESP-IDF into @b{%s} ...\n", base);
+	if (clone_reference) {
+		const char *argv_ref[] = {
+		    "git",	     "clone", "--bare", "--reference",
+		    clone_reference, url,     base,	NULL};
+		if (run_git(NULL, argv_ref) != 0)
+			die("git clone failed");
+	} else {
+		const char *argv_clone[] = {"git", "clone", "--bare",
+					    url,   base,    NULL};
+		if (run_git(NULL, argv_clone) != 0)
+			die("git clone failed");
+	}
+
+	/* Step 2: Initialize submodules into the bare repo.
+	 *
+	 * We need a temporary checkout to run `git submodule update`
+	 * which populates base.git's modules/ directory.  After that
+	 * every `ice idf switch` can use those local objects.
+	 */
+	fprintf(stderr, "Fetching submodules ...\n");
+	{
+		struct sbuf tmp = SBUF_INIT;
+		sbuf_addf(&tmp, "%s/esp-idf/.clone-tmp", ice_home());
+
+		const char *clone_argv[] = {"git", "clone", "--shared",
+					    base,  tmp.buf, NULL};
+		if (run_git(NULL, clone_argv) != 0)
+			die("temporary checkout failed");
+
+		const char *sub_argv[] = {"git",    "submodule",   "update",
+					  "--init", "--recursive", "--jobs",
+					  "8",	    NULL};
+		if (run_git(tmp.buf, sub_argv) != 0)
+			warn("some submodules failed to fetch");
+
+		/* Unshallow all submodules and fetch all branches
+		 * so every version's commits are available locally. */
+		fprintf(stderr, "Fetching full submodule history ...\n");
+		const char *unshal[] = {"git",
+					"submodule",
+					"foreach",
+					"--recursive",
+					"git fetch --unshallow 2>/dev/null; "
+					"git fetch origin "
+					"'+refs/heads/*:refs/remotes/origin/*' "
+					"2>/dev/null; true",
+					NULL};
+		run_git(tmp.buf, unshal);
+
+		/* Clean up temporary checkout. */
+		rmtree(tmp.buf, 0);
+		rmdir(tmp.buf);
+		sbuf_release(&tmp);
+	}
 
 	fprintf(stderr, "@g{done}\n");
 	return 0;
@@ -178,39 +393,63 @@ static int cmd_idf_repo(int argc, const char **argv)
 	return 0;
 }
 
+static const char *switch_worktree;
+
+static const struct option switch_opts[] = {
+    OPT_STRING(0, "worktree", &switch_worktree, "path",
+	       "create the working tree at a custom path", NULL),
+    OPT_END(),
+};
+
 static int cmd_idf_switch(int argc, const char **argv)
 {
-	const char *repo;
+	const char *base = base_repo_path();
+	const char *current = current_tree_path();
 	const char *version;
-	int rc;
 
-	if (argc < 2)
-		die("usage: ice idf switch <version>");
+	argc = parse_options(argc, argv, switch_opts);
+	if (argc < 1)
+		die("expected a version argument");
+	version = argv[0];
 
-	version = argv[1];
-	repo = idf_path();
-	if (!repo)
+	/* Use the base bare repo for objects. If user set idf.path, use that
+	 * as the object source instead. */
+	const char *obj_source = idf_path();
+	if (!obj_source)
+		obj_source = base;
+
+	if (access(obj_source, F_OK) != 0)
 		die("no ESP-IDF configured\n"
 		    "hint: run @b{ice idf clone} or @b{ice idf repo <path>}");
 
-	fprintf(stderr, "Switching @b{%s} to @b{%s} ...\n", repo, version);
+	const char *dest = switch_worktree ? switch_worktree : current;
 
-	{
-		const char *checkout[] = {"git", "checkout", version, NULL};
-		rc = run_git(repo, checkout);
-		if (rc != 0)
+	fprintf(stderr, "Switching to @b{%s} in @b{%s} ...\n", version, dest);
+
+	/* Create or update the working tree. */
+	if (is_directory(dest)) {
+		/* Existing tree: just update it. */
+		const char *fetch[] = {"git", "fetch", "origin", version, NULL};
+		const char *checkout[] = {"git", "checkout", "--force", version,
+					  NULL};
+
+		run_git(dest, fetch);
+		if (run_git(dest, checkout) != 0)
 			die("git checkout '%s' failed", version);
+	} else {
+		/* New tree: clone --shared from the base/source repo. */
+		mkdirp_for_file(dest);
+		const char *clone_argv[] = {"git",	"clone", "--shared",
+					    "--branch", version, "--quiet",
+					    obj_source, dest,	 NULL};
+		if (run_git(NULL, clone_argv) != 0)
+			die("git clone '%s' failed", version);
 	}
 
-	fprintf(stderr, "Updating submodules ...\n");
-	{
-		const char *submodule[] = {"git",    "submodule",   "update",
-					   "--init", "--recursive", "--depth",
-					   "1",	     NULL};
-		rc = run_git(repo, submodule);
-		if (rc != 0)
-			die("git submodule update failed");
-	}
+	/* Populate submodules from local objects. */
+	fprintf(stderr, "Populating submodules ...\n");
+	if (populate_submodules(obj_source, dest, version) < 0)
+		warn("some submodules could not be populated");
 
 	fprintf(stderr, "@g{Switched to %s}\n", version);
 	return 0;
@@ -244,7 +483,11 @@ static int cmd_idf_list(int argc, const char **argv)
 	(void)argv;
 
 	repo = idf_path();
-	if (!repo)
+	if (!repo) {
+		/* Fall back to bare repo for listing. */
+		repo = base_repo_path();
+	}
+	if (access(repo, F_OK) != 0)
 		die("no ESP-IDF configured\n"
 		    "hint: run @b{ice idf clone} or @b{ice idf repo <path>}");
 
@@ -297,32 +540,28 @@ static int cmd_idf_list(int argc, const char **argv)
 
 static int cmd_idf_pull(int argc, const char **argv)
 {
-	const char *managed = managed_repo_path();
-	const char *repo;
-	int rc;
+	const char *base = base_repo_path();
 
 	(void)argc;
 	(void)argv;
 
-	repo = idf_path();
-	if (!repo)
-		die("no ESP-IDF configured\n"
-		    "hint: run @b{ice idf clone} or @b{ice idf repo <path>}");
+	if (access(base, F_OK) != 0)
+		die("no managed ESP-IDF repo found\n"
+		    "hint: run @b{ice idf clone} first");
 
-	if (strcmp(repo, managed) != 0)
-		die("pull only works on the managed repo at '%s'\n"
-		    "hint: your idf.path points to '%s'; manage it yourself",
-		    managed, repo);
-
-	fprintf(stderr, "Fetching updates ...\n");
+	/* Fetch new tags and branches into the bare repo. */
+	fprintf(stderr, "Fetching updates into @b{%s} ...\n", base);
 	{
-		const char *fetch[] = {"git", "fetch", "--tags", NULL};
-		rc = run_git(repo, fetch);
-		if (rc != 0)
+		const char *fetch[] = {"git", "fetch", "--all", "--tags", NULL};
+		if (run_git(base, fetch) != 0)
 			die("git fetch failed");
 	}
 
-	fprintf(stderr, "@g{done}\n");
+	/* Update submodule objects: re-fetch into the temp checkout's
+	 * modules dir.  For now, just advise the user to re-run switch. */
+	fprintf(stderr, "@g{done}\n"
+			"hint: run @b{ice idf switch <version>} to update "
+			"your working tree\n");
 	return 0;
 }
 
@@ -344,16 +583,17 @@ static int cmd_idf_info(int argc, const char **argv)
 		return 1;
 	}
 
-	fprintf(stdout, "Path:    %s\n", repo);
+	fprintf(stdout, "Path:     %s\n", repo);
+	fprintf(stdout, "Base:     %s\n", base_repo_path());
 
-	if (strcmp(repo, managed_repo_path()) == 0)
-		fprintf(stdout, "Managed: yes\n");
+	if (config_get("idf.path"))
+		fprintf(stdout, "Source:   external (set via idf.path)\n");
 	else
-		fprintf(stdout, "Managed: no (set via idf.path)\n");
+		fprintf(stdout, "Source:   managed (ice idf clone)\n");
 
 	if (run_git_capture(repo, git_argv, &head) == 0) {
 		sbuf_rtrim(&head);
-		fprintf(stdout, "Version: %s\n", head.buf);
+		fprintf(stdout, "Version:  %s\n", head.buf);
 	}
 
 	sbuf_release(&head);
@@ -364,25 +604,22 @@ static int cmd_idf_info(int argc, const char **argv)
 /* Dispatcher                                                          */
 /* ------------------------------------------------------------------ */
 
-struct idf_sub {
-	const char *name;
-	int (*fn)(int argc, const char **argv);
-	const char *summary;
-};
+static subcmd_fn idf_fn;
 
-static const struct idf_sub idf_subs[] = {
-    {"clone", cmd_idf_clone, "clone ESP-IDF into ~/.ice/esp-idf/repo"},
-    {"repo", cmd_idf_repo, "point ice at an existing ESP-IDF clone"},
-    {"switch", cmd_idf_switch, "checkout a version and update submodules"},
-    {"list", cmd_idf_list, "list available versions (tags)"},
-    {"pull", cmd_idf_pull, "fetch latest from upstream (managed repo)"},
-    {"info", cmd_idf_info, "show current IDF path and version"},
-    {NULL, NULL, NULL},
-};
-
-static const char *idf_usage[] = {
-    "ice idf <subcommand> [<args>]",
-    NULL,
+static const struct option cmd_idf_opts[] = {
+    OPT_SUBCOMMAND("clone", &idf_fn, cmd_idf_clone,
+		   "clone ESP-IDF into ~/.ice/esp-idf/"),
+    OPT_SUBCOMMAND("repo", &idf_fn, cmd_idf_repo,
+		   "point ice at an existing ESP-IDF clone"),
+    OPT_SUBCOMMAND("switch", &idf_fn, cmd_idf_switch,
+		   "checkout a version and update submodules"),
+    OPT_SUBCOMMAND("list", &idf_fn, cmd_idf_list,
+		   "list available versions (tags)"),
+    OPT_SUBCOMMAND("pull", &idf_fn, cmd_idf_pull,
+		   "fetch latest from upstream (managed repo)"),
+    OPT_SUBCOMMAND("info", &idf_fn, cmd_idf_info,
+		   "show current IDF path and version"),
+    OPT_END(),
 };
 
 /* clang-format off */
@@ -400,59 +637,14 @@ static const struct cmd_manual manual = {
 	H_EXAMPLE("ice idf list | head -20")
 	H_EXAMPLE("ice idf repo ~/work/esp-idf")
 	H_EXAMPLE("ice idf info"),
-
-	.extras =
-	H_SECTION("SUBCOMMANDS")
-	H_ITEM("clone",
-	       "Clone ESP-IDF into @b{~/.ice/esp-idf/repo}.  Uses "
-	       "@b{--filter=blob:none} for a faster initial clone.")
-	H_ITEM("repo <path>",
-	       "Tell ice to use an existing ESP-IDF clone at @b{<path>}.  "
-	       "Saves the path in the user config (@b{~/.iceconfig}).")
-	H_ITEM("switch <version>",
-	       "Check out a tag or branch and run "
-	       "@b{git submodule update --init --recursive}.")
-	H_ITEM("list",
-	       "List version tags from the configured repo, newest first.")
-	H_ITEM("pull",
-	       "Fetch the latest tags and commits from upstream.  "
-	       "Only works on the managed repo (cloned by ice).")
-	H_ITEM("info",
-	       "Show the active ESP-IDF path, whether it is managed by "
-	       "ice, and the current version.")
 };
 /* clang-format on */
 
-static void print_subs(FILE *fp)
-{
-	fprintf(fp, "Subcommands:\n");
-	for (const struct idf_sub *s = idf_subs; s->name; s++)
-		fprintf(fp, "  %-12s  %s\n", s->name, s->summary);
-}
-
 int cmd_idf(int argc, const char **argv)
 {
-	if (argc >= 2 && (!strcmp(argv[1], "--help") ||
-			  !strcmp(argv[1], "-h") || !strcmp(argv[1], "help"))) {
-		print_manual(argv[0], &manual, NULL, idf_usage);
-		return 0;
-	}
+	argc = parse_options_manual(argc, argv, cmd_idf_opts, &manual);
+	if (idf_fn)
+		return idf_fn(argc, argv);
 
-	if (argc < 2) {
-		fprintf(stderr, "usage: ice idf <subcommand> [<args>]\n");
-		print_subs(stderr);
-		return 1;
-	}
-
-	for (const struct idf_sub *s = idf_subs; s->name; s++) {
-		if (!strcmp(argv[1], s->name))
-			return s->fn(argc - 1, argv + 1);
-	}
-
-	fprintf(stderr,
-		"ice idf: '%s' is not a subcommand. "
-		"See 'ice idf --help'.\n",
-		argv[1]);
-	print_subs(stderr);
-	return 1;
+	die("expected a subcommand. See 'ice idf --help'.");
 }

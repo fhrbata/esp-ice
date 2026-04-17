@@ -93,22 +93,15 @@ static int cmd_tools_info(int argc, const char **argv)
 /* Dispatcher                                                          */
 /* ------------------------------------------------------------------ */
 
-struct tools_sub {
-	const char *name;
-	int (*fn)(int argc, const char **argv);
-	const char *summary;
-};
+static subcmd_fn tools_fn;
 
-static const struct tools_sub tools_subs[] = {
-    {"install", cmd_install, "download and install tools from a manifest"},
-    {"list", cmd_tools_list, "list installed tools"},
-    {"info", cmd_tools_info, "show tool paths and installed tools"},
-    {NULL, NULL, NULL},
-};
-
-static const char *tools_usage[] = {
-    "ice tools <subcommand> [<args>]",
-    NULL,
+static const struct option cmd_tools_opts[] = {
+    OPT_SUBCOMMAND("install", &tools_fn, cmd_install,
+		   "download and install tools from a manifest"),
+    OPT_SUBCOMMAND("list", &tools_fn, cmd_tools_list, "list installed tools"),
+    OPT_SUBCOMMAND("info", &tools_fn, cmd_tools_info,
+		   "show tool paths and installed tools"),
+    OPT_END(),
 };
 
 /* clang-format off */
@@ -122,49 +115,14 @@ static const struct cmd_manual manual = {
 	H_EXAMPLE("ice tools install --target esp32s3 tools/tools.json")
 	H_EXAMPLE("ice tools list")
 	H_EXAMPLE("ice tools info"),
-
-	.extras =
-	H_SECTION("SUBCOMMANDS")
-	H_ITEM("install [options] <tools.json>",
-	       "Download and install tools from an ESP-IDF tools.json "
-	       "manifest.  See @b{ice tools install --help} for options.")
-	H_ITEM("list",
-	       "List installed tools and their versions.")
-	H_ITEM("info",
-	       "Show tool paths, platform, and installed tools.")
 };
 /* clang-format on */
 
-static void print_subs(FILE *fp)
-{
-	fprintf(fp, "Subcommands:\n");
-	for (const struct tools_sub *s = tools_subs; s->name; s++)
-		fprintf(fp, "  %-12s  %s\n", s->name, s->summary);
-}
-
 int cmd_tools(int argc, const char **argv)
 {
-	if (argc >= 2 && (!strcmp(argv[1], "--help") ||
-			  !strcmp(argv[1], "-h") || !strcmp(argv[1], "help"))) {
-		print_manual(argv[0], &manual, NULL, tools_usage);
-		return 0;
-	}
+	argc = parse_options_manual(argc, argv, cmd_tools_opts, &manual);
+	if (tools_fn)
+		return tools_fn(argc, argv);
 
-	if (argc < 2) {
-		fprintf(stderr, "usage: ice tools <subcommand> [<args>]\n");
-		print_subs(stderr);
-		return 1;
-	}
-
-	for (const struct tools_sub *s = tools_subs; s->name; s++) {
-		if (!strcmp(argv[1], s->name))
-			return s->fn(argc - 1, argv + 1);
-	}
-
-	fprintf(stderr,
-		"ice tools: '%s' is not a subcommand. "
-		"See 'ice tools --help'.\n",
-		argv[1]);
-	print_subs(stderr);
-	return 1;
+	die("expected a subcommand. See 'ice tools --help'.");
 }
