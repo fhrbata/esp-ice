@@ -29,6 +29,9 @@
 
 /* clang-format off */
 static const struct cmd_manual manual = {
+	.name = "ice size",
+	.summary = "analyse firmware memory usage by region",
+
 	.description =
 	H_PARA("Reads a GCC/LD linker map file and prints a table of "
 	       "memory usage per chip memory region (IRAM, DRAM, Flash, "
@@ -573,7 +576,7 @@ static void output_table(struct memmap *mm)
 
 int cmd_size(int argc, const char **argv)
 {
-	argc = parse_options_manual(argc, argv, cmd_size_opts, &manual);
+	argc = parse_options(argc, argv, cmd_size_opts, &manual);
 	if (argc < 1)
 		die("no map file; see 'ice size --help'");
 

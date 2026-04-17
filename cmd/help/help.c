@@ -26,14 +26,16 @@ static void complete_help_commands(void)
 
 int cmd_help(int argc, const char **argv)
 {
+	static const struct cmd_manual manual = {.name = "ice help"};
 	struct option opts[] = {
 	    OPT_END_COMPLETE("command", complete_help_commands)};
 	struct svec av = SVEC_INIT;
 
-	argc = parse_options(argc, argv, opts);
+	argc = parse_options(argc, argv, opts, &manual);
 
 	if (argc == 0) {
-		print_manual("ice", &ice_root_manual, ice_global_opts);
+		print_manual(ice_root_manual.name, &ice_root_manual,
+			     ice_global_opts);
 		return EXIT_SUCCESS;
 	}
 

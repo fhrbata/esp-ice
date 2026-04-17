@@ -13,7 +13,7 @@ tap_setup
 # ---- `ice completion <shell>` prints the expected init script ----
 
 "$BINARY" completion bash >bash.out
-tap_check grep -q 'complete -o default -F _ice_complete ice' bash.out
+tap_check grep -q 'complete -o default -o nosort -F _ice_complete ice' bash.out
 tap_done "ice completion bash emits complete registration"
 
 "$BINARY" completion zsh >zsh.out
@@ -21,7 +21,7 @@ tap_check grep -q 'compdef _ice ice' zsh.out
 tap_done "ice completion zsh emits compdef registration"
 
 "$BINARY" completion fish >fish.out
-tap_check grep -q 'complete -c ice -f -a' fish.out
+tap_check grep -q 'complete -c ice -f -k -a' fish.out
 tap_done "ice completion fish emits complete registration"
 
 "$BINARY" completion powershell >pwsh.out

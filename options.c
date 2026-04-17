@@ -102,30 +102,53 @@ static void print_usage(const char *argv0, const struct option *opts)
  * Print all completion candidates for this option table and exit.
  * Called when --ice-complete is encountered as a standalone argument.
  */
+static void print_sorted(struct svec *v)
+{
+	svec_sort(v);
+	for (size_t i = 0; i < v->nr; i++)
+		printf("%s\n", v->v[i]);
+	svec_clear(v);
+}
+
 static NORETURN void print_completions(const struct option *opts)
 {
-	printf("-h\n");
-	printf("--help\n");
-
-	for (const struct option *o = opts; o->type != OPTION_END; o++) {
-		if (o->type == OPTION_SUBCOMMAND) {
-			/* Skip internal commands (leading underscore). */
-			if (o->long_opt[0] != '_')
-				printf("%s\n", o->long_opt);
-		} else {
-			if (o->long_opt)
-				printf("--%s\n", o->long_opt);
-			if (o->short_opt)
-				printf("-%c\n", o->short_opt);
-		}
-	}
-
-	/* Positional completions from OPT_END's callback. */
 	const struct option *end = opts;
+	struct svec v = SVEC_INIT;
+	char buf[64];
+
 	while (end->type != OPTION_END)
 		end++;
+
+	/* Subcommands, sorted. */
+	for (const struct option *o = opts; o->type != OPTION_END; o++) {
+		if (o->type == OPTION_SUBCOMMAND && o->long_opt[0] != '_')
+			svec_push(&v, o->long_opt);
+	}
+	print_sorted(&v);
+
+	/* Positional completions (printed by callback, order is theirs). */
 	if (end->complete)
 		end->complete();
+
+	/* Long flags, sorted. */
+	svec_push(&v, "--help");
+	for (const struct option *o = opts; o->type != OPTION_END; o++) {
+		if (o->type != OPTION_SUBCOMMAND && o->long_opt) {
+			snprintf(buf, sizeof(buf), "--%s", o->long_opt);
+			svec_push(&v, buf);
+		}
+	}
+	print_sorted(&v);
+
+	/* Short flags, sorted. */
+	svec_push(&v, "-h");
+	for (const struct option *o = opts; o->type != OPTION_END; o++) {
+		if (o->type != OPTION_SUBCOMMAND && o->short_opt) {
+			snprintf(buf, sizeof(buf), "-%c", o->short_opt);
+			svec_push(&v, buf);
+		}
+	}
+	print_sorted(&v);
 
 	exit(0);
 }
@@ -194,9 +217,10 @@ static int set_value(const struct option *o, const char *val)
 	}
 }
 
-int parse_options_manual(int argc, const char **argv, const struct option *opts,
-			 const struct cmd_manual *manual)
+int parse_options(int argc, const char **argv, const struct option *opts,
+		  const struct cmd_manual *manual)
 {
+	const char *name = (manual && manual->name) ? manual->name : argv[0];
 	int out = 0;
 	int i;
 
@@ -225,14 +249,14 @@ int parse_options_manual(int argc, const char **argv, const struct option *opts,
 
 		/* -h: short usage always; --help: full manual if provided. */
 		if (!strcmp(arg, "-h")) {
-			print_usage(argv[0], opts);
+			print_usage(name, opts);
 			exit(0);
 		}
 		if (!strcmp(arg, "--help")) {
 			if (manual)
-				print_manual(argv[0], manual, opts);
+				print_manual(name, manual, opts);
 			else
-				print_usage(argv[0], opts);
+				print_usage(name, opts);
 			exit(0);
 		}
 
@@ -302,9 +326,4 @@ done:
 	argv[out] = NULL;
 
 	return out;
-}
-
-int parse_options(int argc, const char **argv, const struct option *opts)
-{
-	return parse_options_manual(argc, argv, opts, NULL);
 }

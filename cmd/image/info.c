@@ -22,6 +22,9 @@
 
 /* clang-format off */
 static const struct cmd_manual manual = {
+	.name = "ice image info",
+	.summary = "display the structure of an ESP flash image",
+
 	.description =
 	H_PARA("Display the structure of an ESP flash image.  Equivalent "
 	       "to @b{esptool image_info}: shows the common / extended "
@@ -171,7 +174,7 @@ int cmd_image_info(int argc, const char **argv)
 {
 	struct sbuf img = SBUF_INIT;
 
-	argc = parse_options_manual(argc, argv, cmd_image_info_opts, &manual);
+	argc = parse_options(argc, argv, cmd_image_info_opts, &manual);
 
 	if (argc < 1)
 		die("missing <image.bin> argument");

@@ -1,9 +1,9 @@
 # cmd/
 
 Each subdirectory here is one subcommand of the top-level `ice` binary.
-The dispatch table in [`../ice.c`](../ice.c) maps `ice <name>` to the
-handler in `cmd/<name>/<name>.c`, similar to how `git.c` dispatches
-`commit`, `log`, etc.
+The option table in [`../ice.c`](../ice.c) maps `ice <name>` to the
+handler in `cmd/<name>/<name>.c` via `OPT_SUBCOMMAND`, similar to how
+git dispatches `commit`, `log`, etc.
 
 ## Layout
 
@@ -11,11 +11,12 @@ handler in `cmd/<name>/<name>.c`, similar to how `git.c` dispatches
 - A single entry point `int cmd_<name>(int argc, const char **argv)`.
 - A per-command `static const struct cmd_manual manual` powers
   `ice <name> --help` and `ice help <name>`.
-- Options (if any) live in a file-scope `const struct option
-  cmd_<name>_opts[]` so the completion backend can walk them.
+- A `static const struct option` table drives option parsing,
+  `-h` usage, `--help` manual synopsis, and `--ice-complete`
+  shell completion -- all from one declaration.
 
 The wiring is fully explicit: there is no build-time scan, constructor
-magic, or code generation.  Adding a command touches exactly four
+magic, or code generation.  Adding a command touches exactly three
 places.
 
 ## Adding a new command
@@ -36,6 +37,8 @@ Create `cmd/greet/greet.c`:
 #include "ice.h"
 
 static const struct cmd_manual manual = {
+	.name = "ice greet",
+
 	.description =
 	H_PARA("Prints a friendly greeting for @b{<name>}.  Use "
 	       "@b{--loud} to SHOUT."),
@@ -45,23 +48,20 @@ static const struct cmd_manual manual = {
 	H_EXAMPLE("ice greet --loud world"),
 };
 
-/* File scope so the completion backend can see the option table. */
 static int opt_loud;
 
-const struct option cmd_greet_opts[] = {
+static const struct option greet_opts[] = {
 	OPT_BOOL(0, "loud", &opt_loud, "shout the greeting"),
-	OPT_END(),
+	OPT_END_COMPLETE("name", NULL),
 };
 
 int cmd_greet(int argc, const char **argv)
 {
-	const char *usage[] = {"ice greet [--loud] <name>", NULL};
 	const char *name;
 
-	argc = parse_options_manual(argc, argv, cmd_greet_opts, usage,
-				    &manual);
+	argc = parse_options(argc, argv, greet_opts, &manual);
 	if (argc != 1)
-		die("usage: ice greet [--loud] <name>");
+		die("missing <name> argument");
 
 	name = argv[0];
 	if (opt_loud)
@@ -72,28 +72,32 @@ int cmd_greet(int argc, const char **argv)
 }
 ```
 
+Everything is driven by the option table:
+
+- `-h` auto-generates: `usage: greet [<options>] <name>`
+- `--help` renders the full manual with OPTIONS auto-listed
+- `--ice-complete` dumps `--loud`, `-h`, `--help` for shell TAB
+- `OPT_END_COMPLETE("name", NULL)` names the positional arg in
+  the usage line; the second argument is an optional completion
+  callback (NULL lets the shell fall through to file completion)
+
 ### 2. Declare the handler in `ice.h`
 
-Add the prototype next to the other `cmd_*` declarations, and -- since
-this command has options -- the extern for the option table:
+Add the prototype next to the other `cmd_*` declarations:
 
 ```c
 int cmd_greet(int argc, const char **argv);
-
-extern const struct option cmd_greet_opts[];
 ```
 
-### 3. Register in `ice_commands[]` (in `ice.c`)
+No extern for the option table -- it stays `static`.
 
-Add an entry in alphabetical order:
+### 3. Register in `ice_global_opts[]` (in `ice.c`)
+
+Add an `OPT_SUBCOMMAND` entry in alphabetical order:
 
 ```c
-{.name = "greet",       .fn = cmd_greet,
- .summary = "print a greeting",
- .opts = cmd_greet_opts},
+OPT_SUBCOMMAND("greet", &ice_fn, cmd_greet, "print a greeting"),
 ```
-
-Omit `.opts` for commands with no options.
 
 ### 4. Add to the Makefile
 
@@ -111,8 +115,12 @@ $ ./build/<triple>/ice greet world
 Hello, world.
 $ ./build/<triple>/ice greet --loud world
 HELLO, WORLD!
+$ ./build/<triple>/ice greet -h
+usage: greet [<options>] <name>
+
+        --loud               shout the greeting
 $ ./build/<triple>/ice greet --<TAB>
---loud
+--loud  --help  -h
 $ ./build/<triple>/ice help greet
 NAME
     ice-greet - print a greeting
@@ -123,28 +131,70 @@ The command now:
 
 - appears in `ice --help` and the `ice <TAB>` completion list,
 - has a manual page via `ice help greet` / `ice greet --help`,
-- auto-completes its `--loud` flag from the shared completion backend,
+- auto-completes its `--loud` flag,
+- auto-generates its usage line,
 - follows the same conventions as every other command.
 
-## Optional extras
-
-### Positional completion
-
-File arguments fall through to the shell's default file completion,
-which is usually what you want.  For a command with a positional drawn
-from a known set (like `ice set-target <chip>`), add one branch in
-[`completion/completion.c`](completion/completion.c):
+## Option table quick reference
 
 ```c
-else if (!strcmp(sub, "greet"))
-	complete_greet_arg(cur);
+/* Flags */
+OPT_BOOL('v', "verbose", &flag, "be noisy"),
+OPT_STRING('o', "output", &path, "path", "output file", NULL),
+OPT_INT('n', "count", &n, "n", "how many", NULL),
+
+/* Config-backed (value goes to config store, not a variable) */
+OPT_CONFIG('B', "build-dir", "core.build-dir", "path", "build dir", NULL),
+OPT_CONFIG_BOOL('v', "verbose", "core.verbose", "verbose output"),
+OPT_CONFIG_LIST('D', "define", "cmake.define", "key=val", "cmake var", NULL),
+
+/* Subcommands (for namespace commands like `ice target`) */
+OPT_SUBCOMMAND("set", &fn_var, cmd_target_set, "set the target"),
+
+/* Terminators */
+OPT_END(),                              /* no positional metadata */
+OPT_END_COMPLETE("file", NULL),         /* positional arg name, no callback */
+OPT_END_COMPLETE("target", complete_fn),/* positional arg + completion */
 ```
 
-### Hidden commands
+The last argument on value-taking options (`OPT_STRING`, `OPT_INT`,
+`OPT_CONFIG`, `OPT_CONFIG_LIST`) is a completion callback for that
+option's value, or NULL to let the shell handle it (file completion).
 
-Set `.hidden = 1` in the `ice_commands[]` entry to keep the command
-dispatchable but out of `ice --help` and `ice <TAB>` listings.  Used
-today for the `__complete` backend; handy for other internal helpers.
+## Positional completion
+
+For commands whose positional argument is drawn from a known set
+(like `ice target set <chip>`), add a completion callback and
+wire it into `OPT_END_COMPLETE`:
+
+```c
+static void complete_targets(void)
+{
+	for (const char *const *t = ice_supported_targets; *t; t++)
+		printf("%s\n", *t);
+}
+
+static const struct option opts[] = {
+	OPT_BOOL(0, "preview", &preview, "allow preview targets"),
+	OPT_END_COMPLETE("target", complete_targets),
+};
+```
+
+No changes to the completion backend needed -- `parse_options`
+handles it automatically via `--ice-complete`.
+
+## Hidden commands
+
+Subcommands whose name starts with `_` are dispatchable but hidden
+from `ice --help` and `ice <TAB>` listings.  Used today for the
+`__complete` backend; handy for other internal helpers.
+
+## External commands
+
+If `ice foo` is not a builtin and not an alias, ice searches PATH
+for an executable named `ice-foo` and runs it, passing all remaining
+arguments.  This allows third-party extensions without modifying
+the ice binary.
 
 ## Testing
 
@@ -210,8 +260,8 @@ resulting binary; see [`../t/0001-sbuf.t`](../t/0001-sbuf.t) and
 - [`clean/clean.c`](clean/clean.c) -- smallest standalone command, no
   options.
 - [`config/config.c`](config/config.c) -- multiple boolean flags plus
-  positional arguments; shows the file-scope option-table pattern.
+  positional arguments with completion callback.
+- [`target/target.c`](target/target.c) -- namespace command with
+  `OPT_SUBCOMMAND` dispatch to set/list/info subcommands.
 - [`size/size.c`](size/size.c) -- string-valued options (`--target`,
   `--format`) plus a positional file argument.
-- [`set-target/set-target.c`](set-target/set-target.c) -- shared data
-  (`ice_supported_targets[]`) exported to the rest of the tree.

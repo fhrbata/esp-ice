@@ -21,6 +21,9 @@
 
 /* clang-format off */
 static const struct cmd_manual manual = {
+	.name = "ice image merge",
+	.summary = "combine multiple flash images at offsets into one",
+
 	.description =
 	H_PARA("Concatenate multiple flash images at given offsets into "
 	       "a single output file, padding the gaps with 0xFF (the "
@@ -99,7 +102,7 @@ static size_t flash_size_bytes(const char *s)
 
 int cmd_image_merge(int argc, const char **argv)
 {
-	argc = parse_options_manual(argc, argv, cmd_image_merge_opts, &manual);
+	argc = parse_options(argc, argv, cmd_image_merge_opts, &manual);
 
 	if (!opt_out)
 		die("-o <output.bin> is required");

@@ -55,6 +55,17 @@ void svec_clear(struct svec *sv)
 	svec_init(sv);
 }
 
+static int cmp_str(const void *a, const void *b)
+{
+	return strcmp(*(const char *const *)a, *(const char *const *)b);
+}
+
+void svec_sort(struct svec *sv)
+{
+	if (sv->nr > 1)
+		qsort(sv->v, sv->nr, sizeof(sv->v[0]), cmp_str);
+}
+
 void svec_push(struct svec *sv, const char *s)
 {
 	size_t len = strlen(s) + 1;

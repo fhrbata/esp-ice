@@ -38,18 +38,23 @@ static const char bash_script[] =
 	"# ice bash completion (install: eval \"$(ice completion bash)\")\n"
 	"_ice_complete() {\n"
 	"    local IFS=$'\\n'\n"
-	"    COMPREPLY=( $(ice __complete \"$COMP_CWORD\" \"${COMP_WORDS[@]}\" 2>/dev/null) )\n"
+	"    local cur=\"${COMP_WORDS[COMP_CWORD]}\"\n"
+	"    COMPREPLY=( $(compgen -W \"$(ice __complete \"$COMP_CWORD\" \"${COMP_WORDS[@]}\" 2>/dev/null)\" -- \"$cur\") )\n"
 	"}\n"
-	"complete -o default -F _ice_complete ice\n";
+	"complete -o default -o nosort -F _ice_complete ice\n";
 
 static const char zsh_script[] =
 	"# ice zsh completion (install: eval \"$(ice completion zsh)\")\n"
+	"(( $+functions[compdef] )) || { autoload -Uz compinit && compinit -u; }\n"
 	"_ice() {\n"
 	"    local -a candidates\n"
 	"    local IFS=$'\\n'\n"
 	"    candidates=( ${(f)\"$(ice __complete $((CURRENT - 1)) \"${words[@]}\" 2>/dev/null)\"} )\n"
-	"    compadd -a candidates && return\n"
-	"    _files\n"
+	"    if (( ${#candidates} )); then\n"
+	"        compadd -V ice -a candidates\n"
+	"    else\n"
+	"        _files\n"
+	"    fi\n"
 	"}\n"
 	"compdef _ice ice\n";
 
@@ -59,7 +64,7 @@ static const char fish_script[] =
 	"    set -l words (commandline -opc) (commandline -ct)\n"
 	"    ice __complete (math (count $words) - 1) $words 2>/dev/null\n"
 	"end\n"
-	"complete -c ice -f -a '(__ice_complete)'\n";
+	"complete -c ice -f -k -a '(__ice_complete)'\n";
 
 static const char powershell_script[] =
 	"# ice PowerShell completion\n"
@@ -71,7 +76,8 @@ static const char powershell_script[] =
 	"    if ($wordToComplete -eq '') { $words += '' }\n"
 	"    $cword = $words.Count - 1\n"
 	"\n"
-	"    $results = @(& ice __complete $cword @words 2>$null | Where-Object { $_ })\n"
+	"    $results = @(& ice __complete $cword @words 2>$null |\n"
+	"        Where-Object { $_ -and $_.StartsWith($wordToComplete) })\n"
 	"    if ($results.Count -gt 0) {\n"
 	"        $results | ForEach-Object {\n"
 	"            [System.Management.Automation.CompletionResult]::new(\n"
@@ -87,6 +93,9 @@ static const char powershell_script[] =
 	"}\n";
 
 static const struct cmd_manual completion_manual = {
+	.name = "ice completion",
+	.summary = "print shell completion script",
+
 	.description =
 	H_PARA("Emits a shell-specific completion script on standard "
 	       "output, meant to be evaluated from the user's rc file.  "
@@ -132,7 +141,7 @@ int cmd_completion(int argc, const char **argv)
 {
 	struct option opts[] = {OPT_END_COMPLETE("shell", complete_shells)};
 
-	argc = parse_options_manual(argc, argv, opts, &completion_manual);
+	argc = parse_options(argc, argv, opts, &completion_manual);
 	if (argc != 1)
 		die("usage: ice completion bash|zsh|fish|powershell");
 

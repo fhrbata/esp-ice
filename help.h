@@ -39,12 +39,9 @@
 struct option;
 
 struct cmd_manual {
-	/**
-	 * One-line tagline after the dash on the NAME line.  Optional
-	 * override; when NULL, print_manual() falls back to
-	 * ice_cmd_summary(cmd_name).
-	 */
-	const char *summary;
+	const char *name; /**< Display name (e.g. "ice target set"). */
+	const char
+	    *summary; /**< One-line tagline after the dash on the NAME line. */
 	const char *description; /**< Prose built with H_PARA/H_LINE. */
 	const char *examples;	 /**< Optional; built with H_EXAMPLE. */
 	const char *extras; /**< Optional; extra sections with H_SECTION. */
@@ -109,8 +106,7 @@ struct cmd_manual {
  *
  * @param cmd_name  Subcommand name as typed by the user (e.g. "config").
  *                  "ice" is the top-level manual.  Used to synthesize
- *                  "ice-<name>" for NAME and to look up the summary
- *                  from ice_commands[] when @p m->summary is NULL.
+ *                  "ice-<name>" for NAME.
  */
 void print_manual(const char *cmd_name, const struct cmd_manual *m,
 		  const struct option *opts);

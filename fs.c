@@ -150,3 +150,37 @@ int rmtree(const char *path, int verbose)
 	}
 	return ctx.rc;
 }
+
+int find_in_path(const char *name)
+{
+	const char *p = getenv("PATH");
+	struct sbuf buf = SBUF_INIT;
+
+	if (!p || !*p)
+		return 0;
+
+	while (*p) {
+		const char *end = p;
+		while (*end && *end != ':')
+			end++;
+
+		sbuf_reset(&buf);
+		if (end != p) {
+			sbuf_add(&buf, p, (size_t)(end - p));
+			sbuf_addch(&buf, '/');
+		}
+		sbuf_addstr(&buf, name);
+
+		if (!access(buf.buf, X_OK)) {
+			sbuf_release(&buf);
+			return 1;
+		}
+
+		if (!*end)
+			break;
+		p = end + 1;
+	}
+
+	sbuf_release(&buf);
+	return 0;
+}

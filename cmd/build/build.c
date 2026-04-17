@@ -12,6 +12,9 @@
 
 /* clang-format off */
 static const struct cmd_manual manual = {
+	.name = "ice build",
+	.summary = "build the default target",
+
 	.description =
 	H_PARA("Compiles the project's @b{all} target through cmake.  "
 	       "Progress is shown on a single status line and the full "
@@ -58,6 +61,6 @@ int cmd_build(int argc, const char **argv)
 {
 	struct option opts[] = {OPT_END()};
 
-	parse_options_manual(argc, argv, opts, &manual);
+	parse_options(argc, argv, opts, &manual);
 	return run_cmake_target("all", "build", 0);
 }

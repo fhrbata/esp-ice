@@ -104,13 +104,39 @@ static int try_expand_alias(int *argcp, const char ***argvp)
 /* Dispatch: parse globals then fire the matched subcommand. */
 
 /*
- * Written to by parse_options_manual(); checked in main() (in main.c)
+ * Written to by parse_options(); checked in main() (in main.c)
  * after parsing.  File-scope with external linkage so the option
  * table below has stable addresses to reference and main.c can read
  * the post-parse values via extern declarations.
  */
 int global_no_color;
 int global_version;
+
+static void complete_aliases(void)
+{
+	struct svec seen = SVEC_INIT;
+
+	for (int i = 0; i < config.nr; i++) {
+		const char *key = config.entries[i].key;
+		const char *name;
+		int dup = 0;
+
+		if (strncmp(key, "alias.", 6) != 0 || !key[6])
+			continue;
+		name = key + 6;
+
+		for (size_t j = 0; j < seen.nr; j++)
+			if (!strcmp(seen.v[j], name)) {
+				dup = 1;
+				break;
+			}
+		if (!dup) {
+			svec_push(&seen, name);
+			printf("%s\n", name);
+		}
+	}
+	svec_clear(&seen);
+}
 
 static subcmd_fn ice_fn;
 
@@ -157,23 +183,12 @@ const struct option ice_global_opts[] = {
     OPT_SUBCOMMAND("tools", &ice_fn, cmd_tools, "manage ESP-IDF toolchains"),
     OPT_SUBCOMMAND("__complete", &ice_fn, cmd_complete,
 		   "shell completion backend (internal)"),
-    OPT_END(),
+    OPT_END_COMPLETE(NULL, complete_aliases),
 };
-
-const char *ice_cmd_summary(const char *name)
-{
-	for (const struct option *o = ice_global_opts; o->type != OPTION_END;
-	     o++) {
-		if (o->type == OPTION_SUBCOMMAND && !strcmp(name, o->long_opt))
-			return o->help;
-	}
-	return NULL;
-}
 
 int cmd_ice(int argc, const char **argv)
 {
-	argc =
-	    parse_options_manual(argc, argv, ice_global_opts, &ice_root_manual);
+	argc = parse_options(argc, argv, ice_global_opts, &ice_root_manual);
 
 	if (global_no_color)
 		use_color = 0;
@@ -188,7 +203,8 @@ int cmd_ice(int argc, const char **argv)
 		return ice_fn(argc, argv);
 
 	if (argc < 1) {
-		print_manual(argv[0], &ice_root_manual, ice_global_opts);
+		print_manual(ice_root_manual.name, &ice_root_manual,
+			     ice_global_opts);
 		return 1;
 	}
 
@@ -211,11 +227,38 @@ int cmd_ice(int argc, const char **argv)
 		}
 	}
 
+	/* Try external command: ice-<name> on PATH. */
+	if (argc >= 1) {
+		struct sbuf cmd = SBUF_INIT;
+
+		sbuf_addf(&cmd, "ice-%s", argv[0]);
+		if (find_in_path(cmd.buf)) {
+			const char **ext_argv;
+			struct process proc = PROCESS_INIT;
+			int rc;
+
+			ext_argv = calloc((size_t)argc + 1, sizeof(*ext_argv));
+			ext_argv[0] = cmd.buf;
+			for (int i = 1; i < argc; i++)
+				ext_argv[i] = argv[i];
+			ext_argv[argc] = NULL;
+
+			proc.argv = ext_argv;
+			rc = process_run(&proc);
+
+			free(ext_argv);
+			sbuf_release(&cmd);
+			return rc < 0 ? 1 : rc;
+		}
+		sbuf_release(&cmd);
+	}
+
 	die("'%s' is not a command. See 'ice --help'.", argc ? argv[0] : "");
 }
 
 /* clang-format off */
 const struct cmd_manual ice_root_manual = {
+	.name = "ice",
 	.summary = "frontend for ESP-IDF projects",
 
 	.description =

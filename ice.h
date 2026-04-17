@@ -98,10 +98,4 @@ extern const struct cmd_manual ice_root_manual;
 extern const char *const ice_supported_targets[];
 extern const char *const ice_preview_targets[];
 
-/**
- * @brief Look up the one-line summary for a subcommand.
- * @return Summary string, or NULL if @p name is not a known command.
- */
-const char *ice_cmd_summary(const char *name);
-
 #endif /* ICE_H */

@@ -13,6 +13,9 @@
 
 /* clang-format off */
 static const struct cmd_manual manual = {
+	.name = "ice ldgen",
+	.summary = "analyse linker fragment (.lf) files",
+
 	.description =
 	H_PARA("Parses ESP-IDF linker fragment (@b{.lf}) files and "
 	       "reports the number of @b{sections}, @b{schemes}, and "
@@ -48,7 +51,7 @@ static const struct option cmd_ldgen_opts[] = {
 
 int cmd_ldgen(int argc, const char **argv)
 {
-	argc = parse_options_manual(argc, argv, cmd_ldgen_opts, &manual);
+	argc = parse_options(argc, argv, cmd_ldgen_opts, &manual);
 	if (argc < 1)
 		die("no input files; see 'ice ldgen --help'");
 

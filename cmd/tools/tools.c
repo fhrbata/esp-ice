@@ -59,10 +59,11 @@ static int list_tool_cb(const char *name, void *ud)
 
 static int cmd_tools_list(int argc, const char **argv)
 {
+	static const struct cmd_manual manual = {.name = "ice tools list"};
+	struct option opts[] = {OPT_END()};
 	struct sbuf tools_dir = SBUF_INIT;
 
-	(void)argc;
-	(void)argv;
+	parse_options(argc, argv, opts, &manual);
 
 	sbuf_addf(&tools_dir, "%s/tools", ice_home());
 
@@ -81,8 +82,10 @@ static int cmd_tools_list(int argc, const char **argv)
 
 static int cmd_tools_info(int argc, const char **argv)
 {
-	(void)argc;
-	(void)argv;
+	static const struct cmd_manual manual = {.name = "ice tools info"};
+	struct option opts[] = {OPT_END()};
+
+	parse_options(argc, argv, opts, &manual);
 
 	printf("Tools path: %s\n", ice_home());
 	printf("Platform:   %s-%s\n", ICE_PLATFORM_OS, ICE_PLATFORM_ARCH);
@@ -106,6 +109,9 @@ static const struct option cmd_tools_opts[] = {
 
 /* clang-format off */
 static const struct cmd_manual manual = {
+	.name = "ice tools",
+	.summary = "manage ESP-IDF toolchains",
+
 	.description =
 	H_PARA("Manage ESP-IDF toolchains (compilers, debuggers, etc.).")
 	H_PARA("Run @b{ice tools <subcommand> --help} for details."),
@@ -120,7 +126,7 @@ static const struct cmd_manual manual = {
 
 int cmd_tools(int argc, const char **argv)
 {
-	argc = parse_options_manual(argc, argv, cmd_tools_opts, &manual);
+	argc = parse_options(argc, argv, cmd_tools_opts, &manual);
 	if (tools_fn)
 		return tools_fn(argc, argv);
 

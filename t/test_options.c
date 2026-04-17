@@ -29,7 +29,7 @@ int main(void)
 		    OPT_END(),
 		};
 		const char *argv[] = {"prog", "-v"};
-		int argc = parse_options(2, argv, opts);
+		int argc = parse_options(2, argv, opts, NULL);
 		tap_check(argc == 0);
 		tap_check(verbose == 1);
 		tap_done("OPT_BOOL via short form sets the flag");
@@ -43,7 +43,7 @@ int main(void)
 		    OPT_END(),
 		};
 		const char *argv[] = {"prog", "--verbose"};
-		int argc = parse_options(2, argv, opts);
+		int argc = parse_options(2, argv, opts, NULL);
 		tap_check(argc == 0);
 		tap_check(verbose == 1);
 		tap_done("OPT_BOOL via long form sets the flag");
@@ -57,7 +57,7 @@ int main(void)
 		    OPT_END(),
 		};
 		const char *argv[] = {"prog", "-B", "out"};
-		int argc = parse_options(3, argv, opts);
+		int argc = parse_options(3, argv, opts, NULL);
 		tap_check(argc == 0);
 		tap_check(path != NULL && strcmp(path, "out") == 0);
 		tap_done("OPT_STRING short form takes value from next argv");
@@ -71,7 +71,7 @@ int main(void)
 		    OPT_END(),
 		};
 		const char *argv[] = {"prog", "-Bout"};
-		int argc = parse_options(2, argv, opts);
+		int argc = parse_options(2, argv, opts, NULL);
 		tap_check(argc == 0);
 		tap_check(path != NULL && strcmp(path, "out") == 0);
 		tap_done("OPT_STRING short form takes attached value (-Bval)");
@@ -85,7 +85,7 @@ int main(void)
 		    OPT_END(),
 		};
 		const char *argv[] = {"prog", "--build-dir=out"};
-		int argc = parse_options(2, argv, opts);
+		int argc = parse_options(2, argv, opts, NULL);
 		tap_check(argc == 0);
 		tap_check(path != NULL && strcmp(path, "out") == 0);
 		tap_done(
@@ -100,7 +100,7 @@ int main(void)
 		    OPT_END(),
 		};
 		const char *argv[] = {"prog", "--build-dir", "out"};
-		int argc = parse_options(3, argv, opts);
+		int argc = parse_options(3, argv, opts, NULL);
 		tap_check(argc == 0);
 		tap_check(path != NULL && strcmp(path, "out") == 0);
 		tap_done("OPT_STRING long form takes value from next argv");
@@ -114,7 +114,7 @@ int main(void)
 		    OPT_END(),
 		};
 		const char *argv[] = {"prog", "-n", "42"};
-		int argc = parse_options(3, argv, opts);
+		int argc = parse_options(3, argv, opts, NULL);
 		tap_check(argc == 0);
 		tap_check(n == 42);
 		tap_done("OPT_INT parses the value");
@@ -131,7 +131,7 @@ int main(void)
 		};
 		const char *argv[] = {"prog",	  "-D",	 "A=1",
 				      "--define", "B=2", "--define=C=3"};
-		int argc = parse_options(6, argv, opts);
+		int argc = parse_options(6, argv, opts, NULL);
 		tap_check(argc == 0);
 		tap_check(list.nr == 3);
 		tap_check(strcmp(list.v[0], "A=1") == 0);
@@ -149,7 +149,7 @@ int main(void)
 		    OPT_END(),
 		};
 		const char *argv[] = {"prog", "-v", "first", "second"};
-		int argc = parse_options(4, argv, opts);
+		int argc = parse_options(4, argv, opts, NULL);
 		tap_check(argc == 2);
 		tap_check(strcmp(argv[0], "first") == 0);
 		tap_check(strcmp(argv[1], "second") == 0);
@@ -166,7 +166,7 @@ int main(void)
 		    OPT_END(),
 		};
 		const char *argv[] = {"prog", "first", "-v"};
-		int argc = parse_options(3, argv, opts);
+		int argc = parse_options(3, argv, opts, NULL);
 		tap_check(argc == 2);
 		tap_check(strcmp(argv[0], "first") == 0);
 		tap_check(strcmp(argv[1], "-v") == 0);
@@ -183,7 +183,7 @@ int main(void)
 		    OPT_END(),
 		};
 		const char *argv[] = {"prog", "-v", "--", "-v"};
-		int argc = parse_options(4, argv, opts);
+		int argc = parse_options(4, argv, opts, NULL);
 		tap_check(argc == 1);
 		tap_check(strcmp(argv[0], "-v") == 0);
 		tap_check(verbose == 1);
@@ -202,7 +202,7 @@ int main(void)
 		int argc;
 
 		config_release(&config);
-		argc = parse_options(3, argv, opts);
+		argc = parse_options(3, argv, opts, NULL);
 		tap_check(argc == 0);
 		tap_check(config_get("core.build-dir") != NULL);
 		tap_check(strcmp(config_get("core.build-dir"), "out") == 0);
@@ -221,7 +221,7 @@ int main(void)
 		int argc;
 
 		config_release(&config);
-		argc = parse_options(2, argv, opts);
+		argc = parse_options(2, argv, opts, NULL);
 		tap_check(argc == 0);
 		tap_check(config_get("core.verbose") != NULL);
 		tap_check(strcmp(config_get("core.verbose"), "true") == 0);
@@ -242,7 +242,7 @@ int main(void)
 		int n;
 
 		config_release(&config);
-		argc = parse_options(5, argv, opts);
+		argc = parse_options(5, argv, opts, NULL);
 		tap_check(argc == 0);
 		n = config_get_all("cmake.define", &entries);
 		tap_check(n == 2);

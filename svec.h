@@ -53,6 +53,9 @@ void svec_push(struct svec *sv, const char *s);
 /** Append a printf-formatted string. */
 void svec_pushf(struct svec *sv, const char *fmt, ...);
 
+/** Sort strings alphabetically. */
+void svec_sort(struct svec *sv);
+
 /** Remove and free the last string. */
 void svec_pop(struct svec *sv);
 

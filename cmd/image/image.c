@@ -28,6 +28,9 @@ static const struct option cmd_image_opts[] = {
 
 /* clang-format off */
 static const struct cmd_manual manual = {
+	.name = "ice image",
+	.summary = "host-only image manipulation",
+
 	.description =
 	H_PARA("Host-only image-manipulation subcommands.  Does not talk "
 	       "to a chip -- everything here operates on local files.")
@@ -42,7 +45,7 @@ static const struct cmd_manual manual = {
 
 int cmd_image(int argc, const char **argv)
 {
-	argc = parse_options_manual(argc, argv, cmd_image_opts, &manual);
+	argc = parse_options(argc, argv, cmd_image_opts, &manual);
 	if (image_fn)
 		return image_fn(argc, argv);
 

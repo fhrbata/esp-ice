@@ -25,6 +25,9 @@ const char *const ice_preview_targets[] = {
 
 /* clang-format off */
 static const struct cmd_manual manual = {
+	.name = "ice set-target",
+	.summary = "switch the chip target",
+
 	.description =
 	H_PARA("Switches the project to build for chip @b{<target>} "
 	       "(e.g. @b{esp32}, @b{esp32s3}, @b{esp32c6}).  Wipes the "
@@ -94,7 +97,7 @@ int cmd_set_target(int argc, const char **argv)
 	struct sbuf define = SBUF_INIT;
 	int rc;
 
-	argc = parse_options_manual(argc, argv, cmd_set_target_opts, &manual);
+	argc = parse_options(argc, argv, cmd_set_target_opts, &manual);
 
 	if (argc < 1)
 		die("missing <target> argument");

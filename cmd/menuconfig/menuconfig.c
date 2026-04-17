@@ -13,6 +13,9 @@
 
 /* clang-format off */
 static const struct cmd_manual manual = {
+	.name = "ice menuconfig",
+	.summary = "open the project configuration UI",
+
 	.description =
 	H_PARA("Launches the ncurses @b{kconfig/menuconfig} UI -- the "
 	       "same TUI @b{idf.py menuconfig} opens -- so you can "
@@ -42,6 +45,6 @@ int cmd_menuconfig(int argc, const char **argv)
 {
 	struct option opts[] = {OPT_END()};
 
-	parse_options_manual(argc, argv, opts, &manual);
+	parse_options(argc, argv, opts, &manual);
 	return run_cmake_target("menuconfig", "menuconfig", 1);
 }

@@ -27,6 +27,9 @@
 
 /* clang-format off */
 static const struct cmd_manual manual = {
+	.name = "ice tools install",
+	.summary = "download and install tools from a manifest",
+
 	.description =
 	H_PARA("Read an ESP-IDF @b{tools.json} manifest and install the "
 	       "recommended version of each tool for the current platform.  "
@@ -406,7 +409,7 @@ int cmd_install(int argc, const char **argv)
 	int installed = 0, skipped = 0, failed = 0;
 	int tool_found = 0;
 
-	argc = parse_options_manual(argc, argv, cmd_install_opts, &manual);
+	argc = parse_options(argc, argv, cmd_install_opts, &manual);
 	if (argc != 1)
 		die("expected exactly one argument: path to tools.json");
 

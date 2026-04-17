@@ -131,13 +131,12 @@ struct cmd_manual;
  * @param argc    Argument count.
  * @param argv    Argument vector (modified in-place).
  * @param opts    NULL-terminated option table (OPT_END sentinel).
- * @param manual  Optional full manual for --help; may be NULL.
+ * @param manual  Command metadata (name, summary, description).
+ *                When NULL, falls back to argv[0] for the name
+ *                and --help behaves like -h.
  * @return New argc (number of remaining arguments in argv).
  */
-int parse_options_manual(int argc, const char **argv, const struct option *opts,
-			 const struct cmd_manual *manual);
-
-/** @brief Shorthand: parse_options_manual() with no manual. */
-int parse_options(int argc, const char **argv, const struct option *opts);
+int parse_options(int argc, const char **argv, const struct option *opts,
+		  const struct cmd_manual *manual);
 
 #endif /* OPTIONS_H */

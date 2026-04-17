@@ -12,6 +12,9 @@
 
 /* clang-format off */
 static const struct cmd_manual manual = {
+	.name = "ice clean",
+	.summary = "remove build artifacts",
+
 	.description =
 	H_PARA("Invokes cmake's @b{clean} target to remove intermediate "
 	       "object files and build outputs from the build directory "
@@ -35,6 +38,6 @@ int cmd_clean(int argc, const char **argv)
 {
 	struct option opts[] = {OPT_END()};
 
-	parse_options_manual(argc, argv, opts, &manual);
+	parse_options(argc, argv, opts, &manual);
 	return run_cmake_target("clean", "clean", 0);
 }

@@ -24,7 +24,12 @@ static int is_bool_opt(enum option_type t)
 
 static int has_options(const struct option *opts)
 {
-	return opts && opts->type != OPTION_END;
+	if (!opts)
+		return 0;
+	for (const struct option *o = opts; o->type != OPTION_END; o++)
+		if (o->type != OPTION_SUBCOMMAND)
+			return 1;
+	return 0;
 }
 
 /*
@@ -277,6 +282,8 @@ static void print_text(const char *body)
 static void print_options_body(const struct option *opts)
 {
 	for (const struct option *o = opts; o->type != OPTION_END; o++) {
+		if (o->type == OPTION_SUBCOMMAND)
+			continue;
 		fputs(INDENT, stdout);
 		if (o->short_opt)
 			printf("@b{-%c}", o->short_opt);
@@ -401,9 +408,7 @@ void print_manual(const char *cmd_name, const struct cmd_manual *m,
 	const char *positional = NULL;
 
 	cmd_name = basename_of(cmd_name);
-	summary = m && m->summary
-		      ? m->summary
-		      : (cmd_name ? ice_cmd_summary(cmd_name) : NULL);
+	summary = m ? m->summary : NULL;
 
 	if (opts) {
 		for (const struct option *o = opts; o->type != OPTION_END;
@@ -425,10 +430,7 @@ void print_manual(const char *cmd_name, const struct cmd_manual *m,
 
 	/* NAME */
 	fputs("@b{NAME}\n" INDENT, stdout);
-	if (cmd_name && strcmp(cmd_name, "ice") != 0)
-		printf("ice-%s", cmd_name);
-	else
-		fputs("ice", stdout);
+	fputs(cmd_name ? cmd_name : "ice", stdout);
 	if (summary)
 		printf(" - %s", summary);
 	fputs("\n\n", stdout);

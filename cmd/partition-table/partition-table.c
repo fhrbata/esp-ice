@@ -13,6 +13,9 @@
 
 /* clang-format off */
 static const struct cmd_manual manual = {
+	.name = "ice partition-table",
+	.summary = "generate partition table binary from CSV",
+
 	.description =
 	H_PARA("Drop-in replacement for ESP-IDF's @b{gen_esp32part.py}.  "
 	       "Reads a partition table in the IDF CSV dialect and writes "
@@ -89,8 +92,7 @@ int cmd_partition_table(int argc, const char **argv)
 	const char *output_path;
 	FILE *fp;
 
-	argc =
-	    parse_options_manual(argc, argv, cmd_partition_table_opts, &manual);
+	argc = parse_options(argc, argv, cmd_partition_table_opts, &manual);
 
 	if (argc < 2)
 		die("usage: ice partition-table [options] <input.csv> "

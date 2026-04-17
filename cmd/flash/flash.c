@@ -12,6 +12,9 @@
 
 /* clang-format off */
 static const struct cmd_manual manual = {
+	.name = "ice flash",
+	.summary = "flash firmware to the device",
+
 	.description =
 	H_PARA("Invokes cmake's @b{flash} target to program the "
 	       "compiled firmware -- application, bootloader, partition "
@@ -54,6 +57,6 @@ int cmd_flash(int argc, const char **argv)
 {
 	struct option opts[] = {OPT_END()};
 
-	parse_options_manual(argc, argv, opts, &manual);
+	parse_options(argc, argv, opts, &manual);
 	return run_cmake_target("flash", "flash", 0);
 }

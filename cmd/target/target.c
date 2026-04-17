@@ -51,6 +51,9 @@ static int cmd_target_set(int argc, const char **argv)
 	static char envstr[] = "_IDF_PY_SET_TARGET_ACTION=1";
 	/* clang-format off */
 	static const struct cmd_manual manual = {
+		.name = "ice target set",
+		.summary = "switch the project to a new chip target",
+
 		.description =
 		H_PARA("Switch the project to build for chip @b{<target>} "
 		       "(e.g. @b{esp32}, @b{esp32s3}, @b{esp32c6}).  Wipes the "
@@ -73,7 +76,7 @@ static int cmd_target_set(int argc, const char **argv)
 	struct sbuf define = SBUF_INIT;
 	int rc;
 
-	argc = parse_options_manual(argc, argv, cmd_target_set_opts, &manual);
+	argc = parse_options(argc, argv, cmd_target_set_opts, &manual);
 
 	if (argc < 1)
 		die("missing <target> argument");
@@ -108,8 +111,10 @@ static int cmd_target_set(int argc, const char **argv)
 
 static int cmd_target_list(int argc, const char **argv)
 {
-	(void)argc;
-	(void)argv;
+	static const struct cmd_manual manual = {.name = "ice target list"};
+	struct option opts[] = {OPT_END()};
+
+	parse_options(argc, argv, opts, &manual);
 
 	printf("Supported targets:\n");
 	for (const char *const *t = ice_supported_targets; *t; t++)
@@ -124,10 +129,11 @@ static int cmd_target_list(int argc, const char **argv)
 
 static int cmd_target_info(int argc, const char **argv)
 {
+	static const struct cmd_manual manual = {.name = "ice target info"};
+	struct option opts[] = {OPT_END()};
 	const char *target;
 
-	(void)argc;
-	(void)argv;
+	parse_options(argc, argv, opts, &manual);
 
 	target = config_get("target");
 	if (!target || !*target) {
@@ -158,6 +164,9 @@ static const struct option cmd_target_opts[] = {
 
 /* clang-format off */
 static const struct cmd_manual manual = {
+	.name = "ice target",
+	.summary = "manage the chip target",
+
 	.description =
 	H_PARA("Manage the chip target for the current project.")
 	H_PARA("Run @b{ice target <subcommand> --help} for details."),
@@ -171,7 +180,7 @@ static const struct cmd_manual manual = {
 
 int cmd_target(int argc, const char **argv)
 {
-	argc = parse_options_manual(argc, argv, cmd_target_opts, &manual);
+	argc = parse_options(argc, argv, cmd_target_opts, &manual);
 	if (target_fn)
 		return target_fn(argc, argv);
 

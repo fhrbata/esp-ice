@@ -18,6 +18,9 @@
 
 /* clang-format off */
 static const struct cmd_manual manual = {
+	.name = "ice image create",
+	.summary = "create a flash image from an ELF executable",
+
 	.description =
 	H_PARA("Drop-in replacement for @b{esptool elf2image}.  Reads an "
 	       "ELF executable produced by the IDF toolchain and writes "
@@ -158,7 +161,7 @@ int cmd_image_create(int argc, const char **argv)
 	struct sbuf img = SBUF_INIT;
 	FILE *fp;
 
-	argc = parse_options_manual(argc, argv, cmd_image_create_opts, &manual);
+	argc = parse_options(argc, argv, cmd_image_create_opts, &manual);
 
 	if (argc < 1)
 		die("missing input ELF path");

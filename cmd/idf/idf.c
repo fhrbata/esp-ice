@@ -280,10 +280,11 @@ static const struct option clone_opts[] = {
 
 static int cmd_idf_clone(int argc, const char **argv)
 {
+	static const struct cmd_manual manual = {.name = "ice idf clone"};
 	const char *base = base_repo_path();
 	const char *url = IDF_CLONE_URL;
 
-	argc = parse_options(argc, argv, clone_opts);
+	argc = parse_options(argc, argv, clone_opts, &manual);
 
 	if (!access(base, F_OK)) {
 		fprintf(stderr,
@@ -364,14 +365,17 @@ static int cmd_idf_clone(int argc, const char **argv)
 
 static int cmd_idf_repo(int argc, const char **argv)
 {
+	static const struct cmd_manual manual = {.name = "ice idf repo"};
+	struct option opts[] = {OPT_END_COMPLETE("path", NULL)};
 	const char *path;
 	struct config c;
 	const char *cfg_path;
 
-	if (argc < 2)
-		die("usage: ice idf repo <path>");
+	argc = parse_options(argc, argv, opts, &manual);
+	if (argc < 1)
+		die("missing <path> argument");
 
-	path = argv[1];
+	path = argv[0];
 
 	if (!is_idf_repo(path))
 		die("'%s' does not look like an ESP-IDF tree "
@@ -403,11 +407,12 @@ static const struct option switch_opts[] = {
 
 static int cmd_idf_switch(int argc, const char **argv)
 {
+	static const struct cmd_manual manual = {.name = "ice idf switch"};
 	const char *base = base_repo_path();
 	const char *current = current_tree_path();
 	const char *version;
 
-	argc = parse_options(argc, argv, switch_opts);
+	argc = parse_options(argc, argv, switch_opts, &manual);
 	if (argc < 1)
 		die("expected a version argument");
 	version = argv[0];
@@ -474,13 +479,14 @@ static int version_supported(const char *ver)
 
 static int cmd_idf_list(int argc, const char **argv)
 {
+	static const struct cmd_manual manual = {.name = "ice idf list"};
+	struct option opts[] = {OPT_END()};
 	const char *repo;
 	struct sbuf out = SBUF_INIT;
 	size_t pos;
 	char *line;
 
-	(void)argc;
-	(void)argv;
+	parse_options(argc, argv, opts, &manual);
 
 	repo = idf_path();
 	if (!repo) {
@@ -540,10 +546,11 @@ static int cmd_idf_list(int argc, const char **argv)
 
 static int cmd_idf_pull(int argc, const char **argv)
 {
+	static const struct cmd_manual manual = {.name = "ice idf pull"};
+	struct option opts[] = {OPT_END()};
 	const char *base = base_repo_path();
 
-	(void)argc;
-	(void)argv;
+	parse_options(argc, argv, opts, &manual);
 
 	if (access(base, F_OK) != 0)
 		die("no managed ESP-IDF repo found\n"
@@ -567,13 +574,14 @@ static int cmd_idf_pull(int argc, const char **argv)
 
 static int cmd_idf_info(int argc, const char **argv)
 {
+	static const struct cmd_manual manual = {.name = "ice idf info"};
+	struct option opts[] = {OPT_END()};
 	const char *repo;
 	struct sbuf head = SBUF_INIT;
 	const char *git_argv[] = {"git", "describe", "--tags", "--always",
 				  NULL};
 
-	(void)argc;
-	(void)argv;
+	parse_options(argc, argv, opts, &manual);
 
 	repo = idf_path();
 	if (!repo) {
@@ -624,6 +632,9 @@ static const struct option cmd_idf_opts[] = {
 
 /* clang-format off */
 static const struct cmd_manual manual = {
+	.name = "ice idf",
+	.summary = "manage the ESP-IDF source tree",
+
 	.description =
 	H_PARA("Manage the ESP-IDF source tree.  Use @b{ice idf clone} to "
 	       "get ESP-IDF, or @b{ice idf repo <path>} to point ice at "
@@ -642,7 +653,7 @@ static const struct cmd_manual manual = {
 
 int cmd_idf(int argc, const char **argv)
 {
-	argc = parse_options_manual(argc, argv, cmd_idf_opts, &manual);
+	argc = parse_options(argc, argv, cmd_idf_opts, &manual);
 	if (idf_fn)
 		return idf_fn(argc, argv);
 

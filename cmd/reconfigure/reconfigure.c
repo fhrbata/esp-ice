@@ -12,6 +12,9 @@
 
 /* clang-format off */
 static const struct cmd_manual manual = {
+	.name = "ice reconfigure",
+	.summary = "regenerate the build system",
+
 	.description =
 	H_PARA("Forces cmake to regenerate the build system, even when "
 	       "@b{CMakeCache.txt} is already present and up to date.  "
@@ -44,6 +47,6 @@ int cmd_reconfigure(int argc, const char **argv)
 {
 	struct option opts[] = {OPT_END()};
 
-	parse_options_manual(argc, argv, opts, &manual);
+	parse_options(argc, argv, opts, &manual);
 	return ensure_build_directory(1);
 }

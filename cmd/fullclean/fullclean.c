@@ -14,6 +14,9 @@
 
 /* clang-format off */
 static const struct cmd_manual manual = {
+	.name = "ice fullclean",
+	.summary = "wipe the build directory",
+
 	.description =
 	H_PARA("Deletes every file and subdirectory inside the configured "
 	       "build directory, forcing the next ice command to run "
@@ -109,6 +112,6 @@ int cmd_fullclean(int argc, const char **argv)
 {
 	struct option opts[] = {OPT_END()};
 
-	parse_options_manual(argc, argv, opts, &manual);
+	parse_options(argc, argv, opts, &manual);
 	return fullclean_run();
 }

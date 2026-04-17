@@ -24,6 +24,9 @@ static const struct option cmd_monitor_opts[] = {
 };
 
 static const struct cmd_manual manual = {
+	.name = "ice monitor",
+	.summary = "display serial output from the device",
+
 	.description =
 	H_PARA("Connects to a serial port and displays device output "
 	       "in real time.  Keyboard input is forwarded to the "
@@ -65,7 +68,7 @@ int cmd_monitor(int argc, const char **argv)
 	unsigned char buf[1024];
 	int rc;
 
-	parse_options_manual(argc, argv, cmd_monitor_opts, &manual);
+	parse_options(argc, argv, cmd_monitor_opts, &manual);
 
 	port = config_get("serial.port");
 	if (!port)

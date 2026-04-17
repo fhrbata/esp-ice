@@ -22,6 +22,9 @@
 
 /* clang-format off */
 static const struct cmd_manual manual = {
+	.name = "ice configdep",
+	.summary = "sdkconfig-aware compiler wrapper",
+
 	.description =
 	H_PARA("Compiler wrapper that rewrites GCC-style dependency "
 	       "files (@b{-MF}) so a translation unit only rebuilds "
@@ -368,13 +371,13 @@ int cmd_configdep(int argc, const char **argv)
 
 	/*
 	 * All args after argv[0] are forwarded verbatim to the real
-	 * compiler, so we can't call parse_options_manual here -- flags
+	 * compiler, so we can't call parse_options here -- flags
 	 * like -c, -MF etc. are not ours.  Intercept --help/-h manually
 	 * at the head of the argv before forwarding takes over.
 	 */
 	if (argc >= 2 &&
 	    (!strcmp(argv[1], "--help") || !strcmp(argv[1], "-h"))) {
-		print_manual("configdep", &manual, NULL);
+		print_manual(manual.name, &manual, NULL);
 		return EXIT_SUCCESS;
 	}
 

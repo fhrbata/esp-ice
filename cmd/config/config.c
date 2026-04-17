@@ -23,6 +23,9 @@
 
 /* clang-format off */
 static const struct cmd_manual manual = {
+	.name = "ice config",
+	.summary = "inspect and modify configuration entries",
+
 	.description =
 	H_PARA("@b{ice config} reads and writes configuration entries "
 	       "across a stack of cascading scopes.  The effective value "
@@ -265,7 +268,7 @@ int cmd_config(int argc, const char **argv)
 	int modes;
 	enum config_scope scope;
 
-	argc = parse_options_manual(argc, argv, cmd_config_opts, &manual);
+	argc = parse_options(argc, argv, cmd_config_opts, &manual);
 
 	modes = opt_list + opt_add + opt_unset;
 	if (modes > 1)

@@ -72,4 +72,10 @@ int write_file_atomic(const char *path, const void *data, size_t len);
  */
 int rmtree(const char *path, int verbose);
 
+/**
+ * @brief Check whether @p name is an executable on PATH.
+ * @return 1 if found and executable, 0 otherwise.
+ */
+int find_in_path(const char *name);
+
 #endif /* FS_H */

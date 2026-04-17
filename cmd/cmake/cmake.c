@@ -21,6 +21,9 @@
 
 /* clang-format off */
 static const struct cmd_manual manual = {
+	.name = "ice cmake",
+	.summary = "run an arbitrary cmake target",
+
 	.description =
 	H_PARA("Low-level escape hatch: configures the build directory "
 	       "on demand and then runs any cmake @b{<target>} verbatim.  "
@@ -53,7 +56,7 @@ int cmd_cmake(int argc, const char **argv)
 {
 	struct option opts[] = {OPT_END()};
 
-	argc = parse_options_manual(argc, argv, opts, &manual);
+	argc = parse_options(argc, argv, opts, &manual);
 
 	if (argc < 1)
 		die("missing target argument");
