@@ -33,6 +33,8 @@
 /* Helpers                                                             */
 /* ------------------------------------------------------------------ */
 
+static int version_supported(const char *ver);
+
 /** Return ~/.ice/esp-idf/base.git (bare object store). */
 static const char *base_repo_path(void)
 {
@@ -111,6 +113,446 @@ static int run_git_capture(const char *dir, const char **argv, struct sbuf *out)
 
 	rc = process_finish(&proc);
 	return rc;
+}
+
+/**
+ * Describes one entry from .gitmodules after URL resolution.
+ */
+struct submod {
+	char *name; /**< section name, e.g. "components/esp_wifi/lib" */
+	char *path; /**< worktree path (may equal name) */
+	char *url;  /**< absolute URL (relative paths already resolved) */
+};
+
+static void submod_release(struct submod *m)
+{
+	free(m->name);
+	free(m->path);
+	free(m->url);
+}
+
+static struct submod *submod_find(struct submod *list, size_t nr,
+				  const char *name)
+{
+	for (size_t i = 0; i < nr; i++)
+		if (!strcmp(list[i].name, name))
+			return &list[i];
+	return NULL;
+}
+
+/**
+ * Resolve a possibly-relative submodule URL against the superproject's URL.
+ *
+ * Only URLs starting with "./" or "../" are treated as relative.  Each
+ * "../" strips one path component from the superproject's URL, stopping
+ * at the "scheme://" boundary.  Other forms (https://…, git@host:…,
+ * /abs/path) are returned as a plain copy.
+ */
+static char *resolve_submod_url(const char *super, const char *rel)
+{
+	struct sbuf out = SBUF_INIT;
+	const char *p = rel;
+
+	if (p[0] != '.' || (p[1] != '/' && !(p[1] == '.' && p[2] == '/')))
+		return sbuf_strdup(rel);
+
+	sbuf_addstr(&out, super);
+	while (out.len && out.buf[out.len - 1] == '/')
+		sbuf_setlen(&out, out.len - 1);
+
+	while (*p) {
+		if (p[0] == '.' && p[1] == '/') {
+			p += 2;
+		} else if (p[0] == '.' && p[1] == '.' && p[2] == '/') {
+			const char *scheme = strstr(out.buf, "://");
+			size_t floor =
+			    scheme ? (size_t)(scheme - out.buf) + 3 : 0;
+			size_t cut = out.len;
+			while (cut > floor && out.buf[cut - 1] != '/')
+				cut--;
+			if (cut > floor)
+				sbuf_setlen(&out, cut - 1);
+			p += 3;
+		} else {
+			break;
+		}
+	}
+
+	sbuf_addch(&out, '/');
+	sbuf_addstr(&out, p);
+	return sbuf_detach(&out);
+}
+
+/**
+ * Append submodules declared at @p base's <@p refname>:.gitmodules to
+ * @p mods, deduplicating by name.  Absolute URLs are resolved against
+ * @p super_url.
+ *
+ * Uses `git cat-file -p <ref>:.gitmodules` to get the raw INI, then
+ * parses it via config_load_buf so git-style `[section "subsection"]`
+ * is handled uniformly with the rest of the codebase.
+ */
+static void read_submodules_at(const char *base, const char *super_url,
+			       const char *refname, struct submod **mods,
+			       size_t *nr, size_t *alloc)
+{
+	struct sbuf blob = SBUF_INIT;
+	struct sbuf content = SBUF_INIT;
+	struct config cfg;
+	int i;
+
+	sbuf_addf(&blob, "%s:.gitmodules", refname);
+
+	const char *argv[] = {"git", "cat-file", "-p", blob.buf, NULL};
+	if (run_git_capture(base, argv, &content) != 0) {
+		sbuf_release(&content);
+		sbuf_release(&blob);
+		return;
+	}
+
+	config_init(&cfg);
+	config_load_buf(&cfg, CONFIG_SCOPE_DEFAULT, blob.buf, content.buf,
+			content.len);
+	sbuf_release(&blob);
+	sbuf_release(&content);
+
+	for (i = 0; i < cfg.nr; i++) {
+		const char *key = cfg.entries[i].key;
+		const char *value = cfg.entries[i].value;
+		const char *dot;
+		size_t klen = strlen(key);
+		struct submod *m;
+		char *name;
+		int is_path, is_url;
+
+		if (strncmp(key, "submodule.", 10) != 0)
+			continue;
+		is_path = klen > 5 && !strcmp(key + klen - 5, ".path");
+		is_url =
+		    !is_path && klen > 4 && !strcmp(key + klen - 4, ".url");
+		if (!is_path && !is_url)
+			continue;
+
+		/* Extract submodule name: between "submodule." and
+		 * ".path"/".url". */
+		dot = key + 10;
+		name = sbuf_strndup(dot, klen - 10 - (is_path ? 5 : 4));
+
+		m = submod_find(*mods, *nr, name);
+		if (!m) {
+			ALLOC_GROW(*mods, *nr + 1, *alloc);
+			m = &(*mods)[(*nr)++];
+			m->name = name;
+			m->path = NULL;
+			m->url = NULL;
+		} else {
+			free(name);
+		}
+
+		if (is_path) {
+			if (!m->path)
+				m->path = sbuf_strdup(value);
+		} else if (!m->url) {
+			m->url = resolve_submod_url(super_url, value);
+		}
+	}
+
+	config_release(&cfg);
+}
+
+/**
+ * Parse .gitmodules across master plus every `release/v*` branch and
+ * return the union of declared submodules.  This captures submodules
+ * that were removed in master but are still referenced by older
+ * supported releases.
+ *
+ * @return number of submodules on success (may be 0).
+ *         Caller must submod_release() each entry and free(*out).
+ */
+static int read_submodules(const char *base, const char *super_url,
+			   struct submod **out)
+{
+	struct submod *mods = NULL;
+	size_t nr = 0, alloc = 0;
+	struct sbuf branches = SBUF_INIT;
+	size_t pos = 0;
+	char *line;
+
+	*out = NULL;
+
+	/* Always scan default HEAD first. */
+	read_submodules_at(base, super_url, "HEAD", &mods, &nr, &alloc);
+
+	/* Enumerate local branches in the bare repo: master + release/v*. */
+	{
+		const char *argv[] = {"git",
+				      "branch",
+				      "--list",
+				      "--format",
+				      "%(refname:short)",
+				      "master",
+				      "release/v*",
+				      NULL};
+		if (run_git_capture(base, argv, &branches) != 0) {
+			sbuf_release(&branches);
+			goto done;
+		}
+	}
+
+	while ((line = sbuf_getline(branches.buf, branches.len, &pos))) {
+		while (*line == ' ' || *line == '*')
+			line++;
+		if (!*line)
+			continue;
+		if (strcmp(line, "master") != 0 &&
+		    (strncmp(line, "release/v", 9) != 0 ||
+		     !version_supported(line + 8) || strchr(line + 9, '_')))
+			continue;
+		read_submodules_at(base, super_url, line, &mods, &nr, &alloc);
+	}
+	sbuf_release(&branches);
+
+done:
+	/* Drop entries missing path or url. */
+	{
+		size_t valid = 0;
+		for (size_t i = 0; i < nr; i++) {
+			if (mods[i].path && mods[i].url) {
+				if (valid != i)
+					mods[valid] = mods[i];
+				valid++;
+			} else {
+				submod_release(&mods[i]);
+			}
+		}
+		nr = valid;
+	}
+
+	*out = mods;
+	return (int)nr;
+}
+
+/**
+ * Find the submodule gitdir inside a reference repo for path @p sub_path.
+ * Looks at @p ref/.git/modules/<path> (working-tree layout) first, then
+ * @p ref/modules/<path> (bare layout).  Shallow gitdirs are rejected
+ * because `git clone --reference` refuses them.
+ *
+ * Returns a malloc'd path or NULL.
+ */
+static char *find_reference_moduledir(const char *ref, const char *sub_path)
+{
+	struct sbuf p = SBUF_INIT;
+	size_t dir_len;
+
+	sbuf_addf(&p, "%s/.git/modules/%s", ref, sub_path);
+	if (!is_directory(p.buf)) {
+		sbuf_reset(&p);
+		sbuf_addf(&p, "%s/modules/%s", ref, sub_path);
+		if (!is_directory(p.buf)) {
+			sbuf_release(&p);
+			return NULL;
+		}
+	}
+
+	dir_len = p.len;
+	sbuf_addstr(&p, "/shallow");
+	if (!access(p.buf, F_OK)) {
+		sbuf_release(&p);
+		return NULL;
+	}
+	sbuf_setlen(&p, dir_len);
+	return sbuf_detach(&p);
+}
+
+/**
+ * Clone @p mods as bare repositories into @p parent_bare/modules/<path>/,
+ * up to @p jobs processes in parallel.  When @p reference_parent is
+ * non-NULL and has a matching submodule gitdir under it, that gitdir
+ * is passed as --reference for object reuse.  Existing destinations
+ * are skipped.
+ *
+ * @p label_prefix is prepended to progress lines (use "" for top level,
+ * or the parent's path for nested modules).
+ *
+ * @return number of submodules that failed to clone.
+ */
+static int clone_submodules_parallel(const char *parent_bare,
+				     const char *reference_parent,
+				     const char *label_prefix,
+				     const struct submod *mods, size_t nmods,
+				     int jobs)
+{
+	int errors = 0;
+	size_t i;
+
+	if (jobs < 1)
+		jobs = 1;
+
+	for (i = 0; i < nmods;) {
+		size_t batch =
+		    nmods - i < (size_t)jobs ? nmods - i : (size_t)jobs;
+		struct process procs[16] = {0};
+		struct svec argvs[16] = {0};
+		char *dests[16] = {0};
+		char *refs[16] = {0};
+
+		for (size_t j = 0; j < batch; j++) {
+			const struct submod *m = &mods[i + j];
+			struct sbuf dst = SBUF_INIT;
+
+			sbuf_addf(&dst, "%s/modules/%s", parent_bare, m->path);
+			dests[j] = sbuf_detach(&dst);
+
+			if (is_directory(dests[j])) {
+				fprintf(stderr, "  skip @b{%s%s%s} (exists)\n",
+					label_prefix, *label_prefix ? "/" : "",
+					m->path);
+				continue;
+			}
+
+			if (mkdirp_for_file(dests[j]) < 0) {
+				warn_errno("mkdir for '%s'", dests[j]);
+				errors++;
+				continue;
+			}
+
+			if (reference_parent)
+				refs[j] = find_reference_moduledir(
+				    reference_parent, m->path);
+
+			svec_push(&argvs[j], "git");
+			svec_push(&argvs[j], "clone");
+			svec_push(&argvs[j], "--bare");
+			svec_push(&argvs[j], "--quiet");
+			if (refs[j]) {
+				svec_push(&argvs[j], "--reference");
+				svec_push(&argvs[j], refs[j]);
+			}
+			svec_push(&argvs[j], m->url);
+			svec_push(&argvs[j], dests[j]);
+
+			procs[j].argv = argvs[j].v;
+
+			fprintf(stderr, "  fetch @b{%s%s%s}\n", label_prefix,
+				*label_prefix ? "/" : "", m->path);
+			if (process_start(&procs[j]) != 0) {
+				warn("could not start git clone for '%s'",
+				     m->path);
+				errors++;
+			}
+		}
+
+		for (size_t j = 0; j < batch; j++) {
+			if (procs[j].pid > 0) {
+				int rc = process_finish(&procs[j]);
+				if (rc != 0) {
+					warn("submodule '%s' clone failed",
+					     mods[i + j].path);
+					errors++;
+				}
+			}
+			svec_clear(&argvs[j]);
+			free(dests[j]);
+			free(refs[j]);
+		}
+
+		i += batch;
+	}
+
+	return errors;
+}
+
+/**
+ * Read .gitmodules at HEAD of repo @p base (typically a submodule's
+ * bare clone) and return the declared sub-submodules with URLs
+ * resolved against @p super_url.  Caller must release each entry.
+ */
+static int read_submodules_head(const char *base, const char *super_url,
+				struct submod **out)
+{
+	struct submod *mods = NULL;
+	size_t nr = 0, alloc = 0, valid = 0;
+
+	*out = NULL;
+	read_submodules_at(base, super_url, "HEAD", &mods, &nr, &alloc);
+
+	for (size_t i = 0; i < nr; i++) {
+		if (mods[i].path && mods[i].url) {
+			if (valid != i)
+				mods[valid] = mods[i];
+			valid++;
+		} else {
+			submod_release(&mods[i]);
+		}
+	}
+	*out = mods;
+	return (int)valid;
+}
+
+/**
+ * After the top-level submodules have been cloned under @p base/modules/,
+ * walk each one and fetch any nested sub-submodules it declares.
+ * Recurses up to @p max_depth levels.
+ */
+static int clone_subsubmodules(const char *base, const char *reference,
+			       const char *label_prefix,
+			       const struct submod *parents, size_t nparents,
+			       int jobs, int max_depth)
+{
+	int errors = 0;
+
+	if (max_depth <= 0)
+		return 0;
+
+	for (size_t i = 0; i < nparents; i++) {
+		const struct submod *p = &parents[i];
+		struct sbuf parent_bare = SBUF_INIT;
+		struct sbuf parent_label = SBUF_INIT;
+		char *parent_ref = NULL;
+		struct submod *subs;
+		int nsubs;
+
+		sbuf_addf(&parent_bare, "%s/modules/%s", base, p->path);
+		if (!is_directory(parent_bare.buf)) {
+			sbuf_release(&parent_bare);
+			continue;
+		}
+
+		nsubs = read_submodules_head(parent_bare.buf, p->url, &subs);
+		if (nsubs <= 0) {
+			sbuf_release(&parent_bare);
+			continue;
+		}
+
+		sbuf_addf(&parent_label, "%s%s%s", label_prefix,
+			  *label_prefix ? "/" : "", p->path);
+
+		if (reference)
+			parent_ref =
+			    find_reference_moduledir(reference, p->path);
+
+		fprintf(stderr,
+			"Fetching %d nested submodule%s under @b{%s} ...\n",
+			nsubs, nsubs == 1 ? "" : "s", parent_label.buf);
+
+		errors += clone_submodules_parallel(parent_bare.buf, parent_ref,
+						    parent_label.buf, subs,
+						    (size_t)nsubs, jobs);
+
+		errors += clone_subsubmodules(
+		    parent_bare.buf, parent_ref, parent_label.buf, subs,
+		    (size_t)nsubs, jobs, max_depth - 1);
+
+		for (int k = 0; k < nsubs; k++)
+			submod_release(&subs[k]);
+		free(subs);
+		free(parent_ref);
+		sbuf_release(&parent_bare);
+		sbuf_release(&parent_label);
+	}
+
+	return errors;
 }
 
 /**
@@ -271,20 +713,27 @@ static int populate_submodules(const char *base, const char *tree_path,
 /* ------------------------------------------------------------------ */
 
 static const char *clone_reference;
+static int clone_jobs = 8;
 
 static const struct option clone_opts[] = {
     OPT_STRING(0, "reference", &clone_reference, "path",
 	       "borrow objects from an existing esp-idf clone", NULL),
-    OPT_END(),
+    OPT_INT('j', "jobs", &clone_jobs, "n",
+	    "parallel submodule clones (default 8)", NULL),
+    OPT_END_COMPLETE("[url]", NULL),
 };
 
 static int cmd_idf_clone(int argc, const char **argv)
 {
 	static const struct cmd_manual manual = {.name = "ice idf clone"};
 	const char *base = base_repo_path();
-	const char *url = IDF_CLONE_URL;
+	const char *url;
+	struct submod *mods;
+	int nmods;
+	int errors = 0;
 
 	argc = parse_options(argc, argv, clone_opts, &manual);
+	url = argc >= 1 ? argv[0] : IDF_CLONE_URL;
 
 	if (!access(base, F_OK)) {
 		fprintf(stderr,
@@ -302,61 +751,50 @@ static int cmd_idf_clone(int argc, const char **argv)
 		sbuf_release(&parent);
 	}
 
-	/* Step 1: Bare clone of the main repo. */
-	fprintf(stderr, "Cloning ESP-IDF into @b{%s} ...\n", base);
-	if (clone_reference) {
-		const char *argv_ref[] = {
-		    "git",	     "clone", "--bare", "--reference",
-		    clone_reference, url,     base,	NULL};
-		if (run_git(NULL, argv_ref) != 0)
+	/* Step 1: bare clone of the superproject. */
+	fprintf(stderr, "Cloning @b{%s} into @b{%s} ...\n", url, base);
+	{
+		struct svec args = SVEC_INIT;
+
+		svec_push(&args, "git");
+		svec_push(&args, "clone");
+		svec_push(&args, "--bare");
+		if (clone_reference) {
+			svec_push(&args, "--reference");
+			svec_push(&args, clone_reference);
+		}
+		svec_push(&args, url);
+		svec_push(&args, base);
+		if (run_git(NULL, args.v) != 0)
 			die("git clone failed");
-	} else {
-		const char *argv_clone[] = {"git", "clone", "--bare",
-					    url,   base,    NULL};
-		if (run_git(NULL, argv_clone) != 0)
-			die("git clone failed");
+		svec_clear(&args);
 	}
 
-	/* Step 2: Initialize submodules into the bare repo.
-	 *
-	 * We need a temporary checkout to run `git submodule update`
-	 * which populates base.git's modules/ directory.  After that
-	 * every `ice idf switch` can use those local objects.
+	/* Step 2: parse .gitmodules and clone each submodule as bare. */
+	nmods = read_submodules(base, url, &mods);
+	if (nmods <= 0) {
+		fprintf(stderr, "No submodules declared.\n@g{done}\n");
+		return 0;
+	}
+
+	fprintf(stderr, "Fetching %d submodule%s (up to %d in parallel) ...\n",
+		nmods, nmods == 1 ? "" : "s", clone_jobs);
+	errors = clone_submodules_parallel(base, clone_reference, "", mods,
+					   (size_t)nmods, clone_jobs);
+
+	/* Recurse one level into nested submodules (e.g. openthread's mbedtls).
 	 */
-	fprintf(stderr, "Fetching submodules ...\n");
-	{
-		struct sbuf tmp = SBUF_INIT;
-		sbuf_addf(&tmp, "%s/esp-idf/.clone-tmp", ice_home());
+	errors += clone_subsubmodules(base, clone_reference, "", mods,
+				      (size_t)nmods, clone_jobs, 2);
 
-		const char *clone_argv[] = {"git", "clone", "--shared",
-					    base,  tmp.buf, NULL};
-		if (run_git(NULL, clone_argv) != 0)
-			die("temporary checkout failed");
+	for (int i = 0; i < nmods; i++)
+		submod_release(&mods[i]);
+	free(mods);
 
-		const char *sub_argv[] = {"git",    "submodule",   "update",
-					  "--init", "--recursive", "--jobs",
-					  "8",	    NULL};
-		if (run_git(tmp.buf, sub_argv) != 0)
-			warn("some submodules failed to fetch");
-
-		/* Unshallow all submodules and fetch all branches
-		 * so every version's commits are available locally. */
-		fprintf(stderr, "Fetching full submodule history ...\n");
-		const char *unshal[] = {"git",
-					"submodule",
-					"foreach",
-					"--recursive",
-					"git fetch --unshallow 2>/dev/null; "
-					"git fetch origin "
-					"'+refs/heads/*:refs/remotes/origin/*' "
-					"2>/dev/null; true",
-					NULL};
-		run_git(tmp.buf, unshal);
-
-		/* Clean up temporary checkout. */
-		rmtree(tmp.buf, 0);
-		rmdir(tmp.buf);
-		sbuf_release(&tmp);
+	if (errors) {
+		warn("%d submodule%s failed to clone", errors,
+		     errors == 1 ? "" : "s");
+		return 1;
 	}
 
 	fprintf(stderr, "@g{done}\n");
@@ -402,7 +840,7 @@ static const char *switch_worktree;
 static const struct option switch_opts[] = {
     OPT_STRING(0, "worktree", &switch_worktree, "path",
 	       "create the working tree at a custom path", NULL),
-    OPT_END(),
+    OPT_END_COMPLETE("ref", NULL),
 };
 
 static int cmd_idf_switch(int argc, const char **argv)
@@ -414,16 +852,24 @@ static int cmd_idf_switch(int argc, const char **argv)
 
 	argc = parse_options(argc, argv, switch_opts, &manual);
 	if (argc < 1)
-		die("expected a version argument");
+		die("expected a branch, tag, or commit SHA");
 	version = argv[0];
 
-	/* Use the base bare repo for objects. If user set idf.path, use that
-	 * as the object source instead. */
-	const char *obj_source = idf_path();
-	if (!obj_source)
+	/*
+	 * Objects for the worktree and its submodules always come from
+	 * base.git when we manage the clone.  A user-configured idf.path
+	 * (via `ice idf repo`) only wins when base.git doesn't exist --
+	 * in that case the user is bringing their own populated tree.
+	 */
+	const char *obj_source;
+	if (!access(base, F_OK))
 		obj_source = base;
+	else {
+		const char *configured = config_get("idf.path");
+		obj_source = configured && *configured ? configured : NULL;
+	}
 
-	if (access(obj_source, F_OK) != 0)
+	if (!obj_source || access(obj_source, F_OK) != 0)
 		die("no ESP-IDF configured\n"
 		    "hint: run @b{ice idf clone} or @b{ice idf repo <path>}");
 
@@ -431,30 +877,72 @@ static int cmd_idf_switch(int argc, const char **argv)
 
 	fprintf(stderr, "Switching to @b{%s} in @b{%s} ...\n", version, dest);
 
-	/* Create or update the working tree. */
-	if (is_directory(dest)) {
-		/* Existing tree: just update it. */
-		const char *fetch[] = {"git", "fetch", "origin", version, NULL};
-		const char *checkout[] = {"git", "checkout", "--force", version,
-					  NULL};
-
+	/*
+	 * Ensure the working tree exists with up-to-date refs.  Using
+	 * --no-checkout lets us `git checkout` an arbitrary ref or SHA
+	 * afterwards -- `git clone --branch` would reject commit SHAs.
+	 */
+	if (!is_directory(dest)) {
+		mkdirp_for_file(dest);
+		const char *clone_argv[] = {
+		    "git",     "clone",	   "--shared", "--no-checkout",
+		    "--quiet", obj_source, dest,       NULL};
+		if (run_git(NULL, clone_argv) != 0)
+			die("git clone failed");
+	} else {
+		/* Refresh refs so recently-pulled branches/tags are visible. */
+		const char *fetch[] = {"git", "fetch", "--quiet", "origin",
+				       NULL};
 		run_git(dest, fetch);
+	}
+
+	/* Resolve any branch/tag/SHA -- objects are local via --shared. */
+	{
+		const char *checkout[] = {"git",     "checkout", "--force",
+					  "--quiet", version,	 NULL};
 		if (run_git(dest, checkout) != 0)
 			die("git checkout '%s' failed", version);
-	} else {
-		/* New tree: clone --shared from the base/source repo. */
-		mkdirp_for_file(dest);
-		const char *clone_argv[] = {"git",	"clone", "--shared",
-					    "--branch", version, "--quiet",
-					    obj_source, dest,	 NULL};
-		if (run_git(NULL, clone_argv) != 0)
-			die("git clone '%s' failed", version);
 	}
 
 	/* Populate submodules from local objects. */
 	fprintf(stderr, "Populating submodules ...\n");
 	if (populate_submodules(obj_source, dest, version) < 0)
 		warn("some submodules could not be populated");
+
+	/*
+	 * Register submodules in .git/config and move their gitdirs to
+	 * the canonical <dest>/.git/modules/<name>/ layout so the result
+	 * matches `git clone --recurse-submodules`.
+	 *
+	 * The -c override tells submodule init to resolve relative URLs
+	 * against the real upstream URL (stored in base.git), not against
+	 * `dest`'s local origin (which points at base.git).
+	 */
+	{
+		struct sbuf origin_url = SBUF_INIT;
+		const char *get_url[] = {"git", "config", "--get",
+					 "remote.origin.url", NULL};
+		run_git_capture(obj_source, get_url, &origin_url);
+		sbuf_rtrim(&origin_url);
+
+		struct svec args = SVEC_INIT;
+		svec_push(&args, "git");
+		if (origin_url.len) {
+			svec_push(&args, "-c");
+			svec_pushf(&args, "remote.origin.url=%s",
+				   origin_url.buf);
+		}
+		svec_push(&args, "submodule");
+		svec_push(&args, "init");
+		svec_push(&args, "--quiet");
+		run_git(dest, args.v);
+		svec_clear(&args);
+		sbuf_release(&origin_url);
+
+		const char *absorb[] = {"git", "submodule", "absorbgitdirs",
+					NULL};
+		run_git(dest, absorb);
+	}
 
 	fprintf(stderr, "@g{Switched to %s}\n", version);
 	return 0;
