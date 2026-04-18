@@ -41,8 +41,18 @@ static void print_usage(const char *argv0, const struct option *opts)
 		fprintf(stderr, " [<options>]");
 	if (has_subcmds)
 		fprintf(stderr, " <subcommand> [<args>]");
-	else if (positional)
-		fprintf(stderr, " <%s>", positional);
+	else if (positional) {
+		/*
+		 * argh with '<' or '[' is treated as a pre-formatted
+		 * synopsis fragment so multi-positional commands can
+		 * render e.g. "<ref> [<name|path>]".  A bare word gets
+		 * wrapped in <> as usual.
+		 */
+		if (strchr(positional, '<') || strchr(positional, '['))
+			fprintf(stderr, " %s", positional);
+		else
+			fprintf(stderr, " <%s>", positional);
+	}
 	fprintf(stderr, "\n\n");
 
 	/* Print subcommands first, then options. */

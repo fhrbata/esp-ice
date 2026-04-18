@@ -458,7 +458,7 @@ static const struct option clone_opts[] = {
 	     "copy borrowed objects locally, then stop borrowing"),
     OPT_INT('j', "jobs", &clone_jobs, "n",
 	    "parallel submodule clones (default 8)", NULL),
-    OPT_END_COMPLETE("[url]", NULL),
+    OPT_END_COMPLETE("[<url>]", NULL),
 };
 
 static int cmd_idf_clone(int argc, const char **argv)
@@ -726,7 +726,7 @@ static const struct option checkout_opts[] = {
 	     "list existing checkouts instead of creating one"),
     OPT_INT('j', "jobs", &checkout_jobs, "n",
 	    "parallel submodule clones (default 8)", NULL),
-    OPT_END_COMPLETE("ref name", complete_refs),
+    OPT_END_COMPLETE("<ref> [<name|path>]", complete_refs),
 };
 
 static int cmd_idf_checkout(int argc, const char **argv)

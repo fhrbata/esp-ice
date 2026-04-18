@@ -442,8 +442,17 @@ void print_manual(const char *cmd_name, const struct cmd_manual *m,
 		printf(" [<options>]");
 	if (has_subcmds)
 		printf(" <subcommand> [<args>]");
-	else if (positional)
-		printf(" <%s>", positional);
+	else if (positional) {
+		/*
+		 * Mirrors print_usage: argh with '<' or '[' is a
+		 * pre-formatted fragment (multi-positional commands),
+		 * a bare word gets wrapped in <>.
+		 */
+		if (strchr(positional, '<') || strchr(positional, '['))
+			printf(" %s", positional);
+		else
+			printf(" <%s>", positional);
+	}
 	fputs("\n\n", stdout);
 
 	/* DESCRIPTION */
