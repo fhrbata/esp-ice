@@ -195,6 +195,7 @@ static const struct cmd_desc *const ice_subs[] = {
     &cmd_init_desc,
     &cmd_menuconfig_desc,
     &cmd_repo_desc,
+    &cmd_status_desc,
     &cmd_target_desc,
     &cmd_tools_desc,
     &cmd___complete_desc, /* hidden; name starts with underscore */

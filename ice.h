@@ -89,6 +89,7 @@ int cmd_ldgen(int argc, const char **argv);
 int cmd_monitor(int argc, const char **argv);
 int cmd_partition_table(int argc, const char **argv);
 int cmd_size(int argc, const char **argv);
+int cmd_status(int argc, const char **argv);
 
 /**
  * @brief Descriptor for a command node (leaf or namespace).
@@ -149,6 +150,7 @@ extern const struct cmd_desc cmd_monitor_desc;
 extern const struct cmd_desc cmd_partition_table_desc;
 extern const struct cmd_desc cmd_repo_desc;
 extern const struct cmd_desc cmd_size_desc;
+extern const struct cmd_desc cmd_status_desc;
 extern const struct cmd_desc cmd_target_desc;
 extern const struct cmd_desc cmd_tools_desc;
 extern const struct cmd_desc cmd___complete_desc;

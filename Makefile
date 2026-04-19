@@ -142,6 +142,7 @@ LIB_SRCS := \
 	cmd/tools/tools.c \
 	cmd/size/chip.c \
 	cmd/size/size.c \
+	cmd/status/status.c \
 	config.c \
 	csv.c \
 	fs.c \
