@@ -52,14 +52,14 @@ int cmd_menuconfig(int argc, const char **argv);
 /**
  * @brief Prepend installed tool directories to PATH and set export_vars.
  *
- * Reads tools.json from the configured idf.path, finds installed tools
- * under ice_home()/tools/, and modifies the environment so child
- * processes can find compilers, debuggers, and other tools without
- * requiring the user to source export.sh.
+ * Reads @p idf_path / tools/tools.json, finds installed tools under
+ * ice_home()/tools/, and modifies the environment so child processes
+ * can find compilers, debuggers, and other tools without requiring
+ * the user to source export.sh.
  *
- * No-op if idf.path is not configured or tools.json cannot be read.
+ * No-op if @p idf_path is NULL/empty or its tools.json cannot be read.
  */
-void setup_tool_env(void);
+void setup_tool_env(const char *idf_path);
 
 /* Subcommands -- standalone */
 int cmd_complete(int argc, const char **argv);

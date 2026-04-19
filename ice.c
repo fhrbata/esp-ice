@@ -179,15 +179,6 @@ int ice_dispatch(int argc, const char **argv, const struct cmd_desc *desc)
 }
 
 const struct option ice_global_opts[] = {
-    OPT_STRING_CFG('B', "build-dir", &global_build_dir, "path",
-		   "core.build-dir", NULL, "build directory", NULL, NULL),
-    OPT_STRING_LIST_CFG('D', "define", &global_defines, "key=val",
-			"cmake.define", NULL, "cmake cache entry (repeatable)",
-			"Extra cmake cache entries forwarded as "
-			"@b{-D<key>=<value>} to every cmake invocation.",
-			NULL),
-    OPT_STRING_CFG('G', "generator", &global_generator, "name",
-		   "core.generator", NULL, "cmake generator", NULL, NULL),
     OPT_BOOL(0, "no-color", &global_no_color, "disable colored output"),
     OPT_BOOL_CFG('v', "verbose", &global_verbose, "core.verbose", NULL,
 		 "show full command output", NULL),

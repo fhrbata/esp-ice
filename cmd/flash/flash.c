@@ -21,12 +21,14 @@ static const struct cmd_manual flash_manual = {
 	       "table -- to a connected ESP device over serial.  The "
 	       "underlying flasher reads @b{ESPPORT} and @b{ESPBAUD} "
 	       "from the environment for the serial port and baud rate.")
-	H_PARA("Missing build artifacts cause cmake to build them as a "
-	       "side effect, so a separate @b{ice build} is only needed "
-	       "when you want the captured progress display."),
+	H_PARA("@b{[<name>]} selects the project profile (default: "
+	       "@b{default}).  Missing build artifacts cause cmake to "
+	       "build them as a side effect, so a separate @b{ice build} "
+	       "is only needed when you want the captured progress display."),
 
 	.examples =
 	H_EXAMPLE("ice flash")
+	H_EXAMPLE("ice flash production")
 	H_EXAMPLE("ESPPORT=/dev/ttyUSB1 ice flash"),
 
 	.extras =
@@ -36,7 +38,10 @@ static const struct cmd_manual flash_manual = {
 };
 /* clang-format on */
 
-static const struct option cmd_flash_opts[] = {OPT_END()};
+static const struct option cmd_flash_opts[] = {
+    OPT_POSITIONAL("[<name>]", complete_profile_names),
+    OPT_END(),
+};
 
 const struct cmd_desc cmd_flash_desc = {
     .name = "flash",
@@ -47,6 +52,13 @@ const struct cmd_desc cmd_flash_desc = {
 
 int cmd_flash(int argc, const char **argv)
 {
-	parse_options(argc, argv, &cmd_flash_desc);
+	const char *name;
+
+	argc = parse_options(argc, argv, &cmd_flash_desc);
+	if (argc > 1)
+		die("too many arguments");
+	name = argc >= 1 ? argv[0] : "default";
+
+	load_profile(name);
 	return run_cmake_target("flash", "flash", 0);
 }

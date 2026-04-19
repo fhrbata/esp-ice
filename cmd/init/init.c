@@ -132,53 +132,6 @@ static void complete_idf(void)
 	sbuf_release(&path);
 }
 
-/**
- * Slot 2 (name): emit existing profile names from @b{.iceconfig}.
- *
- * "default" is always emitted so users discover the implicit default
- * even before any @b{[project "default"]} section exists.  Names are
- * deduplicated via a small svec since each profile contributes
- * multiple keys (chip, idf-path, ...).
- */
-static void complete_profile_names(void)
-{
-	struct svec seen = SVEC_INIT;
-	int seen_default = 0;
-
-	for (int i = 0; i < config.nr; i++) {
-		const char *key = config.entries[i].key;
-		const char *p, *dot;
-		struct sbuf nm = SBUF_INIT;
-		int duplicate = 0;
-
-		if (strncmp(key, "project.", 8))
-			continue;
-		p = key + 8;
-		dot = strchr(p, '.');
-		if (!dot)
-			continue;
-
-		sbuf_add(&nm, p, dot - p);
-		for (size_t j = 0; j < seen.nr; j++) {
-			if (!strcmp(seen.v[j], nm.buf)) {
-				duplicate = 1;
-				break;
-			}
-		}
-		if (!duplicate) {
-			printf("%s\n", nm.buf);
-			if (!strcmp(nm.buf, "default"))
-				seen_default = 1;
-			svec_push(&seen, nm.buf);
-		}
-		sbuf_release(&nm);
-	}
-	svec_clear(&seen);
-
-	if (!seen_default)
-		printf("default\n");
-}
-
 static const struct option cmd_init_opts[] = {
     OPT_STRING('s', "sdkconfig", &opt_sdkconfig, "file",
 	       "sdkconfig path (default: sdkconfig[.<name>])", NULL),
@@ -352,24 +305,10 @@ static void persist_profile(const char *name, const char *chip,
 	for (size_t i = 0; i < defines->nr; i++)
 		config_add(&c, key.buf, defines->v[i], CONFIG_SCOPE_LOCAL);
 
-	/*
-	 * For the default profile, also write the flat @b{idf.path} so
-	 * setup_tool_env() and other current consumers (which don't yet
-	 * route through the profile name) keep working.  Named-profile
-	 * routing arrives in a follow-up.
-	 */
-	if (!strcmp(name, "default"))
-		config_set(&c, "idf.path", idf_path, CONFIG_SCOPE_LOCAL);
-
 	if (config_write_file(&c, CONFIG_SCOPE_LOCAL, path))
 		die_errno("cannot write '%s'", path);
 	config_release(&c);
 	sbuf_release(&key);
-
-	/* Reflect immediately in the process-wide config so the next
-	 * setup_tool_env() picks up the new value. */
-	if (!strcmp(name, "default"))
-		config_set(&config, "idf.path", idf_path, CONFIG_SCOPE_LOCAL);
 }
 
 /* ------------------------------------------------------------------ */
@@ -468,9 +407,9 @@ int cmd_init(int argc, const char **argv)
 		return rc;
 	}
 
-	/* Re-prime PATH with the just-installed tools so the cmake
-	 * invoked by ensure_build_directory() can find compilers etc. */
-	setup_tool_env();
+	/* Prime PATH with the just-installed tools so the cmake invoked
+	 * by ensure_build_directory() can find compilers etc. */
+	setup_tool_env(idf_path);
 
 	/* Wipe the profile's build dir and back up its sdkconfig. */
 	backup_sdkconfig(sdkconfig);

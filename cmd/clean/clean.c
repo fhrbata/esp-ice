@@ -21,10 +21,13 @@ static const struct cmd_manual clean_manual = {
 	       "while keeping its cmake configuration "
 	       "(@b{CMakeCache.txt}, generator files, cached variables) "
 	       "intact.  Safe to run at any time; the next @b{ice build} "
-	       "recompiles from source without reconfiguring."),
+	       "recompiles from source without reconfiguring.")
+	H_PARA("@b{[<name>]} selects the project profile (default: "
+	       "@b{default})."),
 
 	.examples =
-	H_EXAMPLE("ice clean"),
+	H_EXAMPLE("ice clean")
+	H_EXAMPLE("ice clean production"),
 
 	.extras =
 	H_SECTION("SEE ALSO")
@@ -34,7 +37,10 @@ static const struct cmd_manual clean_manual = {
 };
 /* clang-format on */
 
-static const struct option cmd_clean_opts[] = {OPT_END()};
+static const struct option cmd_clean_opts[] = {
+    OPT_POSITIONAL("[<name>]", complete_profile_names),
+    OPT_END(),
+};
 
 const struct cmd_desc cmd_clean_desc = {
     .name = "clean",
@@ -45,6 +51,13 @@ const struct cmd_desc cmd_clean_desc = {
 
 int cmd_clean(int argc, const char **argv)
 {
-	parse_options(argc, argv, &cmd_clean_desc);
+	const char *name;
+
+	argc = parse_options(argc, argv, &cmd_clean_desc);
+	if (argc > 1)
+		die("too many arguments");
+	name = argc >= 1 ? argv[0] : "default";
+
+	load_profile(name);
 	return run_cmake_target("clean", "clean", 0);
 }

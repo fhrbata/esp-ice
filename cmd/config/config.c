@@ -42,16 +42,16 @@ static const struct cmd_manual config_manual = {
 	H_PARA("@b{--list} dumps every entry in the active configuration "
 	       "together with the scope it came from.  @b{--add} appends "
 	       "an entry for keys with multi-value semantics "
-	       "(e.g. @b{cmake.define}).  @b{--unset} removes every "
-	       "entry for a key at the target scope.  These three modes "
-	       "are mutually exclusive."),
+	       "(e.g. @b{project.<name>.define}).  @b{--unset} removes "
+	       "every entry for a key at the target scope.  These three "
+	       "modes are mutually exclusive."),
 
 	.examples =
 	H_EXAMPLE("ice config --list")
-	H_EXAMPLE("ice config core.build-dir")
-	H_EXAMPLE("ice config core.build-dir out")
+	H_EXAMPLE("ice config project.default.chip")
+	H_EXAMPLE("ice config project.default.build-dir out")
 	H_EXAMPLE("ice config --user alias.b \"build -v\"")
-	H_EXAMPLE("ice config --add cmake.define MY_OPT=ON")
+	H_EXAMPLE("ice config --add project.default.define MY_OPT=ON")
 	H_EXAMPLE("ice config --unset alias.b"),
 
 	.extras =
@@ -66,8 +66,7 @@ static const struct cmd_manual config_manual = {
 	H_ITEM("user",
 	       "@b{~/.iceconfig} in the user's home directory.")
 	H_ITEM("defaults",
-	       "Built-in fallbacks (@b{core.build-dir=build}, "
-	       "@b{core.generator=Ninja}, @b{core.verbose=false}).")
+	       "Built-in fallbacks (currently only @b{core.verbose=false}).")
 
 	H_SECTION("FILES")
 	H_ITEM("./.iceconfig",
@@ -81,11 +80,12 @@ static const struct cmd_manual config_manual = {
 	       "@b{[section]} header are stored as @b{section.key}.")
 	H_LINE("")
 	H_LINE("    @b{[core]}")
-	H_LINE("    build-dir = build")
-	H_LINE("    generator = Ninja")
 	H_LINE("    verbose = false")
 	H_LINE("")
-	H_LINE("    @b{[cmake]}")
+	H_LINE("    @b{[project \"default\"]}")
+	H_LINE("    chip = esp32s3")
+	H_LINE("    idf-path = /home/me/.ice/checkouts/v5.4")
+	H_LINE("    build-dir = build")
 	H_LINE("    define = MY_OPT=ON")
 	H_LINE("    define = ANOTHER=1")
 	H_LINE("")
@@ -95,16 +95,19 @@ static const struct cmd_manual config_manual = {
 	H_LINE("")
 	H_PARA("Rules:")
 	H_LINE("  - Section names and keys allow @b{[A-Za-z0-9_-]}.")
+	H_LINE("  - A subsection in double quotes (@b{[project \"name\"]}) "
+	       "yields keys")
+	H_LINE("    of the form @b{section.subsection.key}.")
 	H_LINE("  - Values are trimmed of surrounding whitespace; wrap "
 	       "in double")
 	H_LINE("    quotes to preserve leading/trailing spaces or "
 	       "embedded @b{#} / @b{;}.")
 	H_LINE("  - Lines starting with @b{#} or @b{;} are comments.")
 	H_LINE("  - Blank lines are ignored.")
-	H_LINE("  - Multi-value keys (e.g. @b{cmake.define}): use "
-	       "@b{--add} to append;")
-	H_LINE("    direct assignment replaces every entry at that "
-	       "scope.")
+	H_LINE("  - Multi-value keys (e.g. @b{project.<name>.define}): "
+	       "use @b{--add}")
+	H_LINE("    to append; direct assignment replaces every entry at "
+	       "that scope.")
 	H_LINE("  - Files are rewritten whole on every write; existing "
 	       "comments")
 	H_LINE("    and blank lines are @b{not} preserved.")

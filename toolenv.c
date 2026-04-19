@@ -8,12 +8,14 @@
  * @file toolenv.c
  * @brief Build PATH and environment from installed ESP-IDF tools.
  *
- * Reads tools.json, finds which tools are actually installed under
- * ice_home()/tools/, and prepends their export_paths to PATH.
- * Also sets export_vars (e.g. OPENOCD_SCRIPTS, ESP_ROM_ELF_DIR).
+ * Reads tools.json under @p idf_path, finds which tools are actually
+ * installed under @c ice_home()/tools/, and prepends their
+ * export_paths to PATH.  Also sets export_vars (e.g. OPENOCD_SCRIPTS,
+ * ESP_ROM_ELF_DIR).
  *
- * Called once from main() so every child process inherits the
- * right tool directories without `export.sh`.
+ * Called by load_profile() with the active profile's IDF path so
+ * cmake child processes find the right compilers without
+ * @c export.sh.
  */
 #include "ice.h"
 
@@ -66,9 +68,8 @@ static const char *find_installed_version(const char *tools_dir,
 	return ctx.found ? buf->buf : NULL;
 }
 
-void setup_tool_env(void)
+void setup_tool_env(const char *idf_path)
 {
-	const char *idf_path;
 	const char *tools_dir;
 	struct sbuf manifest_path = SBUF_INIT;
 	struct sbuf manifest = SBUF_INIT;
@@ -78,9 +79,8 @@ void setup_tool_env(void)
 	const char *old_path;
 	int n;
 
-	idf_path = config_get("idf.path");
 	if (!idf_path || !*idf_path)
-		return; /* no IDF configured, nothing to do */
+		return; /* no IDF, nothing to do */
 
 	tools_dir = ice_home();
 

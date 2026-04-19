@@ -8,17 +8,156 @@
  * @file cmake.c
  * @brief Shared cmake orchestration used by every cmake-based "ice" command.
  *
- * Public API: ensure_build_directory() runs cmake's configure step;
- * run_cmake_target() ensures configured and then invokes a target
- * with progress + log capture.  Both read global_build_dir,
- * global_generator, global_verbose and global_defines, which are
- * populated by parse_options() from the CLI, env, and config cascade.
+ * Public API:
+ *   - load_profile() populates @c global_build_dir, @c global_generator,
+ *     @c global_defines from the [project "<name>"] section of the
+ *     config store, sets up the IDF tool PATH, and derives project-state
+ *     keys (target, mapfile, elf) from the build directory.
+ *   - ensure_build_directory() runs cmake's configure step.
+ *   - run_cmake_target() ensures configured and invokes a target with
+ *     progress + log capture.
+ *
+ * Every cmake-based ice command calls load_profile() with its
+ * @b{[<name>]} positional first, then ensure_build_directory() or
+ * run_cmake_target().
  */
 #include <time.h>
 
 #include "ice.h"
 
 #define TAIL_LINES 30
+
+/* ------------------------------------------------------------------ */
+/*  Profile loading                                                   */
+/* ------------------------------------------------------------------ */
+
+void complete_profile_names(void)
+{
+	struct svec seen = SVEC_INIT;
+	int seen_default = 0;
+
+	for (int i = 0; i < config.nr; i++) {
+		const char *key = config.entries[i].key;
+		const char *p, *dot;
+		struct sbuf nm = SBUF_INIT;
+		int duplicate = 0;
+
+		if (strncmp(key, "project.", 8))
+			continue;
+		p = key + 8;
+		dot = strchr(p, '.');
+		if (!dot)
+			continue;
+
+		sbuf_add(&nm, p, dot - p);
+		for (size_t j = 0; j < seen.nr; j++) {
+			if (!strcmp(seen.v[j], nm.buf)) {
+				duplicate = 1;
+				break;
+			}
+		}
+		if (!duplicate) {
+			printf("%s\n", nm.buf);
+			if (!strcmp(nm.buf, "default"))
+				seen_default = 1;
+			svec_push(&seen, nm.buf);
+		}
+		sbuf_release(&nm);
+	}
+	svec_clear(&seen);
+
+	if (!seen_default)
+		printf("default\n");
+}
+
+/**
+ * Resolve project.@p name.@p suffix as a single config value.
+ *
+ * Returns a pointer into the config store (do not free) or NULL.
+ * @p key is reused across calls; caller releases it once at end.
+ */
+static const char *profile_get(struct sbuf *key, const char *name,
+			       const char *suffix)
+{
+	sbuf_reset(key);
+	sbuf_addf(key, "project.%s.%s", name, suffix);
+	return config_get(key->buf);
+}
+
+void load_profile(const char *name)
+{
+	struct sbuf key = SBUF_INIT;
+	struct sbuf entry = SBUF_INIT;
+	const char *build_dir;
+	const char *generator;
+	const char *idf_path;
+	const char *chip;
+	const char *sdkconfig;
+	struct config_entry **entries;
+	int n;
+
+	build_dir = profile_get(&key, name, "build-dir");
+	if (!build_dir || !*build_dir) {
+		if (!strcmp(name, "default"))
+			die("project not initialised\n"
+			    "hint: run @b{ice init <chip> <idf>} first");
+		die("profile '%s' not configured\n"
+		    "hint: run @b{ice init <chip> <idf> %s} first",
+		    name, name);
+	}
+	global_build_dir = build_dir;
+
+	generator = profile_get(&key, name, "generator");
+	global_generator = generator ? generator : "Ninja";
+
+	chip = profile_get(&key, name, "chip");
+	if (chip) {
+		sbuf_reset(&entry);
+		sbuf_addf(&entry, "IDF_TARGET=%s", chip);
+		svec_push(&global_defines, entry.buf);
+	}
+
+	sdkconfig = profile_get(&key, name, "sdkconfig");
+	if (sdkconfig) {
+		sbuf_reset(&entry);
+		sbuf_addf(&entry, "SDKCONFIG=%s", sdkconfig);
+		svec_push(&global_defines, entry.buf);
+	}
+
+	sbuf_reset(&key);
+	sbuf_addf(&key, "project.%s.sdkconfig-defaults", name);
+	n = config_get_all(key.buf, &entries);
+	if (n > 0) {
+		sbuf_reset(&entry);
+		sbuf_addstr(&entry, "SDKCONFIG_DEFAULTS=");
+		for (int i = 0; i < n; i++) {
+			if (i > 0)
+				sbuf_addch(&entry, ';');
+			sbuf_addstr(&entry, entries[i]->value);
+		}
+		svec_push(&global_defines, entry.buf);
+	}
+	free(entries);
+
+	sbuf_reset(&key);
+	sbuf_addf(&key, "project.%s.define", name);
+	n = config_get_all(key.buf, &entries);
+	for (int i = 0; i < n; i++)
+		svec_push(&global_defines, entries[i]->value);
+	free(entries);
+
+	idf_path = profile_get(&key, name, "idf-path");
+	if (idf_path && *idf_path)
+		setup_tool_env(idf_path);
+
+	/* Derive target/mapfile/elf from the profile's build dir so
+	 * subsequent commands (ice size auto-discovery, ...) can read
+	 * them via config_get(). */
+	config_load_project(&config, build_dir);
+
+	sbuf_release(&key);
+	sbuf_release(&entry);
+}
 
 /* ------------------------------------------------------------------ */
 /*  Progress display, logging, colorization                           */

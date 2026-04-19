@@ -21,30 +21,27 @@ static const struct cmd_manual build_manual = {
 	       "command output is captured to "
 	       "@b{<build-dir>/log/build.log}, surfaced on failure or "
 	       "when @b{-v} / @b{core.verbose} is set.")
-	H_PARA("The project must already be initialised with @b{ice init "
-	       "<chip> <idf>}.  cmake re-runs automatically when its own "
-	       "tracked dependencies (top-level @b{CMakeLists.txt}, "
-	       "included @b{*.cmake} files) change.  For a from-scratch "
-	       "rebuild, re-run @b{ice init}."),
+	H_PARA("@b{[<name>]} selects the project profile (default: "
+	       "@b{default}).  The profile must already have been bound "
+	       "with @b{ice init <chip> <idf> [<name>]}.  cmake re-runs "
+	       "automatically when its own tracked dependencies "
+	       "(top-level @b{CMakeLists.txt}, included @b{*.cmake} "
+	       "files) change.  For a from-scratch rebuild, re-run "
+	       "@b{ice init}."),
 
 	.examples =
 	H_EXAMPLE("ice build")
-	H_EXAMPLE("ice -v build")
-	H_EXAMPLE("ice -D IDF_TARGET=esp32s3 build"),
+	H_EXAMPLE("ice build production")
+	H_EXAMPLE("ice -v build"),
 
 	.extras =
 	H_SECTION("CONFIG")
-	H_ITEM("core.build-dir",
-	       "Build directory (default @b{build}).")
-	H_ITEM("core.generator",
-	       "CMake generator passed on first configure "
-	       "(default @b{Ninja}).")
 	H_ITEM("core.verbose",
 	       "If true, show full command output instead of the "
 	       "progress line.")
-	H_ITEM("cmake.define",
-	       "Repeatable @b{-D<key>=<value>} entries forwarded to "
-	       "cmake.")
+	H_ITEM("project.<name>.build-dir",
+	       "Build directory for profile @b{<name>} "
+	       "(written by @b{ice init}).")
 
 	H_SECTION("SEE ALSO")
 	H_ITEM("ice init",
@@ -55,7 +52,10 @@ static const struct cmd_manual build_manual = {
 };
 /* clang-format on */
 
-static const struct option cmd_build_opts[] = {OPT_END()};
+static const struct option cmd_build_opts[] = {
+    OPT_POSITIONAL("[<name>]", complete_profile_names),
+    OPT_END(),
+};
 
 const struct cmd_desc cmd_build_desc = {
     .name = "build",
@@ -66,6 +66,13 @@ const struct cmd_desc cmd_build_desc = {
 
 int cmd_build(int argc, const char **argv)
 {
-	parse_options(argc, argv, &cmd_build_desc);
+	const char *name;
+
+	argc = parse_options(argc, argv, &cmd_build_desc);
+	if (argc > 1)
+		die("too many arguments");
+	name = argc >= 1 ? argv[0] : "default";
+
+	load_profile(name);
 	return run_cmake_target("all", "build", 0);
 }

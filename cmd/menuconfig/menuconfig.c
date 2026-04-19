@@ -21,6 +21,8 @@ static const struct cmd_manual menuconfig_manual = {
 	       "same TUI @b{idf.py menuconfig} opens -- so you can "
 	       "browse and edit @b{sdkconfig} interactively.  Runs with "
 	       "stdio connected directly to the terminal; not scriptable.")
+	H_PARA("@b{[<name>]} selects the project profile (default: "
+	       "@b{default}); each profile has its own @b{sdkconfig}.")
 	H_PARA("When you save, sdkconfig changes invalidate only the "
 	       "translation units that actually reference the affected "
 	       "@b{CONFIG_*} symbols, thanks to the @b{ice configdep} "
@@ -28,7 +30,8 @@ static const struct cmd_manual menuconfig_manual = {
 	       "changes up automatically."),
 
 	.examples =
-	H_EXAMPLE("ice menuconfig"),
+	H_EXAMPLE("ice menuconfig")
+	H_EXAMPLE("ice menuconfig production"),
 
 	.extras =
 	H_SECTION("SEE ALSO")
@@ -41,7 +44,10 @@ static const struct cmd_manual menuconfig_manual = {
 };
 /* clang-format on */
 
-static const struct option cmd_menuconfig_opts[] = {OPT_END()};
+static const struct option cmd_menuconfig_opts[] = {
+    OPT_POSITIONAL("[<name>]", complete_profile_names),
+    OPT_END(),
+};
 
 const struct cmd_desc cmd_menuconfig_desc = {
     .name = "menuconfig",
@@ -52,6 +58,13 @@ const struct cmd_desc cmd_menuconfig_desc = {
 
 int cmd_menuconfig(int argc, const char **argv)
 {
-	parse_options(argc, argv, &cmd_menuconfig_desc);
+	const char *name;
+
+	argc = parse_options(argc, argv, &cmd_menuconfig_desc);
+	if (argc > 1)
+		die("too many arguments");
+	name = argc >= 1 ? argv[0] : "default";
+
+	load_profile(name);
 	return run_cmake_target("menuconfig", "menuconfig", 1);
 }

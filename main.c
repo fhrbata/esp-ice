@@ -11,30 +11,27 @@
  * This file is the only source NOT included in libice.a so that unit
  * tests (and any future external libice consumer) can supply their
  * own main().  Startup (config loading, colour, -C chdir) happens
- * here; dispatch lives in cmd_ice() in ice.c.
+ * here; profile-aware setup (PATH, project-state derivation) happens
+ * in load_profile() inside each cmake-using subcommand.  Dispatch
+ * lives in cmd_ice() in ice.c.
  */
 #include "ice.h"
 
 /*
- * Tiny hand-rolled scan for -C and -B before the full parse.  The
- * values are needed early: -C to chdir before loading the local
- * config, -B to feed config_load_project() the right build directory.
- *
- * Unknown options are skipped; the full parse_options() pass handles
- * errors and writes the final option values into their C variables.
- * Only -C is removed from argv (to avoid a second chdir attempt
- * against the already-changed cwd); -B stays so the full parse can
- * populate global_build_dir.
+ * Tiny hand-rolled scan for -C before the full parse.  -C is needed
+ * early so the local config is loaded from the right cwd; the full
+ * parse_options() pass handles all other flags.  -C is removed from
+ * argv to avoid a second chdir attempt against the already-changed
+ * cwd.
  */
-static void pre_parse_location(int *argcp, const char **argv,
-			       const char **out_chdir, const char **out_build)
+static void pre_parse_chdir(int *argcp, const char **argv,
+			    const char **out_chdir)
 {
 	int argc = *argcp;
 	int dst = 1;
 	int i = 1;
 
 	*out_chdir = NULL;
-	*out_build = NULL;
 
 	while (i < argc) {
 		const char *a = argv[i];
@@ -51,13 +48,6 @@ static void pre_parse_location(int *argcp, const char **argv,
 		} else if (!strncmp(a, "-C", 2) && a[2]) {
 			*out_chdir = a + 2;
 			drop = 1;
-		} else if ((!strcmp(a, "-B") || !strcmp(a, "--build-dir")) &&
-			   i + 1 < argc) {
-			*out_build = argv[i + 1];
-		} else if (!strncmp(a, "-B", 2) && a[2]) {
-			*out_build = a + 2;
-		} else if (!strncmp(a, "--build-dir=", 12)) {
-			*out_build = a + 12;
 		}
 
 		if (!drop) {
@@ -83,7 +73,6 @@ static void pre_parse_location(int *argcp, const char **argv,
 int main(int argc, const char **argv)
 {
 	const char *chdir_to = NULL;
-	const char *build_override = NULL;
 
 	/* Enable color early so die() in parse_options is colored. */
 	color_init(STDERR_FILENO);
@@ -91,16 +80,11 @@ int main(int argc, const char **argv)
 	config_load_defaults(&config);
 	config_load_file(&config, CONFIG_SCOPE_USER, user_config_path());
 
-	pre_parse_location(&argc, argv, &chdir_to, &build_override);
+	pre_parse_chdir(&argc, argv, &chdir_to);
 	if (chdir_to && chdir(chdir_to))
 		die_errno("cannot change to '%s'", chdir_to);
 
 	config_load_file(&config, CONFIG_SCOPE_LOCAL, local_config_path());
-	config_load_project(&config, build_override
-					 ? build_override
-					 : config_get("core.build-dir"));
-
-	setup_tool_env();
 
 	return cmd_ice(argc, argv);
 }

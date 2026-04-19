@@ -59,11 +59,11 @@ tap_check grep -qx -- '--local' cfgflags.out
 tap_done "config --<TAB> walks cmd_struct.opts"
 
 "$BINARY" __complete 1 ice "-" >globflags.out
-tap_check grep -qx -- '--build-dir' globflags.out
-tap_check grep -qx -- '-B'          globflags.out
-tap_check grep -qx -- '--verbose'   globflags.out
-tap_check grep -qx -- '-h'          globflags.out
-tap_check grep -qx -- '--help'      globflags.out
+tap_check grep -qx -- '--verbose' globflags.out
+tap_check grep -qx -- '-v'        globflags.out
+tap_check grep -qx -- '--version' globflags.out
+tap_check grep -qx -- '-h'        globflags.out
+tap_check grep -qx -- '--help'    globflags.out
 tap_done "global flag completion walks ice_global_opts (plus -h/--help)"
 
 "$BINARY" __complete 2 ice config "-" >cfghelp.out
@@ -91,10 +91,10 @@ tap_check grep -qx 'fish'       shells.out
 tap_check grep -qx 'powershell' shells.out
 tap_done "completion <TAB> lists supported shells"
 
-# ---- `ice __complete`: option value falls through to file completion ----
+# ---- `ice __complete`: positional with no completion callback ----
 
-"$BINARY" __complete 2 ice -B "" >bval.out
-tap_check test ! -s bval.out
-tap_done "-B <TAB> emits nothing (shell handles file completion)"
+"$BINARY" __complete 4 ice repo checkout v5.4 "" >posfile.out
+tap_check test ! -s posfile.out
+tap_done "positional with NULL callback emits nothing (shell handles file completion)"
 
 tap_result
