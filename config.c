@@ -173,10 +173,8 @@ int config_get_int(const char *key, int *out)
 	return 0;
 }
 
-int config_get_bool(const char *key, int *out)
+int config_parse_bool(const char *s, int *out)
 {
-	const char *s = config_get(key);
-
 	if (!s)
 		return -1;
 
@@ -193,6 +191,11 @@ int config_get_bool(const char *key, int *out)
 	return -2;
 }
 
+int config_get_bool(const char *key, int *out)
+{
+	return config_parse_bool(config_get(key), out);
+}
+
 const char *scope_name(enum config_scope scope)
 {
 	switch (scope) {
@@ -204,10 +207,6 @@ const char *scope_name(enum config_scope scope)
 		return "local";
 	case CONFIG_SCOPE_PROJECT:
 		return "project";
-	case CONFIG_SCOPE_ENV:
-		return "env";
-	case CONFIG_SCOPE_CLI:
-		return "cli";
 	}
 	return "unknown";
 }
@@ -623,25 +622,6 @@ int config_write_file(const struct config *c, enum config_scope scope,
 	}
 	sbuf_release(&out);
 	return 0;
-}
-
-void config_load_env(struct config *c)
-{
-	static const struct {
-		const char *env;
-		const char *key;
-	} map[] = {
-	    {"ESPPORT", "serial.port"},
-	    {"ESPBAUD", "serial.baud"},
-	    {"IDF_TARGET", "target"},
-	};
-
-	for (size_t i = 0; i < sizeof(map) / sizeof(map[0]); i++) {
-		const char *val = getenv(map[i].env);
-
-		if (val && *val)
-			config_set(c, map[i].key, val, CONFIG_SCOPE_ENV);
-	}
 }
 
 void config_load_project(struct config *c, const char *build_dir)

@@ -8,11 +8,88 @@
  * @file options.c
  * @brief Declarative command-line option parser implementation.
  */
+#include <limits.h>
+
 #include "ice.h"
 
-static int is_bool_opt(enum option_type t)
+static int is_bool_opt(enum option_type t) { return t == OPTION_BOOL; }
+
+static int parse_int_token(const char *s, int *out)
 {
-	return t == OPTION_BOOL || t == OPTION_CONFIG_BOOL;
+	char *end;
+	long v;
+
+	if (!s || !*s)
+		return -1;
+	errno = 0;
+	v = strtol(s, &end, 10);
+	if (*end != '\0' || errno == ERANGE || v < INT_MIN || v > INT_MAX)
+		return -2;
+	*out = (int)v;
+	return 0;
+}
+
+/*
+ * Apply @p val to @p o as if it had been passed on the command line,
+ * but without the strictness of CLI parsing: malformed bool/int values
+ * from a seed source (config/env) are silently ignored so a stray value
+ * doesn't cause every ice invocation to die.  STRING stores the pointer
+ * as-is -- callers must ensure it outlives the parse (config entries
+ * and getenv() values both do).
+ */
+static void seed_apply(const struct option *o, const char *val)
+{
+	if (!val || !*val)
+		return;
+	switch (o->type) {
+	case OPTION_BOOL: {
+		int b;
+		if (config_parse_bool(val, &b) == 0)
+			*(int *)o->value = b;
+		break;
+	}
+	case OPTION_STRING:
+		*(const char **)o->value = val;
+		break;
+	case OPTION_STRING_LIST:
+		svec_push((struct svec *)o->value, val);
+		break;
+	case OPTION_INT: {
+		int n;
+		if (parse_int_token(val, &n) == 0)
+			*(int *)o->value = n;
+		break;
+	}
+	default:
+		break;
+	}
+}
+
+static void seed_from_config(const struct option *o)
+{
+	if (o->type == OPTION_STRING_LIST) {
+		struct config_entry **entries;
+		int n;
+
+		n = config_get_all(o->config_key, &entries);
+		for (int i = 0; i < n; i++)
+			svec_push((struct svec *)o->value, entries[i]->value);
+		free(entries);
+		return;
+	}
+	seed_apply(o, config_get(o->config_key));
+}
+
+static void seed_defaults(const struct option *opts)
+{
+	for (const struct option *o = opts; o->type != OPTION_END; o++) {
+		if (o->type == OPTION_SUBCOMMAND)
+			continue;
+		if (o->config_key)
+			seed_from_config(o);
+		if (o->env_var)
+			seed_apply(o, getenv(o->env_var));
+	}
 }
 
 static void print_usage(const char *argv0, const struct option *opts)
@@ -210,18 +287,6 @@ static int set_value(const struct option *o, const char *val)
 	case OPTION_INT:
 		*(int *)o->value = atoi(val);
 		return 0;
-	case OPTION_CONFIG:
-		config_set(&config, (const char *)o->value, val,
-			   CONFIG_SCOPE_CLI);
-		return 0;
-	case OPTION_CONFIG_BOOL:
-		config_set(&config, (const char *)o->value, val ? val : "true",
-			   CONFIG_SCOPE_CLI);
-		return 0;
-	case OPTION_CONFIG_LIST:
-		config_add(&config, (const char *)o->value, val,
-			   CONFIG_SCOPE_CLI);
-		return 0;
 	default:
 		return -1;
 	}
@@ -233,6 +298,8 @@ int parse_options(int argc, const char **argv, const struct option *opts,
 	const char *name = (manual && manual->name) ? manual->name : argv[0];
 	int out = 0;
 	int i;
+
+	seed_defaults(opts);
 
 	for (i = 1; i < argc; i++) {
 		const char *arg = argv[i];

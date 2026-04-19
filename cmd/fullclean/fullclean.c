@@ -54,14 +54,11 @@ static const struct cmd_manual manual = {
 
 int fullclean_run(void)
 {
-	const char *build_dir;
+	const char *build_dir = global_build_dir;
 	DIR *dir;
 	struct dirent *de;
 	int has_cache = 0;
 	int n_entries = 0;
-	int verbose = 0;
-
-	build_dir = config_get("core.build-dir");
 
 	if (access(build_dir, F_OK) != 0) {
 		printf("Build directory '%s' not found.  Nothing to clean.\n",
@@ -104,8 +101,7 @@ int fullclean_run(void)
 		    "(no CMakeCache.txt); delete it manually",
 		    build_dir);
 
-	config_get_bool("core.verbose", &verbose);
-	return rmtree(build_dir, verbose) < 0 ? -1 : 0;
+	return rmtree(build_dir, global_verbose) < 0 ? -1 : 0;
 }
 
 int cmd_fullclean(int argc, const char **argv)

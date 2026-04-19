@@ -21,9 +21,10 @@
  * config, -B to feed config_load_project() the right build directory.
  *
  * Unknown options are skipped; the full parse_options() pass handles
- * errors and sets CLI-scope entries.  Only -C is removed from argv
- * (to avoid a second chdir attempt against the already-changed cwd);
- * -B stays so the full parse can record it at CLI scope.
+ * errors and writes the final option values into their C variables.
+ * Only -C is removed from argv (to avoid a second chdir attempt
+ * against the already-changed cwd); -B stays so the full parse can
+ * populate global_build_dir.
  */
 static void pre_parse_location(int *argcp, const char **argv,
 			       const char **out_chdir, const char **out_build)
@@ -98,7 +99,6 @@ int main(int argc, const char **argv)
 	config_load_project(&config, build_override
 					 ? build_override
 					 : config_get("core.build-dir"));
-	config_load_env(&config);
 
 	setup_tool_env();
 

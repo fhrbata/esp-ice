@@ -52,8 +52,9 @@ static const struct cmd_manual manual = {
 	       "Build directory to wipe and reconfigure "
 	       "(default @b{build}).")
 	H_ITEM("cmake.define",
-	       "@b{IDF_TARGET=<target>} is appended at CLI scope and "
-	       "forwarded to cmake as @b{-DIDF_TARGET=<target>}.")
+	       "@b{IDF_TARGET=<target>} is appended to the in-memory "
+	       "define list and forwarded to cmake as "
+	       "@b{-DIDF_TARGET=<target>} for this invocation only.")
 
 	H_SECTION("SEE ALSO")
 	H_ITEM("ice fullclean",
@@ -121,7 +122,7 @@ int cmd_set_target(int argc, const char **argv)
 		return rc;
 
 	sbuf_addf(&define, "IDF_TARGET=%s", target);
-	config_add(&config, "cmake.define", define.buf, CONFIG_SCOPE_CLI);
+	svec_push(&global_defines, define.buf);
 	sbuf_release(&define);
 
 	putenv(envstr);

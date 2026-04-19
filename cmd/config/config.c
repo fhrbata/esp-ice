@@ -29,8 +29,10 @@ static const struct cmd_manual manual = {
 	.description =
 	H_PARA("@b{ice config} reads and writes configuration entries "
 	       "across a stack of cascading scopes.  The effective value "
-	       "of a key is resolved in precedence order: @b{cli > env > "
-	       "project > local > user > defaults}.")
+	       "of a key is resolved in precedence order: @b{project > "
+	       "local > user > defaults}.  Environment variables and CLI "
+	       "flags are not stored in the config -- they seed command "
+	       "options directly (see @b{ice <command> --help}).")
 	H_PARA("With no flags: one positional argument prints the "
 	       "effective value of that key (exits non-zero if unset), "
 	       "and two positional arguments set the key in the target "
@@ -54,15 +56,6 @@ static const struct cmd_manual manual = {
 
 	.extras =
 	H_SECTION("SCOPES")
-	H_ITEM("cli",
-	       "Flags and @b{-D} entries passed on the command line "
-	       "(highest precedence).")
-	H_ITEM("env",
-	       "Variables named @b{ICE_<SECTION>_<KEY>}, e.g. "
-	       "@b{ICE_CORE_BUILD_DIR} or @b{ICE_SERIAL_PORT}.  Legacy "
-	       "@b{ESPPORT} and @b{ESPBAUD} are also mapped to "
-	       "@b{serial.port} and @b{serial.baud} for idf.py "
-	       "compatibility.")
 	H_ITEM("project",
 	       "Auto-derived from build artifacts in @b{<build-dir>} -- "
 	       "@b{target} from CMakeCache.txt, @b{mapfile} / @b{elf} "

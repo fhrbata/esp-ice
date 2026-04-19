@@ -11,8 +11,8 @@
  * exercised by integration tests (see e.g. cmd/config/t/0005-validation.t).
  * What this file covers is the success-path matrix: short / long forms,
  * attached vs separate values, repeatable lists, "--" terminator,
- * positional packing, and the OPT_CONFIG* routes that write into the
- * global config store.
+ * positional packing, and the _CFG variants that seed defaults from
+ * the config store and environment before CLI parsing.
  */
 #include "ice.h"
 #include "tap.h"
@@ -191,67 +191,126 @@ int main(void)
 		    "\"--\" terminator forces remaining argv to positional");
 	}
 
-	/* OPT_CONFIG routes the value into the global config at CLI scope. */
+	/*
+	 * OPT_STRING_CFG seeds the default from config when no CLI flag is
+	 * passed.  The C variable's initializer acts as the final fallback.
+	 */
 	{
+		const char *path = "fallback";
 		struct option opts[] = {
-		    OPT_CONFIG('B', "build-dir", "core.build-dir", "path",
-			       "where", NULL),
+		    OPT_STRING_CFG('B', "build-dir", &path, "path",
+				   "core.build-dir", NULL, "where", NULL, NULL),
 		    OPT_END(),
 		};
-		const char *argv[] = {"prog", "-B", "out"};
+		const char *argv[] = {"prog"};
 		int argc;
 
 		config_release(&config);
+		config_set(&config, "core.build-dir", "from-config",
+			   CONFIG_SCOPE_USER);
+		argc = parse_options(1, argv, opts, NULL);
+		tap_check(argc == 0);
+		tap_check(path != NULL && strcmp(path, "from-config") == 0);
+		config_release(&config);
+		tap_done("OPT_STRING_CFG seeds default from config");
+	}
+
+	/* The CLI flag wins over both the config default and any initializer.
+	 */
+	{
+		const char *path = "fallback";
+		struct option opts[] = {
+		    OPT_STRING_CFG('B', "build-dir", &path, "path",
+				   "core.build-dir", NULL, "where", NULL, NULL),
+		    OPT_END(),
+		};
+		const char *argv[] = {"prog", "-B", "cli"};
+		int argc;
+
+		config_release(&config);
+		config_set(&config, "core.build-dir", "from-config",
+			   CONFIG_SCOPE_USER);
 		argc = parse_options(3, argv, opts, NULL);
 		tap_check(argc == 0);
-		tap_check(config_get("core.build-dir") != NULL);
-		tap_check(strcmp(config_get("core.build-dir"), "out") == 0);
-		tap_check(config_source("core.build-dir") == CONFIG_SCOPE_CLI);
+		tap_check(path != NULL && strcmp(path, "cli") == 0);
 		config_release(&config);
-		tap_done("OPT_CONFIG writes the value to config at CLI scope");
+		tap_done("CLI flag overrides OPT_STRING_CFG config seed");
 	}
 
-	/* OPT_CONFIG_BOOL is a flag (no value) that records "true". */
+	/* env_var overrides config_key but loses to the CLI flag. */
 	{
+		const char *path = NULL;
 		struct option opts[] = {
-		    OPT_CONFIG_BOOL('v', "verbose", "core.verbose", "be loud"),
+		    OPT_STRING_CFG('B', "build-dir", &path, "path",
+				   "core.build-dir", "ICE_TEST_BUILD_DIR",
+				   "where", NULL, NULL),
 		    OPT_END(),
 		};
-		const char *argv[] = {"prog", "-v"};
+		const char *argv[] = {"prog"};
+		static char env[] = "ICE_TEST_BUILD_DIR=from-env";
+		static char clear[] = "ICE_TEST_BUILD_DIR=";
 		int argc;
 
 		config_release(&config);
-		argc = parse_options(2, argv, opts, NULL);
+		config_set(&config, "core.build-dir", "from-config",
+			   CONFIG_SCOPE_USER);
+		putenv(env);
+		argc = parse_options(1, argv, opts, NULL);
 		tap_check(argc == 0);
-		tap_check(config_get("core.verbose") != NULL);
-		tap_check(strcmp(config_get("core.verbose"), "true") == 0);
+		tap_check(path != NULL && strcmp(path, "from-env") == 0);
+		putenv(clear);
 		config_release(&config);
-		tap_done("OPT_CONFIG_BOOL records \"true\" at CLI scope");
+		tap_done("OPT_STRING_CFG env_var overrides config_key");
 	}
 
-	/* OPT_CONFIG_LIST appends a new entry per occurrence. */
+	/* OPT_BOOL_CFG parses the config value via config_parse_bool(). */
 	{
+		int verbose = 0;
 		struct option opts[] = {
-		    OPT_CONFIG_LIST('D', "define", "cmake.define", "key=val",
-				    "repeatable", NULL),
+		    OPT_BOOL_CFG('v', "verbose", &verbose, "core.verbose", NULL,
+				 "be loud", NULL),
 		    OPT_END(),
 		};
-		const char *argv[] = {"prog", "-D", "A=1", "-D", "B=2"};
+		const char *argv[] = {"prog"};
 		int argc;
-		struct config_entry **entries = NULL;
-		int n;
 
 		config_release(&config);
-		argc = parse_options(5, argv, opts, NULL);
+		config_set(&config, "core.verbose", "yes", CONFIG_SCOPE_USER);
+		argc = parse_options(1, argv, opts, NULL);
 		tap_check(argc == 0);
-		n = config_get_all("cmake.define", &entries);
-		tap_check(n == 2);
-		tap_check(strcmp(entries[0]->value, "A=1") == 0);
-		tap_check(strcmp(entries[1]->value, "B=2") == 0);
-		free(entries);
+		tap_check(verbose == 1);
+		config_release(&config);
+		tap_done("OPT_BOOL_CFG parses the config value");
+	}
+
+	/*
+	 * OPT_STRING_LIST_CFG collects every config entry for the key --
+	 * regardless of scope -- before CLI -D values append more.
+	 */
+	{
+		struct svec list = SVEC_INIT;
+		struct option opts[] = {
+		    OPT_STRING_LIST_CFG('D', "define", &list, "key=val",
+					"cmake.define", NULL, "repeatable",
+					NULL, NULL),
+		    OPT_END(),
+		};
+		const char *argv[] = {"prog", "-D", "C=3"};
+		int argc;
+
+		config_release(&config);
+		config_add(&config, "cmake.define", "A=1", CONFIG_SCOPE_USER);
+		config_add(&config, "cmake.define", "B=2", CONFIG_SCOPE_LOCAL);
+		argc = parse_options(3, argv, opts, NULL);
+		tap_check(argc == 0);
+		tap_check(list.nr == 3);
+		tap_check(strcmp(list.v[0], "A=1") == 0);
+		tap_check(strcmp(list.v[1], "B=2") == 0);
+		tap_check(strcmp(list.v[2], "C=3") == 0);
+		svec_clear(&list);
 		config_release(&config);
 		tap_done(
-		    "OPT_CONFIG_LIST appends one config entry per occurrence");
+		    "OPT_STRING_LIST_CFG seeds from config then appends CLI");
 	}
 
 	return tap_result();

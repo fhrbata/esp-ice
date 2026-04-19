@@ -10,8 +10,9 @@
  *
  * Public API: ensure_build_directory() runs cmake's configure step;
  * run_cmake_target() ensures configured and then invokes a target
- * with progress + log capture.  Both gather core.build-dir, core.generator,
- * core.verbose and cmake.define from the config store internally.
+ * with progress + log capture.  Both read global_build_dir,
+ * global_generator, global_verbose and global_defines, which are
+ * populated by parse_options() from the CLI, env, and config cascade.
  */
 #include <time.h>
 
@@ -198,31 +199,8 @@ static int run_with_log(const char **argv, const char *label,
 }
 
 /* ------------------------------------------------------------------ */
-/*  Config gathering + cache comparison                               */
+/*  Cache comparison                                                  */
 /* ------------------------------------------------------------------ */
-
-/*
- * Pull build_dir / generator / verbose / cmake.define entries from
- * the config store.  The defines svec is filled and must be cleared
- * by the caller with svec_clear().
- */
-static void gather_cmake_config(const char **build_dir, const char **generator,
-				struct svec *defines, int *verbose)
-{
-	struct config_entry **entries;
-	int n;
-
-	*build_dir = config_get("core.build-dir");
-	*generator = config_get("core.generator");
-
-	*verbose = 0;
-	config_get_bool("core.verbose", verbose);
-
-	n = config_get_all("cmake.define", &entries);
-	for (int i = 0; i < n; i++)
-		svec_push(defines, entries[i]->value);
-	free(entries);
-}
 
 /**
  * Check whether any -D entry is missing from, or differs in, the cache.
@@ -266,20 +244,17 @@ static int cache_needs_configure(const struct cmakecache *cache,
 
 int ensure_build_directory(int force)
 {
-	const char *build_dir, *generator;
-	struct svec defines = SVEC_INIT;
+	const char *build_dir = global_build_dir;
+	const char *generator = global_generator;
 	struct sbuf cache_path = SBUF_INIT;
 	struct cmakecache cache = CMAKECACHE_INIT;
 	struct sbuf logpath = SBUF_INIT;
-	int verbose;
 	int has_cache;
 	int needs_configure;
 	int rc = 0;
 
 	if (access("CMakeLists.txt", F_OK) != 0)
 		die("no CMakeLists.txt found in current directory");
-
-	gather_cmake_config(&build_dir, &generator, &defines, &verbose);
 
 	/* Ensure build and log directories exist. */
 	{
@@ -294,9 +269,9 @@ int ensure_build_directory(int force)
 	sbuf_addf(&cache_path, "%s/CMakeCache.txt", build_dir);
 	has_cache = (cmakecache_load(&cache, cache_path.buf) == 0);
 
-	needs_configure =
-	    force || !has_cache ||
-	    (defines.nr && cache_needs_configure(&cache, &defines));
+	needs_configure = force || !has_cache ||
+			  (global_defines.nr &&
+			   cache_needs_configure(&cache, &global_defines));
 
 	/* Validate generator against existing cache. */
 	if (has_cache) {
@@ -323,12 +298,12 @@ int ensure_build_directory(int force)
 		svec_push(&args, "-B");
 		svec_push(&args, build_dir);
 
-		for (size_t i = 0; i < defines.nr; i++)
-			svec_pushf(&args, "-D%s", defines.v[i]);
+		for (size_t i = 0; i < global_defines.nr; i++)
+			svec_pushf(&args, "-D%s", global_defines.v[i]);
 
 		sbuf_addf(&logpath, "%s/log/configure.log", build_dir);
 
-		if (verbose) {
+		if (global_verbose) {
 			struct process proc = PROCESS_INIT;
 			proc.argv = args.v;
 			rc = process_run(&proc);
@@ -339,41 +314,17 @@ int ensure_build_directory(int force)
 		svec_clear(&args);
 	}
 
-	/* On failure, remove CMakeCache.txt to prevent half-valid state.
+	/*
+	 * On failure, remove CMakeCache.txt to prevent half-valid state.
 	 * cmake may create a partial cache even when configure fails the
-	 * first time (has_cache == 0), so always unlink on failure. */
-	if (rc) {
-		struct config_entry **entries;
-		int n, has_cli = 0;
-
+	 * first time (has_cache == 0), so always unlink on failure.
+	 */
+	if (rc)
 		unlink(cache_path.buf);
-
-		/*
-		 * -D entries from the command line live at CLI scope only
-		 * and are gone when the process exits.  Warn so the user
-		 * can either re-pass them or persist via `ice config --add`.
-		 */
-		n = config_get_all("cmake.define", &entries);
-		for (int i = 0; i < n; i++) {
-			if (entries[i]->scope == CONFIG_SCOPE_CLI) {
-				has_cli = 1;
-				break;
-			}
-		}
-		free(entries);
-
-		if (has_cli)
-			warn("--define entries passed on the command line are "
-			     "not retained across ice invocations; re-pass "
-			     "them, or persist with 'ice config --add "
-			     "cmake.define KEY=VAL'");
-	}
 
 out:
 	sbuf_release(&logpath);
 	sbuf_release(&cache_path);
-	cmakecache_release(&cache);
-	svec_clear(&defines);
 	return rc;
 }
 
@@ -628,16 +579,13 @@ done:
 
 int run_cmake_target(const char *target, const char *label, int interactive)
 {
-	const char *build_dir;
+	const char *build_dir = global_build_dir;
 	struct sbuf logpath = SBUF_INIT;
-	int verbose = 0;
 	int rc;
 
 	rc = ensure_build_directory(0);
 	if (rc)
 		return rc;
-
-	build_dir = config_get("core.build-dir");
 
 	/* Replace gen_esp32part.py with ice partition-table on every build. */
 	patch_ninja(build_dir);
@@ -645,12 +593,10 @@ int run_cmake_target(const char *target, const char *label, int interactive)
 	 * create` on every build. */
 	patch_ninja_elf2image(build_dir);
 
-	config_get_bool("core.verbose", &verbose);
-
 	const char *argv[] = {"cmake",	  "--build", build_dir,
 			      "--target", target,    NULL};
 
-	if (interactive || verbose) {
+	if (interactive || global_verbose) {
 		struct process proc = PROCESS_INIT;
 		proc.argv = argv;
 		rc = process_run(&proc);

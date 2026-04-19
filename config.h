@@ -15,7 +15,11 @@
  * for cmake.define).
  *
  * Scope precedence, low -> high:
- *   DEFAULT -> USER -> LOCAL -> PROJECT -> ENV -> CLI
+ *   DEFAULT -> USER -> LOCAL -> PROJECT
+ *
+ * Environment variables and CLI flags do NOT live in this store -- they
+ * seed the per-option C variables directly via the option table (see
+ * options.h).
  *
  * Usage:
  *   config_init(&config);
@@ -37,8 +41,6 @@ enum config_scope {
 	CONFIG_SCOPE_LOCAL, /**< .iceconfig in project root. */
 	CONFIG_SCOPE_PROJECT, /**< Auto-derived from CMakeCache, sdkconfig, etc.
 			       */
-	CONFIG_SCOPE_ENV,     /**< Environment variables (ESPPORT, ...). */
-	CONFIG_SCOPE_CLI,     /**< Global and command-line args. */
 };
 
 /** A single (key, value, scope) entry in the config store. */
@@ -140,6 +142,15 @@ int config_get_int(const char *key, int *out);
  */
 int config_get_bool(const char *key, int *out);
 
+/**
+ * @brief Parse @p s as a boolean into @p *out without consulting the
+ *        config store.
+ *
+ * Same token set as config_get_bool().  Returns 0 on success, -1 if
+ * @p s is NULL, -2 on parse error.
+ */
+int config_parse_bool(const char *s, int *out);
+
 /** Return 1 if @p key is set in any scope, 0 otherwise. */
 int config_has(const char *key);
 
@@ -220,18 +231,6 @@ void config_load_buf(struct config *c, enum config_scope scope,
  * core.verbose=false.
  */
 void config_load_defaults(struct config *c);
-
-/**
- * @brief Import recognised environment variables at ENV scope.
- *
- * Table-driven mapping:
- *   ESPPORT    -> serial.port
- *   ESPBAUD    -> serial.baud
- *   IDF_TARGET -> target
- *
- * Empty or unset variables are ignored.
- */
-void config_load_env(struct config *c);
 
 /**
  * @brief Write all entries at @p scope to @p path as an INI file.

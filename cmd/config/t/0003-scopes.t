@@ -4,9 +4,11 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 #
-# `ice config`: scope file paths and precedence (defaults < user <
-# local < project < env < cli).  Project scope needs a real cmake
-# build dir and is exercised separately.
+# `ice config`: scope file paths and precedence among the scopes that
+# actually live in the config store (defaults < user < local < project).
+# Environment variables and CLI flags seed command options directly and
+# do NOT appear in `ice config` output -- that contract is covered by
+# the unit tests for options.c and each command's own integration tests.
 
 . t/tap.sh
 tap_setup
@@ -35,23 +37,13 @@ tap_done "local scope wins over user"
 tap_check grep -qx 'user_value' got
 tap_done "after --local --unset, get falls through to user"
 
-# env beats local.  ESPPORT maps to serial.port at env scope.
-"$BINARY" config --local serial.port local_port
-ESPPORT=env_value "$BINARY" config serial.port >got
-tap_check grep -qx 'env_value' got
-tap_done "env scope wins over local (ESPPORT -> serial.port)"
-
-# cli beats local.  Global -B sets core.build-dir at CLI scope.
-"$BINARY" -B from_cli config core.build-dir >got
-tap_check grep -qx 'from_cli' got
-tap_done "cli scope wins over local (-B sets core.build-dir)"
-
-# --list tags each entry with the scope it came from.
-ESPPORT=env_value "$BINARY" -B from_cli config --list >list
+# --list tags each entry with the scope it came from; only the four
+# persistent scopes are ever reported.
+"$BINARY" config --list >list
 tap_check grep -qE '^default[[:space:]]+core\.build-dir=build$'   list
 tap_check grep -qE '^user[[:space:]]+core\.build-dir=user_value$' list
-tap_check grep -qE '^env[[:space:]]+serial\.port=env_value$'  list
-tap_check grep -qE '^cli[[:space:]]+core\.build-dir=from_cli$'    list
-tap_done "--list reports default/user/env/cli scope tags"
+tap_check grep -qE '^user[[:space:]]+core\.generator=from_user$'  list
+tap_check ! grep -qE '^(env|cli)[[:space:]]' list
+tap_done "--list reports default/user/local/project scope tags only"
 
 tap_result

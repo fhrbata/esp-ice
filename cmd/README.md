@@ -138,15 +138,31 @@ The command now:
 ## Option table quick reference
 
 ```c
-/* Flags */
+/* Plain options -- value goes straight into a C variable */
 OPT_BOOL('v', "verbose", &flag, "be noisy"),
 OPT_STRING('o', "output", &path, "path", "output file", NULL),
 OPT_INT('n', "count", &n, "n", "how many", NULL),
+OPT_STRING_LIST('D', "define", &list, "key=val", "repeatable", NULL),
 
-/* Config-backed (value goes to config store, not a variable) */
-OPT_CONFIG('B', "build-dir", "core.build-dir", "path", "build dir", NULL),
-OPT_CONFIG_BOOL('v', "verbose", "core.verbose", "verbose output"),
-OPT_CONFIG_LIST('D', "define", "cmake.define", "key=val", "cmake var", NULL),
+/*
+ * _CFG variants -- same C-variable storage, plus defaults seeded
+ * from a config key and/or an env var before the CLI flag is parsed.
+ * Precedence:  C init  <  config_get(cfg)  <  getenv(env)  <  CLI flag.
+ * The optional config_help string is used in the auto-generated
+ * CONFIG / ENVIRONMENT manual sections; NULL falls back to help.
+ */
+OPT_BOOL_CFG('v', "verbose", &flag,
+             "core.verbose", NULL,
+             "be noisy", NULL),
+OPT_STRING_CFG('p', "port", &path, "path",
+               "serial.port", "ESPPORT",
+               "serial port", "Serial device path.", NULL),
+OPT_INT_CFG('b', "baud", &baud, "rate",
+            "serial.baud", "ESPBAUD",
+            "baud rate", NULL, NULL),
+OPT_STRING_LIST_CFG('D', "define", &list, "key=val",
+                    "cmake.define", NULL,
+                    "repeatable", NULL, NULL),
 
 /* Subcommands (for namespace commands like `ice target`) */
 OPT_SUBCOMMAND("set", &fn_var, cmd_target_set, "set the target"),
@@ -158,7 +174,7 @@ OPT_END_COMPLETE("target", complete_fn),/* positional arg + completion */
 ```
 
 The last argument on value-taking options (`OPT_STRING`, `OPT_INT`,
-`OPT_CONFIG`, `OPT_CONFIG_LIST`) is a completion callback for that
+and their `_CFG` variants) is a completion callback for that
 option's value, or NULL to let the shell handle it (file completion).
 
 ## Positional completion

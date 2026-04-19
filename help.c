@@ -17,10 +17,7 @@
 #define INDENT "    "
 #define MIN_WIDTH 40
 
-static int is_bool_opt(enum option_type t)
-{
-	return t == OPTION_BOOL || t == OPTION_CONFIG_BOOL;
-}
+static int is_bool_opt(enum option_type t) { return t == OPTION_BOOL; }
 
 static int has_options(const struct option *opts)
 {
@@ -299,9 +296,73 @@ static void print_options_body(const struct option *opts)
 		fputs("\n", stdout);
 		if (o->help)
 			printf(INDENT INDENT "%s\n", o->help);
+		if (o->config_key || o->env_var) {
+			fputs(INDENT INDENT, stdout);
+			if (o->config_key)
+				printf("[config: @b{%s}]", o->config_key);
+			if (o->config_key && o->env_var)
+				fputs(" ", stdout);
+			if (o->env_var)
+				printf("[env: @b{%s}]", o->env_var);
+			fputs("\n", stdout);
+		}
 		fputs("\n", stdout);
 	}
 }
+
+static int has_config_sources(const struct option *opts)
+{
+	if (!opts)
+		return 0;
+	for (const struct option *o = opts; o->type != OPTION_END; o++)
+		if (o->config_key)
+			return 1;
+	return 0;
+}
+
+static int has_env_sources(const struct option *opts)
+{
+	if (!opts)
+		return 0;
+	for (const struct option *o = opts; o->type != OPTION_END; o++)
+		if (o->env_var)
+			return 1;
+	return 0;
+}
+
+/*
+ * Emit a definition list of <source name> -> description pairs for
+ * each option that has the requested source set.  The @p key_of
+ * callback picks between config_key and env_var so one body routine
+ * serves both CONFIG and ENVIRONMENT sections.
+ */
+static void print_source_body(const struct option *opts,
+			      const char *(*key_of)(const struct option *))
+{
+	for (const struct option *o = opts; o->type != OPTION_END; o++) {
+		const char *key = key_of(o);
+		const char *desc;
+
+		if (!key)
+			continue;
+
+		desc = o->config_help ? o->config_help : o->help;
+		printf(INDENT "@b{%s}\n", key);
+		if (desc) {
+			fputs(INDENT INDENT, stdout);
+			fputs(desc, stdout);
+			fputs("\n", stdout);
+		}
+		fputs("\n", stdout);
+	}
+}
+
+static const char *opt_config_key(const struct option *o)
+{
+	return o->config_key;
+}
+
+static const char *opt_env_var(const struct option *o) { return o->env_var; }
 
 static void print_commands_body(void)
 {
@@ -465,6 +526,16 @@ void print_manual(const char *cmd_name, const struct cmd_manual *m,
 	if (has_options(opts)) {
 		fputs("@b{OPTIONS}\n", stdout);
 		print_options_body(opts);
+	}
+
+	/* CONFIG / ENVIRONMENT -- auto-generated from option source fields. */
+	if (has_config_sources(opts)) {
+		fputs("@b{CONFIG}\n", stdout);
+		print_source_body(opts, opt_config_key);
+	}
+	if (has_env_sources(opts)) {
+		fputs("@b{ENVIRONMENT}\n", stdout);
+		print_source_body(opts, opt_env_var);
 	}
 
 	/* COMMANDS -- only for the top-level manual. */

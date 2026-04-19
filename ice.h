@@ -94,6 +94,14 @@ int cmd_target(int argc, const char **argv);
 extern const struct option ice_global_opts[];
 extern const struct cmd_manual ice_root_manual;
 
+/** Global option values populated by parse_options() on ice_global_opts. */
+extern int global_no_color;
+extern int global_version;
+extern int global_verbose;
+extern const char *global_build_dir;
+extern const char *global_generator;
+extern struct svec global_defines;
+
 /* NULL-terminated chip target lists defined in cmd/set-target/set-target.c. */
 extern const char *const ice_supported_targets[];
 extern const char *const ice_preview_targets[];

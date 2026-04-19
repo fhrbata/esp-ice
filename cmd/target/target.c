@@ -100,7 +100,7 @@ static int cmd_target_set(int argc, const char **argv)
 		return rc;
 
 	sbuf_addf(&define, "IDF_TARGET=%s", target);
-	config_add(&config, "cmake.define", define.buf, CONFIG_SCOPE_CLI);
+	svec_push(&global_defines, define.buf);
 	sbuf_release(&define);
 
 	putenv(envstr);

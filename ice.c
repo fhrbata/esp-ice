@@ -106,11 +106,16 @@ static int try_expand_alias(int *argcp, const char ***argvp)
 /*
  * Written to by parse_options(); checked in main() (in main.c)
  * after parsing.  File-scope with external linkage so the option
- * table below has stable addresses to reference and main.c can read
- * the post-parse values via extern declarations.
+ * table below has stable addresses to reference and main.c, cmake.c,
+ * and other modules can read the post-parse values via extern
+ * declarations in ice.h.
  */
 int global_no_color;
 int global_version;
+int global_verbose;
+const char *global_build_dir;
+const char *global_generator;
+struct svec global_defines = SVEC_INIT;
 
 static void complete_aliases(void)
 {
@@ -141,14 +146,18 @@ static void complete_aliases(void)
 static subcmd_fn ice_fn;
 
 const struct option ice_global_opts[] = {
-    OPT_CONFIG('B', "build-dir", "core.build-dir", "path",
-	       "build directory (default: build)", NULL),
-    OPT_CONFIG_LIST('D', "define", "cmake.define", "key=val",
-		    "cmake cache entry (repeatable)", NULL),
-    OPT_CONFIG('G', "generator", "core.generator", "name",
-	       "cmake generator (default: Ninja)", NULL),
+    OPT_STRING_CFG('B', "build-dir", &global_build_dir, "path",
+		   "core.build-dir", NULL, "build directory", NULL, NULL),
+    OPT_STRING_LIST_CFG('D', "define", &global_defines, "key=val",
+			"cmake.define", NULL, "cmake cache entry (repeatable)",
+			"Extra cmake cache entries forwarded as "
+			"@b{-D<key>=<value>} to every cmake invocation.",
+			NULL),
+    OPT_STRING_CFG('G', "generator", &global_generator, "name",
+		   "core.generator", NULL, "cmake generator", NULL, NULL),
     OPT_BOOL(0, "no-color", &global_no_color, "disable colored output"),
-    OPT_CONFIG_BOOL('v', "verbose", "core.verbose", "show full command output"),
+    OPT_BOOL_CFG('v', "verbose", &global_verbose, "core.verbose", NULL,
+		 "show full command output", NULL),
     OPT_BOOL(0, "version", &global_version, "show version"),
 
     OPT_SUBCOMMAND("build", &ice_fn, cmd_build, "build the default target"),

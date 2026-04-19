@@ -13,12 +13,25 @@
  * auto-generates help on -h/--help, auto-generates completions on
  * --ice-complete, and stops at "--".
  *
+ * An option stores its final value in the C variable passed as @c v.
+ * Before the CLI is parsed, the value is optionally seeded from a
+ * config key (via the config cascade) and then from an environment
+ * variable -- so precedence is:
+ *
+ *   C initializer  <  config_key  <  env_var  <  CLI flag
+ *
+ * The extended OPT_*_CFG variants carry that metadata; the plain
+ * macros remain unchanged for options that don't participate in
+ * config integration.
+ *
  * Usage:
  *   const char *dir = "build";
  *   int verbose = 0;
  *
  *   struct option opts[] = {
- *       OPT_STRING('B', "build-dir", &dir, "path", "build directory", NULL),
+ *       OPT_STRING_CFG('B', "build-dir", &dir, "path",
+ *                      "core.build-dir", NULL,
+ *                      "build directory", NULL, NULL),
  *       OPT_BOOL('v', "verbose", &verbose, "increase verbosity"),
  *       OPT_END(),
  *   };
@@ -36,10 +49,7 @@ enum option_type {
 	OPTION_STRING,
 	OPTION_STRING_LIST,
 	OPTION_INT,
-	OPTION_CONFIG,	    /**< Routes value to config_set(key, ..., CLI). */
-	OPTION_CONFIG_BOOL, /**< Flag; sets config "true" (or attached val). */
-	OPTION_CONFIG_LIST, /**< Multi-value; routes to config_add. */
-	OPTION_SUBCOMMAND,  /**< Positional subcommand; sets subcmd_fn *. */
+	OPTION_SUBCOMMAND, /**< Positional subcommand; sets subcmd_fn *. */
 	OPTION_END,
 };
 
@@ -52,7 +62,6 @@ struct option {
 				  * For BOOL/INT:          int *.
 				  * For STRING:            const char **.
 				  * For STRING_LIST:       struct svec *.
-				  * For CONFIG*:           const char * config key.
 				  * For SUBCOMMAND:        subcmd_fn * (set on match).
 				  */
 	const char *argh;	 /**< Placeholder for help: "path", "n", etc. */
@@ -64,27 +73,78 @@ struct option {
 				  *   On OPT_END: called for positional arg
 				  *   completions.
 				  */
+	const char *config_key;	 /**< Config key consulted for the default
+				  *   value via config_get() (or
+				  *   config_get_all() for STRING_LIST).
+				  *   NULL to skip the config lookup. */
+	const char *env_var;	 /**< Environment variable consulted for the
+				  *   default value.  Overrides config_key
+				  *   but is overridden by the CLI flag.
+				  *   NULL to skip the env lookup. */
+	const char *config_help; /**< Optional description rendered in the
+				  *   auto-generated CONFIG / ENVIRONMENT
+				  *   manual sections.  When NULL the CLI
+				  *   @c help string is reused. */
 };
 
-#define OPT_BOOL(s, l, v, h) {OPTION_BOOL, (s), (l), (v), NULL, (h), NULL, NULL}
+/* ------------------------------------------------------------------ */
+/* Plain variants -- no config/env integration.                        */
+/* ------------------------------------------------------------------ */
+
+#define OPT_BOOL(s, l, v, h)                                                   \
+	{OPTION_BOOL, (s), (l), (v), NULL, (h), NULL, NULL, NULL, NULL, NULL}
 
 #define OPT_STRING(s, l, v, a, h, c)                                           \
-	{OPTION_STRING, (s), (l), (v), (a), (h), NULL, (c)}
+	{OPTION_STRING, (s), (l), (v), (a), (h), NULL, (c), NULL, NULL, NULL}
 
 #define OPT_STRING_LIST(s, l, v, a, h, c)                                      \
-	{OPTION_STRING_LIST, (s), (l), (v), (a), (h), NULL, (c)}
+	{OPTION_STRING_LIST,                                                   \
+	 (s),                                                                  \
+	 (l),                                                                  \
+	 (v),                                                                  \
+	 (a),                                                                  \
+	 (h),                                                                  \
+	 NULL,                                                                 \
+	 (c),                                                                  \
+	 NULL,                                                                 \
+	 NULL,                                                                 \
+	 NULL}
 
 #define OPT_INT(s, l, v, a, h, c)                                              \
-	{OPTION_INT, (s), (l), (v), (a), (h), NULL, (c)}
+	{OPTION_INT, (s), (l), (v), (a), (h), NULL, (c), NULL, NULL, NULL}
 
-#define OPT_CONFIG(s, l, key, a, h, c)                                         \
-	{OPTION_CONFIG, (s), (l), (void *)(key), (a), (h), NULL, (c)}
+/* ------------------------------------------------------------------ */
+/* _CFG variants -- seed default from config/env, richer manual.       */
+/*                                                                     */
+/*   cfg:  config key consulted via config_get()/config_get_all().     */
+/*         NULL to skip.                                               */
+/*   env:  environment variable name consulted via getenv().  NULL to  */
+/*         skip.                                                       */
+/*   ch:   description rendered in the CONFIG / ENVIRONMENT manual     */
+/*         sections.  NULL falls back to the plain @p h string.        */
+/* ------------------------------------------------------------------ */
 
-#define OPT_CONFIG_BOOL(s, l, key, h)                                          \
-	{OPTION_CONFIG_BOOL, (s), (l), (void *)(key), NULL, (h), NULL, NULL}
+#define OPT_BOOL_CFG(s, l, v, cfg, env, h, ch)                                 \
+	{OPTION_BOOL, (s), (l), (v), NULL, (h), NULL, NULL, (cfg), (env), (ch)}
 
-#define OPT_CONFIG_LIST(s, l, key, a, h, c)                                    \
-	{OPTION_CONFIG_LIST, (s), (l), (void *)(key), (a), (h), NULL, (c)}
+#define OPT_STRING_CFG(s, l, v, a, cfg, env, h, ch, c)                         \
+	{OPTION_STRING, (s), (l), (v), (a), (h), NULL, (c), (cfg), (env), (ch)}
+
+#define OPT_STRING_LIST_CFG(s, l, v, a, cfg, env, h, ch, c)                    \
+	{OPTION_STRING_LIST,                                                   \
+	 (s),                                                                  \
+	 (l),                                                                  \
+	 (v),                                                                  \
+	 (a),                                                                  \
+	 (h),                                                                  \
+	 NULL,                                                                 \
+	 (c),                                                                  \
+	 (cfg),                                                                \
+	 (env),                                                                \
+	 (ch)}
+
+#define OPT_INT_CFG(s, l, v, a, cfg, env, h, ch, c)                            \
+	{OPTION_INT, (s), (l), (v), (a), (h), NULL, (c), (cfg), (env), (ch)}
 
 /**
  * @brief Declare a subcommand in the option table.
@@ -99,9 +159,20 @@ struct option {
  * (starting at the subcommand name) is left for the handler.
  */
 #define OPT_SUBCOMMAND(name, var, fn, h)                                       \
-	{OPTION_SUBCOMMAND, 0, (name), (var), NULL, (h), (fn), NULL}
+	{OPTION_SUBCOMMAND,                                                    \
+	 0,                                                                    \
+	 (name),                                                               \
+	 (var),                                                                \
+	 NULL,                                                                 \
+	 (h),                                                                  \
+	 (fn),                                                                 \
+	 NULL,                                                                 \
+	 NULL,                                                                 \
+	 NULL,                                                                 \
+	 NULL}
 
-#define OPT_END() {OPTION_END, 0, NULL, NULL, NULL, NULL, NULL, NULL}
+#define OPT_END()                                                              \
+	{OPTION_END, 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL}
 
 /**
  * @brief OPT_END with positional argument metadata.
@@ -109,12 +180,17 @@ struct option {
  * @param c     Completion callback for positional values, or NULL.
  */
 #define OPT_END_COMPLETE(argh, c)                                              \
-	{OPTION_END, 0, NULL, NULL, (argh), NULL, NULL, (c)}
+	{OPTION_END, 0, NULL, NULL, (argh), NULL, NULL, (c), NULL, NULL, NULL}
 
 struct cmd_manual;
 
 /**
  * @brief Parse command-line options according to the option table.
+ *
+ * Before the CLI walk, every option with a @c config_key or @c env_var
+ * is seeded: config_get() / config_get_all() populates the C variable
+ * from the merged config store, then a set @c env_var overrides it.
+ * The CLI flag then has the final say.
  *
  * Processes argv in-place: recognized options are consumed and the
  * remaining positional arguments are packed to the front of argv.

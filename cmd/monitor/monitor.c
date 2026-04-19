@@ -14,12 +14,20 @@
 #include "ice.h"
 #include "serial.h"
 
+static const char *opt_port;
+static int opt_baud = 115200;
+
 /* clang-format off */
 static const struct option cmd_monitor_opts[] = {
-	OPT_CONFIG('p', "port", "serial.port", "path",
-		   "serial port device path", NULL),
-	OPT_CONFIG('b', "baud", "serial.baud", "rate",
-		   "baud rate (default: 115200)", NULL),
+	OPT_STRING_CFG('p', "port", &opt_port, "path",
+		       "serial.port", "ESPPORT",
+		       "serial port device path",
+		       "Serial device path "
+		       "(@b{/dev/ttyUSB0}, @b{COM3}, ...).", NULL),
+	OPT_INT_CFG('b', "baud", &opt_baud, "rate",
+		    "serial.baud", "ESPBAUD",
+		    "baud rate",
+		    "Monitor baud rate (default @b{115200}).", NULL),
 	OPT_END(),
 };
 
@@ -30,11 +38,7 @@ static const struct cmd_manual manual = {
 	.description =
 	H_PARA("Connects to a serial port and displays device output "
 	       "in real time.  Keyboard input is forwarded to the "
-	       "device.  Press @b{Ctrl-]} to exit.")
-	H_PARA("The serial port and baud rate are read from "
-	       "@b{serial.port} and @b{serial.baud} in config; the "
-	       "legacy @b{ESPPORT} / @b{ESPBAUD} environment variables "
-	       "are mapped to the same keys at env scope."),
+	       "device.  Press @b{Ctrl-]} to exit."),
 
 	.examples =
 	H_EXAMPLE("ice monitor")
@@ -43,54 +47,35 @@ static const struct cmd_manual manual = {
 
 	.extras =
 	H_SECTION("KEY BINDINGS")
-	H_ITEM("Ctrl-]", "Exit the monitor.")
-
-	H_SECTION("CONFIG")
-	H_ITEM("serial.port",
-	       "Serial device path (@b{/dev/ttyUSB0}, @b{COM3}, ...).")
-	H_ITEM("serial.baud",
-	       "Monitor baud rate (default @b{115200}).")
-
-	H_SECTION("ENVIRONMENT")
-	H_ITEM("ESPPORT",
-	       "Alias for @b{serial.port} (env scope).")
-	H_ITEM("ESPBAUD",
-	       "Alias for @b{serial.baud} (env scope)."),
+	H_ITEM("Ctrl-]", "Exit the monitor."),
 };
 /* clang-format on */
 
 int cmd_monitor(int argc, const char **argv)
 {
-	const char *port;
-	const char *baud_str;
-	unsigned baud = 115200;
 	struct serial *s;
 	unsigned char buf[1024];
 	int rc;
 
 	parse_options(argc, argv, cmd_monitor_opts, &manual);
 
-	port = config_get("serial.port");
-	if (!port)
+	if (!opt_port)
 		die("serial.port is not set; use -p or "
 		    "'ice config serial.port <path>'");
 
-	baud_str = config_get("serial.baud");
-	if (baud_str)
-		baud = (unsigned)atoi(baud_str);
-
-	rc = serial_open(&s, port);
+	rc = serial_open(&s, opt_port);
 	if (rc)
-		die("cannot open %s: %s", port, strerror(-rc));
+		die("cannot open %s: %s", opt_port, strerror(-rc));
 
-	rc = serial_set_baud(s, baud);
+	rc = serial_set_baud(s, (unsigned)opt_baud);
 	if (rc) {
 		serial_close(s);
-		die("cannot set baud rate %u on %s: %s", baud, port,
+		die("cannot set baud rate %d on %s: %s", opt_baud, opt_port,
 		    strerror(-rc));
 	}
 
-	fprintf(stderr, "--- ice monitor on %s at %u baud ---" EOL, port, baud);
+	fprintf(stderr, "--- ice monitor on %s at %d baud ---" EOL, opt_port,
+		opt_baud);
 	fprintf(stderr, "--- Quit: Ctrl-] ---" EOL);
 
 	rc = console_raw_enter();
