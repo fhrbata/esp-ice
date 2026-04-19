@@ -54,7 +54,8 @@ static int opt_loud;
 
 static const struct option cmd_greet_opts[] = {
 	OPT_BOOL(0, "loud", &opt_loud, "shout the greeting"),
-	OPT_END_COMPLETE("name", NULL),
+	OPT_POSITIONAL("name", NULL),
+	OPT_END(),
 };
 
 const struct cmd_desc cmd_greet_desc = {
@@ -86,9 +87,10 @@ Everything is driven by the option table:
 - `-h` auto-generates: `usage: greet [<options>] <name>`
 - `--help` renders the full manual with OPTIONS auto-listed
 - `--ice-complete` dumps `--loud`, `-h`, `--help` for shell TAB
-- `OPT_END_COMPLETE("name", NULL)` names the positional arg in
+- `OPT_POSITIONAL("name", NULL)` names a positional arg slot in
   the usage line; the second argument is an optional completion
-  callback (NULL lets the shell fall through to file completion)
+  callback (NULL lets the shell fall through to file completion).
+  Add one OPT_POSITIONAL per slot for multi-positional commands.
 
 ### 2. Declare the handler and descriptor in `ice.h`
 
@@ -175,10 +177,13 @@ OPT_STRING_LIST_CFG('D', "define", &list, "key=val",
                     "cmake.define", NULL,
                     "repeatable", NULL, NULL),
 
-/* Terminators */
-OPT_END(),                              /* no positional metadata */
-OPT_END_COMPLETE("file", NULL),         /* positional arg name, no callback */
-OPT_END_COMPLETE("target", complete_fn),/* positional arg + completion */
+/* Positional slots (zero or more, in order) */
+OPT_POSITIONAL("file", NULL),           /* positional arg name, no callback */
+OPT_POSITIONAL("target", complete_fn),  /* positional arg + completion */
+OPT_POSITIONAL("[<extra>]", NULL),      /* optional slot (literal brackets) */
+
+/* Terminator */
+OPT_END(),
 ```
 
 The last argument on value-taking options (`OPT_STRING`, `OPT_INT`,
@@ -189,7 +194,7 @@ option's value, or NULL to let the shell handle it (file completion).
 
 For commands whose positional argument is drawn from a known set
 (like `ice target set <chip>`), add a completion callback and
-wire it into `OPT_END_COMPLETE`:
+attach it to an `OPT_POSITIONAL` slot:
 
 ```c
 static void complete_targets(void)
@@ -200,12 +205,32 @@ static void complete_targets(void)
 
 static const struct option opts[] = {
 	OPT_BOOL(0, "preview", &preview, "allow preview targets"),
-	OPT_END_COMPLETE("target", complete_targets),
+	OPT_POSITIONAL("target", complete_targets),
+	OPT_END(),
 };
 ```
 
+For multiple positionals, list one `OPT_POSITIONAL` per slot in
+order; the parser dispatches to the right callback based on which
+positional the cursor is on.
+
 No changes to the completion backend needed -- `parse_options`
 handles it automatically via `--ice-complete`.
+
+## Namespace-level extra completion
+
+To inject extra candidates alongside subcommand and flag listings
+at a namespace level (e.g. user-defined alias names at the root),
+set `cmd_desc.extra_complete` rather than declaring a positional:
+
+```c
+const struct cmd_desc ice_root_desc = {
+    .name           = "ice",
+    .opts           = ice_global_opts,
+    .subcommands    = ice_subs,
+    .extra_complete = complete_aliases,
+};
+```
 
 ## Hidden commands
 

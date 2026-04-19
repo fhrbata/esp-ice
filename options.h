@@ -47,6 +47,7 @@ enum option_type {
 	OPTION_STRING,
 	OPTION_STRING_LIST,
 	OPTION_INT,
+	OPTION_POSITIONAL,
 	OPTION_END,
 };
 
@@ -124,12 +125,25 @@ struct option {
 	{OPTION_END, 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL}
 
 /**
- * @brief OPT_END with positional argument metadata.
- * @param argh  Name shown in auto-generated usage (e.g. "target").
- * @param c     Completion callback for positional values, or NULL.
+ * @brief Declare a positional argument slot with per-slot completion.
+ *
+ * Place one OPT_POSITIONAL per slot before OPT_END.  The slot's @p argh
+ * appears in the auto-generated synopsis (wrapped in @c <> if it does
+ * not already contain @c < or @c [) and the slot's @p complete fires
+ * when the user TABs at that positional's column.
+ *
+ * Example:
+ *   OPT_POSITIONAL("chip",      complete_chip),
+ *   OPT_POSITIONAL("idf",       complete_idf),
+ *   OPT_POSITIONAL("[<name>]",  complete_profile),
+ *   OPT_END(),
+ *
+ * For namespace-level extra completion candidates (alongside
+ * subcommands and flags, like alias names at the root), use
+ * @c cmd_desc.extra_complete instead -- it is not a positional.
  */
-#define OPT_END_COMPLETE(argh, c)                                              \
-	{OPTION_END, 0, NULL, NULL, (argh), NULL, (c), NULL, NULL, NULL}
+#define OPT_POSITIONAL(argh, c)                                                \
+	{OPTION_POSITIONAL, 0, NULL, NULL, (argh), NULL, (c), NULL, NULL, NULL}
 
 struct cmd_manual;
 struct cmd_desc;

@@ -27,7 +27,8 @@ static void complete_help_commands(void)
 static const struct cmd_manual help_manual = {.name = "ice help"};
 
 static const struct option cmd_help_opts[] = {
-    OPT_END_COMPLETE("command", complete_help_commands),
+    OPT_POSITIONAL("command", complete_help_commands),
+    OPT_END(),
 };
 
 const struct cmd_desc cmd_help_desc = {

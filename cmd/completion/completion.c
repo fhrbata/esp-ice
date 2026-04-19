@@ -138,7 +138,8 @@ static const struct cmd_manual completion_manual = {
 static void complete_shells(void) { printf("bash\nzsh\nfish\npowershell\n"); }
 
 static const struct option cmd_completion_opts[] = {
-    OPT_END_COMPLETE("shell", complete_shells),
+    OPT_POSITIONAL("shell", complete_shells),
+    OPT_END(),
 };
 
 const struct cmd_desc cmd_completion_desc = {

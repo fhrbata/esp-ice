@@ -158,7 +158,8 @@ static const struct option cmd_config_opts[] = {
     OPT_BOOL(0, "user", &opt_user, "act on the user config (~/.iceconfig)"),
     OPT_BOOL(0, "local", &opt_local,
 	     "act on the local config (./.iceconfig) [default]"),
-    OPT_END_COMPLETE("key", complete_config_keys),
+    OPT_POSITIONAL("key", complete_config_keys),
+    OPT_END(),
 };
 
 const struct cmd_desc cmd_config_desc = {

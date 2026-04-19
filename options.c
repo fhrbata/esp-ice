@@ -90,42 +90,44 @@ static void seed_defaults(const struct option *opts)
 	}
 }
 
+static void render_argh(const char *argh)
+{
+	/*
+	 * argh with '<' or '[' is treated as a pre-formatted synopsis
+	 * fragment (e.g. "<ref> [<name|path>]" or "[<name>]").  A bare
+	 * word like "chip" gets wrapped in <> as usual.
+	 */
+	if (strchr(argh, '<') || strchr(argh, '['))
+		fprintf(stderr, " %s", argh);
+	else
+		fprintf(stderr, " <%s>", argh);
+}
+
 static void print_usage(const char *argv0, const struct cmd_desc *desc)
 {
 	const struct option *opts = desc->opts;
 	int has_flags = 0;
 	int has_subcmds = 0;
-	const char *positional = NULL;
+	int has_positionals = 0;
 
-	for (const struct option *o = opts; o->type != OPTION_END; o++)
-		has_flags = 1;
+	for (const struct option *o = opts; o->type != OPTION_END; o++) {
+		if (o->type == OPTION_POSITIONAL)
+			has_positionals = 1;
+		else
+			has_flags = 1;
+	}
 	if (desc->subcommands && *desc->subcommands)
 		has_subcmds = 1;
-
-	/* OPT_END's argh names the positional argument. */
-	{
-		const struct option *end = opts;
-		while (end->type != OPTION_END)
-			end++;
-		positional = end->argh;
-	}
 
 	fprintf(stderr, "@b{usage}: %s", argv0);
 	if (has_flags)
 		fprintf(stderr, " [<options>]");
 	if (has_subcmds)
 		fprintf(stderr, " <subcommand> [<args>]");
-	else if (positional) {
-		/*
-		 * argh with '<' or '[' is treated as a pre-formatted
-		 * synopsis fragment so multi-positional commands can
-		 * render e.g. "<ref> [<name|path>]".  A bare word gets
-		 * wrapped in <> as usual.
-		 */
-		if (strchr(positional, '<') || strchr(positional, '['))
-			fprintf(stderr, " %s", positional);
-		else
-			fprintf(stderr, " <%s>", positional);
+	else if (has_positionals) {
+		for (const struct option *o = opts; o->type != OPTION_END; o++)
+			if (o->type == OPTION_POSITIONAL && o->argh)
+				render_argh(o->argh);
 	}
 	fprintf(stderr, "\n\n");
 
@@ -151,6 +153,9 @@ static void print_usage(const char *argv0, const struct cmd_desc *desc)
 	for (const struct option *o = opts; o->type != OPTION_END; o++) {
 		char short_str[8] = "";
 		char long_str[64] = "";
+
+		if (o->type == OPTION_POSITIONAL)
+			continue;
 
 		if (!has_opts) {
 			if (has_subcmds)
@@ -196,15 +201,36 @@ static void print_sorted(struct svec *v)
 	svec_clear(v);
 }
 
+/**
+ * Fire the completion callback for positional slot @p slot.
+ *
+ * Iterates OPT_POSITIONAL entries in declaration order and invokes the
+ * matching slot's callback.  Returns 1 if a callback fired, 0 if no
+ * slot matched (caller falls back to silent exit / file completion).
+ */
+static int fire_positional_complete(const struct option *opts, int slot)
+{
+	int idx = 0;
+
+	for (const struct option *o = opts; o->type != OPTION_END; o++) {
+		if (o->type != OPTION_POSITIONAL)
+			continue;
+		if (idx == slot) {
+			if (o->complete)
+				o->complete();
+			return 1;
+		}
+		idx++;
+	}
+
+	return 0;
+}
+
 static NORETURN void print_completions(const struct cmd_desc *desc)
 {
 	const struct option *opts = desc->opts;
-	const struct option *end = opts;
 	struct svec v = SVEC_INIT;
 	char buf[64];
-
-	while (end->type != OPTION_END)
-		end++;
 
 	/* Subcommands, sorted. */
 	if (desc->subcommands) {
@@ -221,8 +247,8 @@ static NORETURN void print_completions(const struct cmd_desc *desc)
 	 * at this level -- completion of a subcommand slot happens via the
 	 * subcommand list above, not the leaf's positional callback.
 	 */
-	if (!desc->subcommands && end->complete)
-		end->complete();
+	if (!desc->subcommands)
+		fire_positional_complete(opts, 0);
 
 	/* Long flags, sorted. */
 	svec_push(&v, "--help");
@@ -245,13 +271,12 @@ static NORETURN void print_completions(const struct cmd_desc *desc)
 	print_sorted(&v);
 
 	/*
-	 * OPT_END_COMPLETE at the root (or any non-leaf namespace) can
-	 * still attach a callback that supplies extra candidates -- today
-	 * @c ice_global_opts uses it for alias completion.  Fire it after
-	 * the flag lists so it slots in alongside them.
+	 * Namespace-level extra candidates (e.g. user aliases at the
+	 * root) are emitted after the structured listings so they slot
+	 * in alongside flag/subcommand completions.
 	 */
-	if (desc->subcommands && end->complete)
-		end->complete();
+	if (desc->extra_complete)
+		desc->extra_complete();
 
 	exit(0);
 }
@@ -340,15 +365,19 @@ int parse_options(int argc, const char **argv, const struct cmd_desc *desc)
 			/*
 			 * Positional with no subcommand match.  If the
 			 * completion trampoline appended --ice-complete later
-			 * in argv, exit silently so the shell falls back to
-			 * file completion (sensible for a <name|path> slot).
-			 * Without this guard --ice-complete would be packed
-			 * as another positional and commands that accept one
-			 * (e.g. ice repo checkout) would treat it as data.
+			 * in argv, dispatch to the OPT_POSITIONAL slot at the
+			 * cursor index (j - i positionals were typed before
+			 * the cursor).  No matching slot -> silent exit so the
+			 * shell falls back to file completion.  Without this
+			 * guard --ice-complete would be packed as another
+			 * positional and commands that accept one (e.g. ice
+			 * repo checkout) would treat it as data.
 			 */
 			for (int j = i + 1; j < argc; j++) {
-				if (!strcmp(argv[j], "--ice-complete"))
+				if (!strcmp(argv[j], "--ice-complete")) {
+					fire_positional_complete(opts, j - i);
 					exit(0);
+				}
 			}
 			break;
 		}

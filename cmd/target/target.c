@@ -40,7 +40,8 @@ static void complete_targets(void)
 
 static const struct option cmd_target_set_opts[] = {
     OPT_BOOL(0, "preview", &opt_preview, "allow preview targets"),
-    OPT_END_COMPLETE("target", complete_targets),
+    OPT_POSITIONAL("target", complete_targets),
+    OPT_END(),
 };
 
 /* clang-format off */

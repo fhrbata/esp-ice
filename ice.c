@@ -192,7 +192,7 @@ const struct option ice_global_opts[] = {
     OPT_BOOL_CFG('v', "verbose", &global_verbose, "core.verbose", NULL,
 		 "show full command output", NULL),
     OPT_BOOL(0, "version", &global_version, "show version"),
-    OPT_END_COMPLETE(NULL, complete_aliases),
+    OPT_END(),
 };
 
 static const struct cmd_desc *const ice_subs[] = {
@@ -206,6 +206,7 @@ static const struct cmd_desc *const ice_subs[] = {
     &cmd_fullclean_desc,
     &cmd_help_desc,
     &cmd_image_desc,
+    &cmd_init_desc,
     &cmd_ldgen_desc,
     &cmd_menuconfig_desc,
     &cmd_monitor_desc,
@@ -225,6 +226,7 @@ const struct cmd_desc ice_root_desc = {
     .opts = ice_global_opts,
     .manual = &ice_root_manual,
     .subcommands = ice_subs,
+    .extra_complete = complete_aliases,
 };
 
 int cmd_ice(int argc, const char **argv)

@@ -48,6 +48,7 @@ int cmd_clean(int argc, const char **argv);
 int cmd_cmake(int argc, const char **argv);
 int cmd_flash(int argc, const char **argv);
 int cmd_fullclean(int argc, const char **argv);
+int cmd_init(int argc, const char **argv);
 int cmd_menuconfig(int argc, const char **argv);
 int cmd_reconfigure(int argc, const char **argv);
 int cmd_set_target(int argc, const char **argv);
@@ -81,6 +82,22 @@ int cmd_configdep(int argc, const char **argv);
 int cmd_help(int argc, const char **argv);
 int cmd_ice(int argc, const char **argv);
 int cmd_install(int argc, const char **argv);
+
+/**
+ * @brief Install ESP-IDF tools described by a tools.json manifest.
+ *
+ * Reads @p manifest_path, picks the recommended version of every tool
+ * marked @c install: "always" (or just @p tool_filter when non-NULL),
+ * downloads and verifies each archive, and extracts under
+ * ice_home()/tools/<name>/<version>/.  Tools already installed are
+ * skipped unless @p force is non-zero.  When @p target_filter is
+ * non-NULL only tools whose @c supported_targets list contains the
+ * target (or "all") are installed.
+ *
+ * @return 0 on success, non-zero if any tool failed to install.
+ */
+int install_from_manifest(const char *manifest_path, const char *target_filter,
+			  const char *tool_filter, int force);
 int cmd_ldgen(int argc, const char **argv);
 int cmd_monitor(int argc, const char **argv);
 int cmd_partition_table(int argc, const char **argv);
@@ -108,6 +125,11 @@ struct cmd_desc {
 	const struct cmd_desc *const *subcommands; /**< NULL-terminated
 						    *   array; NULL for
 						    *   leaves. */
+	void (*extra_complete)(void); /**< Extra completion candidates
+				       *   to emit alongside subcommand
+				       *   and flag listings (e.g. user
+				       *   aliases at the root).  NULL
+				       *   if none. */
 };
 
 /**
@@ -134,6 +156,7 @@ extern const struct cmd_desc cmd_flash_desc;
 extern const struct cmd_desc cmd_fullclean_desc;
 extern const struct cmd_desc cmd_help_desc;
 extern const struct cmd_desc cmd_image_desc;
+extern const struct cmd_desc cmd_init_desc;
 extern const struct cmd_desc cmd_ldgen_desc;
 extern const struct cmd_desc cmd_menuconfig_desc;
 extern const struct cmd_desc cmd_monitor_desc;
