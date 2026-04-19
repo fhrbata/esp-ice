@@ -22,7 +22,7 @@
 
 /* clang-format off */
 static const struct cmd_manual configdep_manual = {
-	.name = "ice configdep",
+	.name = "ice idf configdep",
 	.summary = "sdkconfig-aware compiler wrapper",
 
 	.description =
@@ -47,7 +47,7 @@ static const struct cmd_manual configdep_manual = {
 	       "Ninja recompile precisely the affected sources."),
 
 	.examples =
-	H_EXAMPLE("ice configdep cc -c foo.c -o foo.o -MF foo.d"),
+	H_EXAMPLE("ice idf configdep cc -c foo.c -o foo.o -MF foo.d"),
 
 	.extras =
 	H_SECTION("SEE ALSO")
@@ -392,7 +392,7 @@ int cmd_configdep(int argc, const char **argv)
 
 	/* argv[0] = "configdep", argv[1..] = compiler command */
 	if (argc < 2)
-		die("usage: ice configdep <cmd> <arg...>");
+		die("usage: ice idf configdep <cmd> <arg...>");
 
 	/* Step 1: run the compiler. */
 	struct process proc = PROCESS_INIT;

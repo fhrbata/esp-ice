@@ -6,7 +6,7 @@
 
 /**
  * @file cmd/monitor/monitor.c
- * @brief The "ice monitor" subcommand -- serial port monitor.
+ * @brief The "ice idf monitor" subcommand -- serial port monitor.
  *
  * Connects to a serial port, displays device output in real time,
  * and forwards keyboard input to the device.  Press Ctrl-] to exit.
@@ -32,7 +32,7 @@ static const struct option cmd_monitor_opts[] = {
 };
 
 static const struct cmd_manual monitor_manual = {
-	.name = "ice monitor",
+	.name = "ice idf monitor",
 	.summary = "display serial output from the device",
 
 	.description =
@@ -41,9 +41,9 @@ static const struct cmd_manual monitor_manual = {
 	       "device.  Press @b{Ctrl-]} to exit."),
 
 	.examples =
-	H_EXAMPLE("ice monitor")
-	H_EXAMPLE("ice monitor -p /dev/ttyUSB0")
-	H_EXAMPLE("ice monitor -p /dev/ttyUSB0 -b 460800"),
+	H_EXAMPLE("ice idf monitor")
+	H_EXAMPLE("ice idf monitor -p /dev/ttyUSB0")
+	H_EXAMPLE("ice idf monitor -p /dev/ttyUSB0 -b 460800"),
 
 	.extras =
 	H_SECTION("KEY BINDINGS")
@@ -81,8 +81,8 @@ int cmd_monitor(int argc, const char **argv)
 		    strerror(-rc));
 	}
 
-	fprintf(stderr, "--- ice monitor on %s at %d baud ---" EOL, opt_port,
-		opt_baud);
+	fprintf(stderr, "--- ice idf monitor on %s at %d baud ---" EOL,
+		opt_port, opt_baud);
 	fprintf(stderr, "--- Quit: Ctrl-] ---" EOL);
 
 	rc = console_raw_enter();

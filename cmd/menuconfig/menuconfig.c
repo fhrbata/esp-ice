@@ -25,7 +25,7 @@ static const struct cmd_manual menuconfig_manual = {
 	       "@b{default}); each profile has its own @b{sdkconfig}.")
 	H_PARA("When you save, sdkconfig changes invalidate only the "
 	       "translation units that actually reference the affected "
-	       "@b{CONFIG_*} symbols, thanks to the @b{ice configdep} "
+	       "@b{CONFIG_*} symbols, thanks to the @b{ice idf configdep} "
 	       "compiler wrapper.  A plain @b{ice build} picks the "
 	       "changes up automatically."),
 
@@ -35,7 +35,7 @@ static const struct cmd_manual menuconfig_manual = {
 
 	.extras =
 	H_SECTION("SEE ALSO")
-	H_ITEM("ice configdep",
+	H_ITEM("ice idf configdep",
 	       "Compiler wrapper that makes incremental builds "
 	       "sdkconfig-aware.")
 	H_ITEM("ice init",

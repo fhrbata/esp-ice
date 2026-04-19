@@ -45,8 +45,15 @@ tap_done "subcommand list includes visible commands and hides __complete"
 "$BINARY" __complete 1 ice "co" >pref.out
 tap_check grep -qx 'completion' pref.out
 tap_check grep -qx 'config'     pref.out
-tap_check grep -qx 'configdep'  pref.out
 tap_done "subcommand list includes all visible commands (shell does prefix filtering)"
+
+"$BINARY" __complete 2 ice idf "" >idfsubs.out
+tap_check grep -qx 'monitor'         idfsubs.out
+tap_check grep -qx 'size'            idfsubs.out
+tap_check grep -qx 'configdep'       idfsubs.out
+tap_check grep -qx 'ldgen'           idfsubs.out
+tap_check grep -qx 'partition-table' idfsubs.out
+tap_done "ice idf <TAB> lists bundled IDF tools"
 
 # ---- `ice __complete`: per-subcommand flag candidates ----
 

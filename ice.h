@@ -140,6 +140,7 @@ extern const struct cmd_desc cmd_config_desc;
 extern const struct cmd_desc cmd_configdep_desc;
 extern const struct cmd_desc cmd_flash_desc;
 extern const struct cmd_desc cmd_help_desc;
+extern const struct cmd_desc cmd_idf_desc;
 extern const struct cmd_desc cmd_image_desc;
 extern const struct cmd_desc cmd_init_desc;
 extern const struct cmd_desc cmd_ldgen_desc;

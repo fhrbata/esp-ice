@@ -6,14 +6,14 @@
 
 /**
  * @file cmd/partition-table/partition-table.c
- * @brief "ice partition-table" subcommand.
+ * @brief "ice idf partition-table" subcommand.
  */
 #include "ice.h"
 #include "partition_table.h"
 
 /* clang-format off */
 static const struct cmd_manual partition_table_manual = {
-	.name = "ice partition-table",
+	.name = "ice idf partition-table",
 	.summary = "generate partition table binary from CSV",
 
 	.description =
@@ -36,9 +36,9 @@ static const struct cmd_manual partition_table_manual = {
 	       "0x1000 otherwise)."),
 
 	.examples =
-	H_EXAMPLE("ice partition-table partitions.csv build/partition-table.bin")
-	H_EXAMPLE("ice partition-table --flash-size 4MB partitions.csv build/pt.bin")
-	H_EXAMPLE("ice partition-table --disable-md5sum partitions.csv out.bin"),
+	H_EXAMPLE("ice idf partition-table partitions.csv build/partition-table.bin")
+	H_EXAMPLE("ice idf partition-table --flash-size 4MB partitions.csv build/pt.bin")
+	H_EXAMPLE("ice idf partition-table --disable-md5sum partitions.csv out.bin"),
 
 	.extras =
 	H_SECTION("SEE ALSO")
@@ -102,7 +102,7 @@ int cmd_partition_table(int argc, const char **argv)
 	argc = parse_options(argc, argv, &cmd_partition_table_desc);
 
 	if (argc < 2)
-		die("usage: ice partition-table [options] <input.csv> "
+		die("usage: ice idf partition-table [options] <input.csv> "
 		    "<output.bin>");
 
 	input_path = argv[0];

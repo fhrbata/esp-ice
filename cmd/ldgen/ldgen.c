@@ -13,7 +13,7 @@
 
 /* clang-format off */
 static const struct cmd_manual ldgen_manual = {
-	.name = "ice ldgen",
+	.name = "ice idf ldgen",
 	.summary = "analyse linker fragment (.lf) files",
 
 	.description =
@@ -29,9 +29,9 @@ static const struct cmd_manual ldgen_manual = {
 	       "pipeline merges them into a single generated @b{.ld}."),
 
 	.examples =
-	H_EXAMPLE("ice ldgen components/freertos/linker.lf")
-	H_EXAMPLE("ice ldgen --dump app.lf")
-	H_EXAMPLE("ice ldgen app.lf bootloader.lf"),
+	H_EXAMPLE("ice idf ldgen components/freertos/linker.lf")
+	H_EXAMPLE("ice idf ldgen --dump app.lf")
+	H_EXAMPLE("ice idf ldgen app.lf bootloader.lf"),
 
 	.extras =
 	H_SECTION("SEE ALSO")
@@ -60,7 +60,7 @@ int cmd_ldgen(int argc, const char **argv)
 {
 	argc = parse_options(argc, argv, &cmd_ldgen_desc);
 	if (argc < 1)
-		die("no input files; see 'ice ldgen --help'");
+		die("no input files; see 'ice idf ldgen --help'");
 
 	for (int i = 0; i < argc; i++) {
 		struct sbuf sb = SBUF_INIT;

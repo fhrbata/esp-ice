@@ -468,7 +468,7 @@ out:
 
 /* ------------------------------------------------------------------ */
 /*  build.ninja patching                                              */
-/*    gen_esp32part.py   → ice partition-table                        */
+/*    gen_esp32part.py   → ice idf partition-table                    */
 /*    esptool elf2image  → ice image create                           */
 /* ------------------------------------------------------------------ */
 
@@ -510,13 +510,13 @@ static void patch_command_line(struct sbuf *out, const char *line, size_t len)
 
 		/*
 		 * IDF calls gen_esp32part.py twice per COMMAND line:
-		 *   1st call: generate  -- replace with ice partition-table
+		 *   1st call: generate  -- replace with ice idf partition-table
 		 *   2nd call: display   -- replace with true
 		 */
 		if (occurrence == 0) {
 			const char *exe = process_exe();
 			sbuf_addstr(out, exe ? exe : "ice");
-			sbuf_addstr(out, " partition-table");
+			sbuf_addstr(out, " idf partition-table");
 		} else {
 			sbuf_addstr(out, "true");
 		}
@@ -725,7 +725,8 @@ int run_cmake_target(const char *target, const char *label, int interactive)
 	if (rc)
 		return rc;
 
-	/* Replace gen_esp32part.py with ice partition-table on every build. */
+	/* Replace gen_esp32part.py with ice idf partition-table on every build.
+	 */
 	patch_ninja(build_dir);
 	/* Replace `<python> -m esptool ... elf2image` with `ice image
 	 * create` on every build. */

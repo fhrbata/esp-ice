@@ -29,7 +29,7 @@
 
 /* clang-format off */
 static const struct cmd_manual size_manual = {
-	.name = "ice size",
+	.name = "ice idf size",
 	.summary = "analyse firmware memory usage by region",
 
 	.description =
@@ -52,9 +52,9 @@ static const struct cmd_manual size_manual = {
 	       "misleading."),
 
 	.examples =
-	H_EXAMPLE("ice size build/hello-world.map")
-	H_EXAMPLE("ice size --target esp32s3 build/app.map")
-	H_EXAMPLE("ice size --format table build/app.map"),
+	H_EXAMPLE("ice idf size build/hello-world.map")
+	H_EXAMPLE("ice idf size --target esp32s3 build/app.map")
+	H_EXAMPLE("ice idf size --format table build/app.map"),
 
 	.extras =
 	H_SECTION("SEE ALSO")
@@ -585,7 +585,7 @@ int cmd_size(int argc, const char **argv)
 {
 	argc = parse_options(argc, argv, &cmd_size_desc);
 	if (argc < 1)
-		die("no map file; see 'ice size --help'");
+		die("no map file; see 'ice idf size --help'");
 
 	struct sbuf sb = SBUF_INIT;
 	if (sbuf_read_file(&sb, argv[0]) < 0)

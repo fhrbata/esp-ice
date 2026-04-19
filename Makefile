@@ -129,6 +129,7 @@ LIB_SRCS := \
 	cmd/image/create.c \
 	cmd/image/info.c \
 	cmd/image/merge.c \
+	cmd/idf/idf.c \
 	cmd/init/init.c \
 	cmd/install/install.c \
 	cmd/ldgen/ldgen.c \
