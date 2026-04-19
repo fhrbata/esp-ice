@@ -6,14 +6,16 @@
 
 /**
  * @file target.c
- * @brief `ice target` -- query the chip target.
+ * @brief `ice target` -- chip-bound operations (esptool replacement).
  *
- * Subcommands:
- *   list  - list supported chip targets
- *   info  - show the project's currently-configured target
+ * Today only `list` lives here (static enumeration of supported
+ * chips).  This namespace will grow esptool-replacement subcommands
+ * (flash, erase, reset, info, ...) as the native rewrites land --
+ * each operates on a connected chip via an explicit serial port and
+ * does not consume project state.
  *
- * Setting the target is done by `ice init <chip> <idf>`; this
- * namespace is read-only.
+ * Setting the project's chip is done by `ice init <chip> <idf>`,
+ * not from this namespace.
  */
 #include "ice.h"
 
@@ -65,42 +67,6 @@ static int cmd_target_list(int argc, const char **argv)
 }
 
 /* ------------------------------------------------------------------ */
-/* ice target info                                                     */
-/* ------------------------------------------------------------------ */
-
-static int cmd_target_info(int argc, const char **argv);
-
-static const struct cmd_manual target_info_manual = {
-    .name = "ice target info",
-};
-
-static const struct option cmd_target_info_opts[] = {OPT_END()};
-
-static const struct cmd_desc cmd_target_info_desc = {
-    .name = "info",
-    .fn = cmd_target_info,
-    .opts = cmd_target_info_opts,
-    .manual = &target_info_manual,
-};
-
-static int cmd_target_info(int argc, const char **argv)
-{
-	const char *target;
-
-	parse_options(argc, argv, &cmd_target_info_desc);
-
-	target = config_get("project.default.chip");
-	if (!target || !*target) {
-		fprintf(stderr, "No target set.\n"
-				"hint: run @b{ice init <chip> <idf>}\n");
-		return 1;
-	}
-
-	printf("Target: %s\n", target);
-	return 0;
-}
-
-/* ------------------------------------------------------------------ */
 /* ice target -- namespace dispatcher                                  */
 /* ------------------------------------------------------------------ */
 
@@ -109,23 +75,23 @@ static const struct option cmd_target_opts[] = {OPT_END()};
 /* clang-format off */
 static const struct cmd_manual target_manual = {
 	.name = "ice target",
-	.summary = "query the chip target",
+	.summary = "chip-bound operations (esptool replacement)",
 
 	.description =
-	H_PARA("Inspect chip-target state for the current project.")
-	H_PARA("Setting the target is done by @b{ice init <chip> <idf>}; "
-	       "this namespace is read-only.")
-	H_PARA("Run @b{ice target <subcommand> --help} for details."),
+	H_PARA("Operations on a connected chip via an explicit serial "
+	       "port -- the future home of esptool-replacement commands "
+	       "(flash, erase, reset, info, ...).  Today only @b{list} "
+	       "lives here; the rest land as the native rewrites do.")
+	H_PARA("Setting the project's chip is done by "
+	       "@b{ice init <chip> <idf>}, not from this namespace."),
 
 	.examples =
-	H_EXAMPLE("ice target list")
-	H_EXAMPLE("ice target info"),
+	H_EXAMPLE("ice target list"),
 };
 /* clang-format on */
 
 static const struct cmd_desc *const target_subs[] = {
     &cmd_target_list_desc,
-    &cmd_target_info_desc,
     NULL,
 };
 
