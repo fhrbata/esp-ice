@@ -18,17 +18,7 @@ extern const struct cmd_desc cmd_image_create_desc;
 extern const struct cmd_desc cmd_image_info_desc;
 extern const struct cmd_desc cmd_image_merge_desc;
 
-static subcmd_fn image_fn;
-
-static const struct option cmd_image_opts[] = {
-    OPT_SUBCOMMAND("create", &image_fn, cmd_image_create,
-		   "create a flash image from an ELF executable"),
-    OPT_SUBCOMMAND("info", &image_fn, cmd_image_info,
-		   "display the structure of an ESP flash image"),
-    OPT_SUBCOMMAND("merge", &image_fn, cmd_image_merge,
-		   "combine multiple flash images at offsets into one"),
-    OPT_END(),
-};
+static const struct option cmd_image_opts[] = {OPT_END()};
 
 /* clang-format off */
 static const struct cmd_manual image_manual = {
@@ -63,9 +53,5 @@ const struct cmd_desc cmd_image_desc = {
 
 int cmd_image(int argc, const char **argv)
 {
-	argc = parse_options(argc, argv, &cmd_image_desc);
-	if (image_fn)
-		return image_fn(argc, argv);
-
-	die("expected a subcommand. See 'ice image --help'.");
+	return ice_dispatch(argc, argv, &cmd_image_desc);
 }

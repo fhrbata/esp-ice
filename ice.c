@@ -144,19 +144,27 @@ static void complete_aliases(void)
 }
 
 /*
- * Walk a descriptor tree.  Parse @p desc's options, then if the first
- * positional argument names a subcommand, recurse into it; otherwise
- * fire @p desc->fn.  A pure namespace (fn=NULL, subcommands!=NULL) with
- * no argv left dies with a "expected a subcommand" message.
+ * Walk a descriptor tree.
  *
- * Used in Step 4+ by every namespace and by cmd_ice itself.  In earlier
- * steps this function exists but has no callers.
+ * For a namespace node (has @c subcommands), parse the node's options,
+ * then recurse into the child whose @c .name matches argv[0].  If no
+ * child matches and the namespace has a @c .fn, fire it; otherwise
+ * die with a "expected a subcommand" message.
+ *
+ * For a leaf node (no @c subcommands), do NOT call @c parse_options
+ * here -- the leaf's own body calls it with the leaf's argv[0] still
+ * serving as the prog-name slot, so the first positional survives.
+ * Parsing at this level would shift argv[0] to the first positional
+ * and the leaf's redundant @c parse_options call would then drop it.
  */
 int ice_dispatch(int argc, const char **argv, const struct cmd_desc *desc)
 {
+	if (!desc->subcommands)
+		return desc->fn(argc, argv);
+
 	argc = parse_options(argc, argv, desc);
 
-	if (desc->subcommands && argc > 0) {
+	if (argc > 0) {
 		for (const struct cmd_desc *const *p = desc->subcommands; *p;
 		     p++) {
 			if (!strcmp(argv[0], (*p)->name))
@@ -169,8 +177,6 @@ int ice_dispatch(int argc, const char **argv, const struct cmd_desc *desc)
 
 	die("expected a subcommand. See '%s --help'.", desc->manual->name);
 }
-
-static subcmd_fn ice_fn;
 
 const struct option ice_global_opts[] = {
     OPT_STRING_CFG('B', "build-dir", &global_build_dir, "path",
@@ -186,39 +192,6 @@ const struct option ice_global_opts[] = {
     OPT_BOOL_CFG('v', "verbose", &global_verbose, "core.verbose", NULL,
 		 "show full command output", NULL),
     OPT_BOOL(0, "version", &global_version, "show version"),
-
-    OPT_SUBCOMMAND("build", &ice_fn, cmd_build, "build the default target"),
-    OPT_SUBCOMMAND("clean", &ice_fn, cmd_clean, "remove build artifacts"),
-    OPT_SUBCOMMAND("cmake", &ice_fn, cmd_cmake,
-		   "run an arbitrary cmake target"),
-    OPT_SUBCOMMAND("completion", &ice_fn, cmd_completion,
-		   "print shell completion script"),
-    OPT_SUBCOMMAND("config", &ice_fn, cmd_config,
-		   "inspect and modify configuration entries"),
-    OPT_SUBCOMMAND("configdep", &ice_fn, cmd_configdep,
-		   "sdkconfig-aware compiler wrapper"),
-    OPT_SUBCOMMAND("flash", &ice_fn, cmd_flash, "flash firmware to the device"),
-    OPT_SUBCOMMAND("fullclean", &ice_fn, cmd_fullclean,
-		   "wipe the build directory"),
-    OPT_SUBCOMMAND("help", &ice_fn, cmd_help, "show help for a subcommand"),
-    OPT_SUBCOMMAND("idf", &ice_fn, cmd_idf, "manage the ESP-IDF source tree"),
-    OPT_SUBCOMMAND("image", &ice_fn, cmd_image, "host-only image manipulation"),
-    OPT_SUBCOMMAND("ldgen", &ice_fn, cmd_ldgen,
-		   "analyse linker fragment (.lf) files"),
-    OPT_SUBCOMMAND("menuconfig", &ice_fn, cmd_menuconfig,
-		   "open the project configuration UI"),
-    OPT_SUBCOMMAND("monitor", &ice_fn, cmd_monitor,
-		   "display serial output from the device"),
-    OPT_SUBCOMMAND("partition-table", &ice_fn, cmd_partition_table,
-		   "generate partition table binary from CSV"),
-    OPT_SUBCOMMAND("reconfigure", &ice_fn, cmd_reconfigure,
-		   "regenerate the build system"),
-    OPT_SUBCOMMAND("size", &ice_fn, cmd_size,
-		   "analyse firmware memory usage by region"),
-    OPT_SUBCOMMAND("target", &ice_fn, cmd_target, "manage the chip target"),
-    OPT_SUBCOMMAND("tools", &ice_fn, cmd_tools, "manage ESP-IDF toolchains"),
-    OPT_SUBCOMMAND("__complete", &ice_fn, cmd_complete,
-		   "shell completion backend (internal)"),
     OPT_END_COMPLETE(NULL, complete_aliases),
 };
 
@@ -256,10 +229,7 @@ const struct cmd_desc ice_root_desc = {
 
 int cmd_ice(int argc, const char **argv)
 {
-	struct cmd_desc cmd_desc = {.opts = ice_global_opts,
-				    .manual = &ice_root_manual};
-
-	argc = parse_options(argc, argv, &cmd_desc);
+	argc = parse_options(argc, argv, &ice_root_desc);
 
 	if (global_no_color)
 		use_color = 0;
@@ -270,36 +240,36 @@ int cmd_ice(int argc, const char **argv)
 		return 0;
 	}
 
-	if (ice_fn)
-		return ice_fn(argc, argv);
-
 	if (argc < 1) {
-		print_manual(ice_root_manual.name, &ice_root_manual,
-			     ice_global_opts);
+		print_manual(ice_root_desc.name, &ice_root_desc);
 		return 1;
 	}
 
 	/*
-	 * Unrecognised command -- try alias expansion.  On success the
-	 * first token is replaced with the alias value, and we look up
-	 * the resulting subcommand name directly.  Global flags inside
-	 * alias values are intentionally NOT re-parsed.
+	 * Match the typed subcommand against the descriptor tree first.
+	 * If no match, try alias expansion and look up the first token
+	 * again (global flags inside alias values are intentionally not
+	 * re-parsed).  Falling off the end means ice-<name> on $PATH.
 	 */
-	for (int depth = 0; depth < 10; depth++) {
-		if (!try_expand_alias(&argc, &argv))
-			break;
-	}
-	if (argc >= 1) {
-		for (const struct option *o = ice_global_opts;
-		     o->type != OPTION_END; o++) {
-			if (o->type == OPTION_SUBCOMMAND &&
-			    !strcmp(argv[0], o->long_opt))
-				return o->subcommand_fn(argc, argv);
+	for (int tries = 0; tries < 2; tries++) {
+		for (const struct cmd_desc *const *p = ice_subs; *p; p++) {
+			if (!strcmp(argv[0], (*p)->name))
+				return ice_dispatch(argc, argv, *p);
+		}
+		if (tries == 0) {
+			int expanded = 0;
+			for (int depth = 0; depth < 10; depth++) {
+				if (!try_expand_alias(&argc, &argv))
+					break;
+				expanded = 1;
+			}
+			if (!expanded || argc < 1)
+				break;
 		}
 	}
 
 	/* Try external command: ice-<name> on PATH. */
-	if (argc >= 1) {
+	{
 		struct sbuf cmd = SBUF_INIT;
 
 		sbuf_addf(&cmd, "ice-%s", argv[0]);
@@ -324,7 +294,7 @@ int cmd_ice(int argc, const char **argv)
 		sbuf_release(&cmd);
 	}
 
-	die("'%s' is not a command. See 'ice --help'.", argc ? argv[0] : "");
+	die("'%s' is not a command. See 'ice --help'.", argv[0]);
 }
 
 /* clang-format off */

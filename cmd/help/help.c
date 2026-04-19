@@ -17,10 +17,10 @@
 
 static void complete_help_commands(void)
 {
-	for (const struct option *o = ice_global_opts; o->type != OPTION_END;
-	     o++) {
-		if (o->type == OPTION_SUBCOMMAND && o->long_opt[0] != '_')
-			printf("%s\n", o->long_opt);
+	for (const struct cmd_desc *const *p = ice_root_desc.subcommands; *p;
+	     p++) {
+		if ((*p)->name[0] != '_')
+			printf("%s\n", (*p)->name);
 	}
 }
 
@@ -44,8 +44,7 @@ int cmd_help(int argc, const char **argv)
 	argc = parse_options(argc, argv, &cmd_help_desc);
 
 	if (argc == 0) {
-		print_manual(ice_root_manual.name, &ice_root_manual,
-			     ice_global_opts);
+		print_manual(ice_root_desc.name, &ice_root_desc);
 		return EXIT_SUCCESS;
 	}
 

@@ -386,7 +386,7 @@ int cmd_configdep(int argc, const char **argv)
 	 */
 	if (argc >= 2 &&
 	    (!strcmp(argv[1], "--help") || !strcmp(argv[1], "-h"))) {
-		print_manual(configdep_manual.name, &configdep_manual, NULL);
+		print_manual(configdep_manual.name, &cmd_configdep_desc);
 		return EXIT_SUCCESS;
 	}
 

@@ -123,16 +123,7 @@ static int cmd_tools_info(int argc, const char **argv)
 /* ice tools -- namespace dispatcher                                   */
 /* ------------------------------------------------------------------ */
 
-static subcmd_fn tools_fn;
-
-static const struct option cmd_tools_opts[] = {
-    OPT_SUBCOMMAND("install", &tools_fn, cmd_install,
-		   "download and install tools from a manifest"),
-    OPT_SUBCOMMAND("list", &tools_fn, cmd_tools_list, "list installed tools"),
-    OPT_SUBCOMMAND("info", &tools_fn, cmd_tools_info,
-		   "show tool paths and installed tools"),
-    OPT_END(),
-};
+static const struct option cmd_tools_opts[] = {OPT_END()};
 
 /* clang-format off */
 static const struct cmd_manual tools_manual = {
@@ -167,9 +158,5 @@ const struct cmd_desc cmd_tools_desc = {
 
 int cmd_tools(int argc, const char **argv)
 {
-	argc = parse_options(argc, argv, &cmd_tools_desc);
-	if (tools_fn)
-		return tools_fn(argc, argv);
-
-	die("expected a subcommand. See 'ice tools --help'.");
+	return ice_dispatch(argc, argv, &cmd_tools_desc);
 }

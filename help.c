@@ -364,31 +364,27 @@ static const char *opt_config_key(const struct option *o)
 
 static const char *opt_env_var(const struct option *o) { return o->env_var; }
 
-static void print_commands_body(void)
+static void print_commands_body(const struct cmd_desc *const *subs)
 {
 	size_t maxlen = 0;
 
-	for (const struct option *o = ice_global_opts; o->type != OPTION_END;
-	     o++) {
+	for (const struct cmd_desc *const *p = subs; *p; p++) {
 		size_t l;
-		if (o->type != OPTION_SUBCOMMAND)
-			continue;
 		/* Skip internal commands (leading underscore). */
-		if (o->long_opt[0] == '_')
+		if ((*p)->name[0] == '_')
 			continue;
-		l = strlen(o->long_opt);
+		l = strlen((*p)->name);
 		if (l > maxlen)
 			maxlen = l;
 	}
 
-	for (const struct option *o = ice_global_opts; o->type != OPTION_END;
-	     o++) {
-		if (o->type != OPTION_SUBCOMMAND)
+	for (const struct cmd_desc *const *p = subs; *p; p++) {
+		const char *summary;
+		if ((*p)->name[0] == '_')
 			continue;
-		if (o->long_opt[0] == '_')
-			continue;
-		printf(INDENT "@b{%-*s}   %s\n", (int)maxlen, o->long_opt,
-		       o->help ? o->help : "");
+		summary = (*p)->manual ? (*p)->manual->summary : NULL;
+		printf(INDENT "@b{%-*s}   %s\n", (int)maxlen, (*p)->name,
+		       summary ? summary : "");
 	}
 	fputs("\n", stdout);
 }
@@ -460,9 +456,10 @@ static const char *basename_of(const char *p)
 	return last;
 }
 
-void print_manual(const char *cmd_name, const struct cmd_manual *m,
-		  const struct option *opts)
+void print_manual(const char *cmd_name, const struct cmd_desc *desc)
 {
+	const struct cmd_manual *m = desc ? desc->manual : NULL;
+	const struct option *opts = desc ? desc->opts : NULL;
 	const char *summary;
 	int has_flags = 0;
 	int has_subcmds = 0;
@@ -486,6 +483,8 @@ void print_manual(const char *cmd_name, const struct cmd_manual *m,
 			positional = end->argh;
 		}
 	}
+	if (desc && desc->subcommands && *desc->subcommands)
+		has_subcmds = 1;
 
 	pager_start();
 
@@ -538,10 +537,10 @@ void print_manual(const char *cmd_name, const struct cmd_manual *m,
 		print_source_body(opts, opt_env_var);
 	}
 
-	/* COMMANDS -- only for the top-level manual. */
-	if (m && m->list_commands) {
+	/* COMMANDS -- auto-emitted from desc->subcommands. */
+	if (desc && desc->subcommands && *desc->subcommands) {
 		fputs("@b{COMMANDS}\n", stdout);
-		print_commands_body();
+		print_commands_body(desc->subcommands);
 	}
 
 	/* ALIASES -- skipped entirely when no aliases are configured. */

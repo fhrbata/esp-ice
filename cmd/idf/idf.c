@@ -1054,21 +1054,7 @@ static int cmd_idf_info(int argc, const char **argv)
 /* Dispatcher                                                          */
 /* ------------------------------------------------------------------ */
 
-static subcmd_fn idf_fn;
-
-static const struct option cmd_idf_opts[] = {
-    OPT_SUBCOMMAND("clone", &idf_fn, cmd_idf_clone,
-		   "create the reference clone at ~/.ice/esp-idf/"),
-    OPT_SUBCOMMAND("pull", &idf_fn, cmd_idf_pull,
-		   "refresh the reference to latest master"),
-    OPT_SUBCOMMAND("list", &idf_fn, cmd_idf_list,
-		   "list available versions (branches + tags)"),
-    OPT_SUBCOMMAND("checkout", &idf_fn, cmd_idf_checkout,
-		   "create a working checkout at a given ref"),
-    OPT_SUBCOMMAND("info", &idf_fn, cmd_idf_info,
-		   "show reference and checkout status"),
-    OPT_END(),
-};
+static const struct option cmd_idf_opts[] = {OPT_END()};
 
 /* clang-format off */
 static const struct cmd_manual idf_manual = {
@@ -1106,9 +1092,5 @@ const struct cmd_desc cmd_idf_desc = {
 
 int cmd_idf(int argc, const char **argv)
 {
-	argc = parse_options(argc, argv, &cmd_idf_desc);
-	if (idf_fn)
-		return idf_fn(argc, argv);
-
-	die("expected a subcommand. See 'ice idf --help'.");
+	return ice_dispatch(argc, argv, &cmd_idf_desc);
 }

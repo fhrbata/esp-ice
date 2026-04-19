@@ -191,17 +191,7 @@ static int cmd_target_info(int argc, const char **argv)
 /* ice target -- namespace dispatcher                                  */
 /* ------------------------------------------------------------------ */
 
-static subcmd_fn target_fn;
-
-static const struct option cmd_target_opts[] = {
-    OPT_SUBCOMMAND("set", &target_fn, cmd_target_set,
-		   "switch the project to a new chip target"),
-    OPT_SUBCOMMAND("list", &target_fn, cmd_target_list,
-		   "list supported chip targets"),
-    OPT_SUBCOMMAND("info", &target_fn, cmd_target_info,
-		   "show the current target"),
-    OPT_END(),
-};
+static const struct option cmd_target_opts[] = {OPT_END()};
 
 /* clang-format off */
 static const struct cmd_manual target_manual = {
@@ -235,9 +225,5 @@ const struct cmd_desc cmd_target_desc = {
 
 int cmd_target(int argc, const char **argv)
 {
-	argc = parse_options(argc, argv, &cmd_target_desc);
-	if (target_fn)
-		return target_fn(argc, argv);
-
-	die("expected a subcommand. See 'ice target --help'.");
+	return ice_dispatch(argc, argv, &cmd_target_desc);
 }

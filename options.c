@@ -92,8 +92,9 @@ static void seed_defaults(const struct option *opts)
 	}
 }
 
-static void print_usage(const char *argv0, const struct option *opts)
+static void print_usage(const char *argv0, const struct cmd_desc *desc)
 {
+	const struct option *opts = desc->opts;
 	int has_flags = 0;
 	int has_subcmds = 0;
 	const char *positional = NULL;
@@ -104,6 +105,8 @@ static void print_usage(const char *argv0, const struct option *opts)
 		else
 			has_flags = 1;
 	}
+	if (desc->subcommands && *desc->subcommands)
+		has_subcmds = 1;
 
 	/* OPT_END's argh names the positional argument. */
 	{
@@ -142,6 +145,21 @@ static void print_usage(const char *argv0, const struct option *opts)
 			}
 			fprintf(stderr, "    @b{%-20s} %s\n", o->long_opt,
 				o->help ? o->help : "");
+		}
+	}
+	if (desc->subcommands) {
+		for (const struct cmd_desc *const *p = desc->subcommands; *p;
+		     p++) {
+			if ((*p)->name[0] == '_')
+				continue;
+			if (!has_subcmds) {
+				fprintf(stderr, "Subcommands:\n");
+				has_subcmds = 1;
+			}
+			fprintf(stderr, "    @b{%-20s} %s\n", (*p)->name,
+				(*p)->manual && (*p)->manual->summary
+				    ? (*p)->manual->summary
+				    : "");
 		}
 	}
 
@@ -197,8 +215,9 @@ static void print_sorted(struct svec *v)
 	svec_clear(v);
 }
 
-static NORETURN void print_completions(const struct option *opts)
+static NORETURN void print_completions(const struct cmd_desc *desc)
 {
+	const struct option *opts = desc->opts;
 	const struct option *end = opts;
 	struct svec v = SVEC_INIT;
 	char buf[64];
@@ -211,10 +230,21 @@ static NORETURN void print_completions(const struct option *opts)
 		if (o->type == OPTION_SUBCOMMAND && o->long_opt[0] != '_')
 			svec_push(&v, o->long_opt);
 	}
+	if (desc->subcommands) {
+		for (const struct cmd_desc *const *p = desc->subcommands; *p;
+		     p++) {
+			if ((*p)->name[0] != '_')
+				svec_push(&v, (*p)->name);
+		}
+	}
 	print_sorted(&v);
 
-	/* Positional completions (printed by callback, order is theirs). */
-	if (end->complete)
+	/*
+	 * Positional completions: only fire when there are no subcommands
+	 * at this level -- completion of a subcommand slot happens via the
+	 * subcommand list above, not the leaf's positional callback.
+	 */
+	if (!desc->subcommands && end->complete)
 		end->complete();
 
 	/* Long flags, sorted. */
@@ -236,6 +266,15 @@ static NORETURN void print_completions(const struct option *opts)
 		}
 	}
 	print_sorted(&v);
+
+	/*
+	 * OPT_END_COMPLETE at the root (or any non-leaf namespace) can
+	 * still attach a callback that supplies extra candidates -- today
+	 * @c ice_global_opts uses it for alias completion.  Fire it after
+	 * the flag lists so it slots in alongside them.
+	 */
+	if (desc->subcommands && end->complete)
+		end->complete();
 
 	exit(0);
 }
@@ -322,6 +361,14 @@ int parse_options(int argc, const char **argv, const struct cmd_desc *desc)
 					goto done;
 				}
 			}
+			if (desc->subcommands) {
+				for (const struct cmd_desc *const *p =
+					 desc->subcommands;
+				     *p; p++) {
+					if (!strcmp(arg, (*p)->name))
+						goto done;
+				}
+			}
 			/*
 			 * Positional with no subcommand match.  If the
 			 * completion trampoline appended --ice-complete later
@@ -340,20 +387,20 @@ int parse_options(int argc, const char **argv, const struct cmd_desc *desc)
 
 		/* -h: short usage always; --help: full manual if provided. */
 		if (!strcmp(arg, "-h")) {
-			print_usage(name, opts);
+			print_usage(name, desc);
 			exit(0);
 		}
 		if (!strcmp(arg, "--help")) {
 			if (manual)
-				print_manual(name, manual, opts);
+				print_manual(name, desc);
 			else
-				print_usage(name, opts);
+				print_usage(name, desc);
 			exit(0);
 		}
 
 		/* --ice-complete: dump all candidates and exit. */
 		if (!strcmp(arg, "--ice-complete"))
-			print_completions(opts);
+			print_completions(desc);
 
 		/* Long option */
 		if (arg[1] == '-') {

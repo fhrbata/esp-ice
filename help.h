@@ -37,6 +37,7 @@
 #define HELP_H
 
 struct option;
+struct cmd_desc;
 
 struct cmd_manual {
 	const char *name; /**< Display name (e.g. "ice target set"). */
@@ -99,16 +100,18 @@ struct cmd_manual {
 /**
  * @brief Render a full manual page to stdout.
  *
- * Emits NAME, SYNOPSIS (from @p usage), DESCRIPTION, OPTIONS
- * (auto-generated from @p opts), EXAMPLES, optional COMMANDS
- * (when @p m->list_commands is set), then any extras.  All
- * @c \@x{...} color tokens are expanded by the platform printf override.
+ * Emits NAME, SYNOPSIS, DESCRIPTION, OPTIONS (auto-generated from
+ * @c desc->opts), CONFIG / ENVIRONMENT, COMMANDS (auto-generated from
+ * @c desc->subcommands when non-empty), EXAMPLES, and @c extras.
+ * All @c \@x{...} color tokens are expanded by the platform printf
+ * override.
  *
- * @param cmd_name  Subcommand name as typed by the user (e.g. "config").
+ * @param cmd_name  Display name as typed by the user (e.g. "config").
  *                  "ice" is the top-level manual.  Used to synthesize
  *                  "ice-<name>" for NAME.
+ * @param desc      Command descriptor.  @c NULL is tolerated but
+ *                  yields a nearly-empty manual page.
  */
-void print_manual(const char *cmd_name, const struct cmd_manual *m,
-		  const struct option *opts);
+void print_manual(const char *cmd_name, const struct cmd_desc *desc);
 
 #endif /* HELP_H */
