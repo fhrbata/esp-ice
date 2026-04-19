@@ -154,7 +154,7 @@ static void complete_aliases(void)
  */
 int ice_dispatch(int argc, const char **argv, const struct cmd_desc *desc)
 {
-	argc = parse_options(argc, argv, desc->opts, desc->manual);
+	argc = parse_options(argc, argv, desc);
 
 	if (desc->subcommands && argc > 0) {
 		for (const struct cmd_desc *const *p = desc->subcommands; *p;
@@ -224,7 +224,10 @@ const struct option ice_global_opts[] = {
 
 int cmd_ice(int argc, const char **argv)
 {
-	argc = parse_options(argc, argv, ice_global_opts, &ice_root_manual);
+	struct cmd_desc cmd_desc = {.opts = ice_global_opts,
+				    .manual = &ice_root_manual};
+
+	argc = parse_options(argc, argv, &cmd_desc);
 
 	if (global_no_color)
 		use_color = 0;

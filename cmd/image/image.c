@@ -45,7 +45,9 @@ static const struct cmd_manual manual = {
 
 int cmd_image(int argc, const char **argv)
 {
-	argc = parse_options(argc, argv, cmd_image_opts, &manual);
+	struct cmd_desc cmd_desc = {.opts = cmd_image_opts, .manual = &manual};
+
+	argc = parse_options(argc, argv, &cmd_desc);
 	if (image_fn)
 		return image_fn(argc, argv);
 

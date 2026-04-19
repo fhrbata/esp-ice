@@ -46,7 +46,8 @@ static const struct cmd_manual manual = {
 int cmd_reconfigure(int argc, const char **argv)
 {
 	struct option opts[] = {OPT_END()};
+	struct cmd_desc cmd_desc = {.opts = opts, .manual = &manual};
 
-	parse_options(argc, argv, opts, &manual);
+	parse_options(argc, argv, &cmd_desc);
 	return ensure_build_directory(1);
 }

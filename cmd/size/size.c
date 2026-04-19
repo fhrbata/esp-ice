@@ -576,7 +576,9 @@ static void output_table(struct memmap *mm)
 
 int cmd_size(int argc, const char **argv)
 {
-	argc = parse_options(argc, argv, cmd_size_opts, &manual);
+	struct cmd_desc cmd_desc = {.opts = cmd_size_opts, .manual = &manual};
+
+	argc = parse_options(argc, argv, &cmd_desc);
 	if (argc < 1)
 		die("no map file; see 'ice size --help'");
 

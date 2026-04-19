@@ -489,8 +489,9 @@ static int cmd_idf_clone(int argc, const char **argv)
 	const char *url;
 	char jobs_str[16];
 	struct svec args = SVEC_INIT;
+	struct cmd_desc cmd_desc = {.opts = clone_opts, .manual = &manual};
 
-	argc = parse_options(argc, argv, clone_opts, &manual);
+	argc = parse_options(argc, argv, &cmd_desc);
 	url = argc >= 1 ? argv[0] : IDF_CLONE_URL;
 
 	reference_lock();
@@ -582,8 +583,9 @@ static int cmd_idf_pull(int argc, const char **argv)
 	/* clang-format on */
 	const char *base = reference_path();
 	char jobs_str[16];
+	struct cmd_desc cmd_desc = {.opts = pull_opts, .manual = &manual};
 
-	parse_options(argc, argv, pull_opts, &manual);
+	parse_options(argc, argv, &cmd_desc);
 	ensure_reference();
 	reference_lock();
 
@@ -666,12 +668,13 @@ static int cmd_idf_list(int argc, const char **argv)
 	};
 	/* clang-format on */
 	struct option opts[] = {OPT_END()};
+	struct cmd_desc cmd_desc = {.opts = opts, .manual = &manual};
 	const char *base = reference_path();
 	struct sbuf out = SBUF_INIT;
 	size_t pos;
 	char *line;
 
-	parse_options(argc, argv, opts, &manual);
+	parse_options(argc, argv, &cmd_desc);
 	ensure_reference();
 
 	{
@@ -767,8 +770,9 @@ static int cmd_idf_checkout(int argc, const char **argv)
 	const char *ref;
 	char *dest;
 	struct sbuf origin_url = SBUF_INIT;
+	struct cmd_desc cmd_desc = {.opts = checkout_opts, .manual = &manual};
 
-	argc = parse_options(argc, argv, checkout_opts, &manual);
+	argc = parse_options(argc, argv, &cmd_desc);
 
 	if (opt_checkout_list) {
 		struct svec names = SVEC_INIT;
@@ -945,11 +949,12 @@ static int cmd_idf_info(int argc, const char **argv)
 	};
 	/* clang-format on */
 	struct option opts[] = {OPT_END()};
+	struct cmd_desc cmd_desc = {.opts = opts, .manual = &manual};
 	const char *base = reference_path();
 	struct sbuf head = SBUF_INIT;
 	struct svec names = SVEC_INIT;
 
-	parse_options(argc, argv, opts, &manual);
+	parse_options(argc, argv, &cmd_desc);
 
 	if (access(base, F_OK) != 0) {
 		fprintf(stderr, "No ESP-IDF reference configured.\n"
@@ -1042,7 +1047,9 @@ static const struct cmd_manual manual = {
 
 int cmd_idf(int argc, const char **argv)
 {
-	argc = parse_options(argc, argv, cmd_idf_opts, &manual);
+	struct cmd_desc cmd_desc = {.opts = cmd_idf_opts, .manual = &manual};
+
+	argc = parse_options(argc, argv, &cmd_desc);
 	if (idf_fn)
 		return idf_fn(argc, argv);
 

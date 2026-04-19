@@ -55,9 +55,11 @@ int cmd_monitor(int argc, const char **argv)
 {
 	struct serial *s;
 	unsigned char buf[1024];
+	struct cmd_desc cmd_desc = {.opts = cmd_monitor_opts,
+				    .manual = &manual};
 	int rc;
 
-	parse_options(argc, argv, cmd_monitor_opts, &manual);
+	parse_options(argc, argv, &cmd_desc);
 
 	if (!opt_port)
 		die("serial.port is not set; use -p or "

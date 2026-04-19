@@ -408,8 +408,10 @@ int cmd_install(int argc, const char **argv)
 	int n;
 	int installed = 0, skipped = 0, failed = 0;
 	int tool_found = 0;
+	struct cmd_desc cmd_desc = {.opts = cmd_install_opts,
+				    .manual = &manual};
 
-	argc = parse_options(argc, argv, cmd_install_opts, &manual);
+	argc = parse_options(argc, argv, &cmd_desc);
 	if (argc != 1)
 		die("expected exactly one argument: path to tools.json");
 

@@ -173,8 +173,10 @@ static void print_chip_rev(uint16_t rev)
 int cmd_image_info(int argc, const char **argv)
 {
 	struct sbuf img = SBUF_INIT;
+	struct cmd_desc cmd_desc = {.opts = cmd_image_info_opts,
+				    .manual = &manual};
 
-	argc = parse_options(argc, argv, cmd_image_info_opts, &manual);
+	argc = parse_options(argc, argv, &cmd_desc);
 
 	if (argc < 1)
 		die("missing <image.bin> argument");

@@ -57,9 +57,10 @@ static const struct option greet_opts[] = {
 
 int cmd_greet(int argc, const char **argv)
 {
+	struct cmd_desc cmd_desc = {.opts = greet_opts, .manual = &manual};
 	const char *name;
 
-	argc = parse_options(argc, argv, greet_opts, &manual);
+	argc = parse_options(argc, argv, &cmd_desc);
 	if (argc != 1)
 		die("missing <name> argument");
 

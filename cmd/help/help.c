@@ -29,9 +29,10 @@ int cmd_help(int argc, const char **argv)
 	static const struct cmd_manual manual = {.name = "ice help"};
 	struct option opts[] = {
 	    OPT_END_COMPLETE("command", complete_help_commands)};
+	struct cmd_desc cmd_desc = {.opts = opts, .manual = &manual};
 	struct svec av = SVEC_INIT;
 
-	argc = parse_options(argc, argv, opts, &manual);
+	argc = parse_options(argc, argv, &cmd_desc);
 
 	if (argc == 0) {
 		print_manual(ice_root_manual.name, &ice_root_manual,

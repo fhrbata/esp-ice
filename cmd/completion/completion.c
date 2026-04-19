@@ -140,8 +140,9 @@ static void complete_shells(void) { printf("bash\nzsh\nfish\npowershell\n"); }
 int cmd_completion(int argc, const char **argv)
 {
 	struct option opts[] = {OPT_END_COMPLETE("shell", complete_shells)};
+	struct cmd_desc cmd_desc = {.opts = opts, .manual = &completion_manual};
 
-	argc = parse_options(argc, argv, opts, &completion_manual);
+	argc = parse_options(argc, argv, &cmd_desc);
 	if (argc != 1)
 		die("usage: ice completion bash|zsh|fish|powershell");
 

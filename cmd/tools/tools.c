@@ -61,9 +61,10 @@ static int cmd_tools_list(int argc, const char **argv)
 {
 	static const struct cmd_manual manual = {.name = "ice tools list"};
 	struct option opts[] = {OPT_END()};
+	struct cmd_desc cmd_desc = {.opts = opts, .manual = &manual};
 	struct sbuf tools_dir = SBUF_INIT;
 
-	parse_options(argc, argv, opts, &manual);
+	parse_options(argc, argv, &cmd_desc);
 
 	sbuf_addf(&tools_dir, "%s/tools", ice_home());
 
@@ -84,8 +85,9 @@ static int cmd_tools_info(int argc, const char **argv)
 {
 	static const struct cmd_manual manual = {.name = "ice tools info"};
 	struct option opts[] = {OPT_END()};
+	struct cmd_desc cmd_desc = {.opts = opts, .manual = &manual};
 
-	parse_options(argc, argv, opts, &manual);
+	parse_options(argc, argv, &cmd_desc);
 
 	printf("Tools path: %s\n", ice_home());
 	printf("Platform:   %s-%s\n", ICE_PLATFORM_OS, ICE_PLATFORM_ARCH);
@@ -126,7 +128,9 @@ static const struct cmd_manual manual = {
 
 int cmd_tools(int argc, const char **argv)
 {
-	argc = parse_options(argc, argv, cmd_tools_opts, &manual);
+	struct cmd_desc cmd_desc = {.opts = cmd_tools_opts, .manual = &manual};
+
+	argc = parse_options(argc, argv, &cmd_desc);
 	if (tools_fn)
 		return tools_fn(argc, argv);
 

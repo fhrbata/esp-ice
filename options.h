@@ -183,9 +183,10 @@ struct option {
 	{OPTION_END, 0, NULL, NULL, (argh), NULL, NULL, (c), NULL, NULL, NULL}
 
 struct cmd_manual;
+struct cmd_desc;
 
 /**
- * @brief Parse command-line options according to the option table.
+ * @brief Parse command-line options according to a command descriptor.
  *
  * Before the CLI walk, every option with a @c config_key or @c env_var
  * is seeded: config_get() / config_get_all() populates the C variable
@@ -198,21 +199,24 @@ struct cmd_manual;
  * non-option argument.
  *
  * On -h, a short usage is printed and the process exits 0.  On
- * --help, if @p manual is non-NULL, print_manual() renders the full
- * man-style page; otherwise --help falls back to the short usage.
+ * --help, if @c desc->manual is non-NULL, print_manual() renders the
+ * full man-style page; otherwise --help falls back to the short usage.
  *
  * On --ice-complete, all flags, subcommands and positional
  * completions are printed to stdout and the process exits 0.
  *
  * @param argc    Argument count.
  * @param argv    Argument vector (modified in-place).
- * @param opts    NULL-terminated option table (OPT_END sentinel).
- * @param manual  Command metadata (name, summary, description).
- *                When NULL, falls back to argv[0] for the name
- *                and --help behaves like -h.
+ * @param desc    Command descriptor carrying @c opts, @c manual and
+ *                (optionally) @c subcommands.  Callers that don't have
+ *                a stable descriptor can pass a compound literal:
+ *                @code
+ *                parse_options(argc, argv,
+ *                    &(const struct cmd_desc){
+ *                        .opts = opts, .manual = &manual });
+ *                @endcode
  * @return New argc (number of remaining arguments in argv).
  */
-int parse_options(int argc, const char **argv, const struct option *opts,
-		  const struct cmd_manual *manual);
+int parse_options(int argc, const char **argv, const struct cmd_desc *desc);
 
 #endif /* OPTIONS_H */

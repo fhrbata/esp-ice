@@ -19,8 +19,6 @@
 
 int main(void)
 {
-	static const char *const usage[] = {"prog", NULL};
-
 	/* OPT_BOOL via short form. */
 	{
 		int verbose = 0;
@@ -28,8 +26,9 @@ int main(void)
 		    OPT_BOOL('v', "verbose", &verbose, "be loud"),
 		    OPT_END(),
 		};
+		struct cmd_desc cmd_desc = {.opts = opts};
 		const char *argv[] = {"prog", "-v"};
-		int argc = parse_options(2, argv, opts, NULL);
+		int argc = parse_options(2, argv, &cmd_desc);
 		tap_check(argc == 0);
 		tap_check(verbose == 1);
 		tap_done("OPT_BOOL via short form sets the flag");
@@ -42,8 +41,9 @@ int main(void)
 		    OPT_BOOL('v', "verbose", &verbose, "be loud"),
 		    OPT_END(),
 		};
+		struct cmd_desc cmd_desc = {.opts = opts};
 		const char *argv[] = {"prog", "--verbose"};
-		int argc = parse_options(2, argv, opts, NULL);
+		int argc = parse_options(2, argv, &cmd_desc);
 		tap_check(argc == 0);
 		tap_check(verbose == 1);
 		tap_done("OPT_BOOL via long form sets the flag");
@@ -56,8 +56,9 @@ int main(void)
 		    OPT_STRING('B', "build-dir", &path, "path", "where", NULL),
 		    OPT_END(),
 		};
+		struct cmd_desc cmd_desc = {.opts = opts};
 		const char *argv[] = {"prog", "-B", "out"};
-		int argc = parse_options(3, argv, opts, NULL);
+		int argc = parse_options(3, argv, &cmd_desc);
 		tap_check(argc == 0);
 		tap_check(path != NULL && strcmp(path, "out") == 0);
 		tap_done("OPT_STRING short form takes value from next argv");
@@ -70,8 +71,9 @@ int main(void)
 		    OPT_STRING('B', "build-dir", &path, "path", "where", NULL),
 		    OPT_END(),
 		};
+		struct cmd_desc cmd_desc = {.opts = opts};
 		const char *argv[] = {"prog", "-Bout"};
-		int argc = parse_options(2, argv, opts, NULL);
+		int argc = parse_options(2, argv, &cmd_desc);
 		tap_check(argc == 0);
 		tap_check(path != NULL && strcmp(path, "out") == 0);
 		tap_done("OPT_STRING short form takes attached value (-Bval)");
@@ -84,8 +86,9 @@ int main(void)
 		    OPT_STRING('B', "build-dir", &path, "path", "where", NULL),
 		    OPT_END(),
 		};
+		struct cmd_desc cmd_desc = {.opts = opts};
 		const char *argv[] = {"prog", "--build-dir=out"};
-		int argc = parse_options(2, argv, opts, NULL);
+		int argc = parse_options(2, argv, &cmd_desc);
 		tap_check(argc == 0);
 		tap_check(path != NULL && strcmp(path, "out") == 0);
 		tap_done(
@@ -99,8 +102,9 @@ int main(void)
 		    OPT_STRING('B', "build-dir", &path, "path", "where", NULL),
 		    OPT_END(),
 		};
+		struct cmd_desc cmd_desc = {.opts = opts};
 		const char *argv[] = {"prog", "--build-dir", "out"};
-		int argc = parse_options(3, argv, opts, NULL);
+		int argc = parse_options(3, argv, &cmd_desc);
 		tap_check(argc == 0);
 		tap_check(path != NULL && strcmp(path, "out") == 0);
 		tap_done("OPT_STRING long form takes value from next argv");
@@ -113,8 +117,9 @@ int main(void)
 		    OPT_INT('n', "count", &n, "n", "how many", NULL),
 		    OPT_END(),
 		};
+		struct cmd_desc cmd_desc = {.opts = opts};
 		const char *argv[] = {"prog", "-n", "42"};
-		int argc = parse_options(3, argv, opts, NULL);
+		int argc = parse_options(3, argv, &cmd_desc);
 		tap_check(argc == 0);
 		tap_check(n == 42);
 		tap_done("OPT_INT parses the value");
@@ -129,9 +134,10 @@ int main(void)
 				    "repeatable", NULL),
 		    OPT_END(),
 		};
+		struct cmd_desc cmd_desc = {.opts = opts};
 		const char *argv[] = {"prog",	  "-D",	 "A=1",
 				      "--define", "B=2", "--define=C=3"};
-		int argc = parse_options(6, argv, opts, NULL);
+		int argc = parse_options(6, argv, &cmd_desc);
 		tap_check(argc == 0);
 		tap_check(list.nr == 3);
 		tap_check(strcmp(list.v[0], "A=1") == 0);
@@ -148,8 +154,9 @@ int main(void)
 		    OPT_BOOL('v', "verbose", &verbose, "be loud"),
 		    OPT_END(),
 		};
+		struct cmd_desc cmd_desc = {.opts = opts};
 		const char *argv[] = {"prog", "-v", "first", "second"};
-		int argc = parse_options(4, argv, opts, NULL);
+		int argc = parse_options(4, argv, &cmd_desc);
 		tap_check(argc == 2);
 		tap_check(strcmp(argv[0], "first") == 0);
 		tap_check(strcmp(argv[1], "second") == 0);
@@ -165,8 +172,9 @@ int main(void)
 		    OPT_BOOL('v', "verbose", &verbose, "be loud"),
 		    OPT_END(),
 		};
+		struct cmd_desc cmd_desc = {.opts = opts};
 		const char *argv[] = {"prog", "first", "-v"};
-		int argc = parse_options(3, argv, opts, NULL);
+		int argc = parse_options(3, argv, &cmd_desc);
 		tap_check(argc == 2);
 		tap_check(strcmp(argv[0], "first") == 0);
 		tap_check(strcmp(argv[1], "-v") == 0);
@@ -182,8 +190,9 @@ int main(void)
 		    OPT_BOOL('v', "verbose", &verbose, "be loud"),
 		    OPT_END(),
 		};
+		struct cmd_desc cmd_desc = {.opts = opts};
 		const char *argv[] = {"prog", "-v", "--", "-v"};
-		int argc = parse_options(4, argv, opts, NULL);
+		int argc = parse_options(4, argv, &cmd_desc);
 		tap_check(argc == 1);
 		tap_check(strcmp(argv[0], "-v") == 0);
 		tap_check(verbose == 1);
@@ -202,13 +211,14 @@ int main(void)
 				   "core.build-dir", NULL, "where", NULL, NULL),
 		    OPT_END(),
 		};
+		struct cmd_desc cmd_desc = {.opts = opts};
 		const char *argv[] = {"prog"};
 		int argc;
 
 		config_release(&config);
 		config_set(&config, "core.build-dir", "from-config",
 			   CONFIG_SCOPE_USER);
-		argc = parse_options(1, argv, opts, NULL);
+		argc = parse_options(1, argv, &cmd_desc);
 		tap_check(argc == 0);
 		tap_check(path != NULL && strcmp(path, "from-config") == 0);
 		config_release(&config);
@@ -224,13 +234,14 @@ int main(void)
 				   "core.build-dir", NULL, "where", NULL, NULL),
 		    OPT_END(),
 		};
+		struct cmd_desc cmd_desc = {.opts = opts};
 		const char *argv[] = {"prog", "-B", "cli"};
 		int argc;
 
 		config_release(&config);
 		config_set(&config, "core.build-dir", "from-config",
 			   CONFIG_SCOPE_USER);
-		argc = parse_options(3, argv, opts, NULL);
+		argc = parse_options(3, argv, &cmd_desc);
 		tap_check(argc == 0);
 		tap_check(path != NULL && strcmp(path, "cli") == 0);
 		config_release(&config);
@@ -246,6 +257,7 @@ int main(void)
 				   "where", NULL, NULL),
 		    OPT_END(),
 		};
+		struct cmd_desc cmd_desc = {.opts = opts};
 		const char *argv[] = {"prog"};
 		static char env[] = "ICE_TEST_BUILD_DIR=from-env";
 		static char clear[] = "ICE_TEST_BUILD_DIR=";
@@ -255,7 +267,7 @@ int main(void)
 		config_set(&config, "core.build-dir", "from-config",
 			   CONFIG_SCOPE_USER);
 		putenv(env);
-		argc = parse_options(1, argv, opts, NULL);
+		argc = parse_options(1, argv, &cmd_desc);
 		tap_check(argc == 0);
 		tap_check(path != NULL && strcmp(path, "from-env") == 0);
 		putenv(clear);
@@ -271,12 +283,13 @@ int main(void)
 				 "be loud", NULL),
 		    OPT_END(),
 		};
+		struct cmd_desc cmd_desc = {.opts = opts};
 		const char *argv[] = {"prog"};
 		int argc;
 
 		config_release(&config);
 		config_set(&config, "core.verbose", "yes", CONFIG_SCOPE_USER);
-		argc = parse_options(1, argv, opts, NULL);
+		argc = parse_options(1, argv, &cmd_desc);
 		tap_check(argc == 0);
 		tap_check(verbose == 1);
 		config_release(&config);
@@ -295,13 +308,14 @@ int main(void)
 					NULL, NULL),
 		    OPT_END(),
 		};
+		struct cmd_desc cmd_desc = {.opts = opts};
 		const char *argv[] = {"prog", "-D", "C=3"};
 		int argc;
 
 		config_release(&config);
 		config_add(&config, "cmake.define", "A=1", CONFIG_SCOPE_USER);
 		config_add(&config, "cmake.define", "B=2", CONFIG_SCOPE_LOCAL);
-		argc = parse_options(3, argv, opts, NULL);
+		argc = parse_options(3, argv, &cmd_desc);
 		tap_check(argc == 0);
 		tap_check(list.nr == 3);
 		tap_check(strcmp(list.v[0], "A=1") == 0);

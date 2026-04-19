@@ -74,9 +74,11 @@ static int cmd_target_set(int argc, const char **argv)
 
 	const char *target;
 	struct sbuf define = SBUF_INIT;
+	struct cmd_desc cmd_desc = {.opts = cmd_target_set_opts,
+				    .manual = &manual};
 	int rc;
 
-	argc = parse_options(argc, argv, cmd_target_set_opts, &manual);
+	argc = parse_options(argc, argv, &cmd_desc);
 
 	if (argc < 1)
 		die("missing <target> argument");
@@ -113,8 +115,9 @@ static int cmd_target_list(int argc, const char **argv)
 {
 	static const struct cmd_manual manual = {.name = "ice target list"};
 	struct option opts[] = {OPT_END()};
+	struct cmd_desc cmd_desc = {.opts = opts, .manual = &manual};
 
-	parse_options(argc, argv, opts, &manual);
+	parse_options(argc, argv, &cmd_desc);
 
 	printf("Supported targets:\n");
 	for (const char *const *t = ice_supported_targets; *t; t++)
@@ -131,9 +134,10 @@ static int cmd_target_info(int argc, const char **argv)
 {
 	static const struct cmd_manual manual = {.name = "ice target info"};
 	struct option opts[] = {OPT_END()};
+	struct cmd_desc cmd_desc = {.opts = opts, .manual = &manual};
 	const char *target;
 
-	parse_options(argc, argv, opts, &manual);
+	parse_options(argc, argv, &cmd_desc);
 
 	target = config_get("target");
 	if (!target || !*target) {
@@ -180,7 +184,9 @@ static const struct cmd_manual manual = {
 
 int cmd_target(int argc, const char **argv)
 {
-	argc = parse_options(argc, argv, cmd_target_opts, &manual);
+	struct cmd_desc cmd_desc = {.opts = cmd_target_opts, .manual = &manual};
+
+	argc = parse_options(argc, argv, &cmd_desc);
 	if (target_fn)
 		return target_fn(argc, argv);
 

@@ -159,9 +159,11 @@ int cmd_image_create(int argc, const char **argv)
 {
 	struct sbuf elf = SBUF_INIT;
 	struct sbuf img = SBUF_INIT;
+	struct cmd_desc cmd_desc = {.opts = cmd_image_create_opts,
+				    .manual = &manual};
 	FILE *fp;
 
-	argc = parse_options(argc, argv, cmd_image_create_opts, &manual);
+	argc = parse_options(argc, argv, &cmd_desc);
 
 	if (argc < 1)
 		die("missing input ELF path");

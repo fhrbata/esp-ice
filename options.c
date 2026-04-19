@@ -292,9 +292,10 @@ static int set_value(const struct option *o, const char *val)
 	}
 }
 
-int parse_options(int argc, const char **argv, const struct option *opts,
-		  const struct cmd_manual *manual)
+int parse_options(int argc, const char **argv, const struct cmd_desc *desc)
 {
+	const struct option *opts = desc->opts;
+	const struct cmd_manual *manual = desc->manual;
 	const char *name = (manual && manual->name) ? manual->name : argv[0];
 	int out = 0;
 	int i;

@@ -51,7 +51,9 @@ static const struct option cmd_ldgen_opts[] = {
 
 int cmd_ldgen(int argc, const char **argv)
 {
-	argc = parse_options(argc, argv, cmd_ldgen_opts, &manual);
+	struct cmd_desc cmd_desc = {.opts = cmd_ldgen_opts, .manual = &manual};
+
+	argc = parse_options(argc, argv, &cmd_desc);
 	if (argc < 1)
 		die("no input files; see 'ice ldgen --help'");
 

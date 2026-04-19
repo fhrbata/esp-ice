@@ -258,10 +258,11 @@ static int do_unset(enum config_scope scope, const char *key)
 
 int cmd_config(int argc, const char **argv)
 {
+	struct cmd_desc cmd_desc = {.opts = cmd_config_opts, .manual = &manual};
 	int modes;
 	enum config_scope scope;
 
-	argc = parse_options(argc, argv, cmd_config_opts, &manual);
+	argc = parse_options(argc, argv, &cmd_desc);
 
 	modes = opt_list + opt_add + opt_unset;
 	if (modes > 1)
