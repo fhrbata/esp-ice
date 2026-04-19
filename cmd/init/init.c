@@ -254,6 +254,338 @@ done:
 	sbuf_release(&old);
 }
 
+/** Build the cmake @b{-D<key>=<value>} set from the active profile.
+ *  Caller owns @p out and must svec_clear() it after use. */
+static void build_define_set(struct svec *out)
+{
+	const char *chip = config_get("project.chip");
+	const char *sdkconfig = config_get("project.sdkconfig");
+	struct config_entry **entries;
+	int n;
+
+	if (chip)
+		svec_pushf(out, "IDF_TARGET=%s", chip);
+	if (sdkconfig)
+		svec_pushf(out, "SDKCONFIG=%s", sdkconfig);
+
+	n = config_get_all("project.sdkconfig-defaults", &entries);
+	if (n > 0) {
+		struct sbuf e = SBUF_INIT;
+
+		sbuf_addstr(&e, "SDKCONFIG_DEFAULTS=");
+		for (int i = 0; i < n; i++) {
+			if (i > 0)
+				sbuf_addch(&e, ';');
+			sbuf_addstr(&e, entries[i]->value);
+		}
+		svec_push(out, e.buf);
+		sbuf_release(&e);
+	}
+	free(entries);
+
+	n = config_get_all("project.define", &entries);
+	for (int i = 0; i < n; i++)
+		svec_push(out, entries[i]->value);
+	free(entries);
+}
+
+/** Run cmake's configure step on the active profile. */
+static int cmake_configure(void)
+{
+	const char *build_dir = config_get("project.build-dir");
+	const char *generator = config_get("project.generator");
+	struct svec defines = SVEC_INIT;
+	struct svec args = SVEC_INIT;
+	struct sbuf logdir = SBUF_INIT;
+	struct process proc = PROCESS_INIT;
+	int rc;
+
+	if (access("CMakeLists.txt", F_OK) != 0)
+		die("no @b{CMakeLists.txt} in current directory");
+
+	build_define_set(&defines);
+
+	sbuf_addf(&logdir, "%s/log", build_dir);
+	mkdir(build_dir, 0755);
+	mkdir(logdir.buf, 0755);
+	sbuf_release(&logdir);
+
+	svec_push(&args, "cmake");
+	svec_push(&args, "-G");
+	svec_push(&args, generator);
+	svec_push(&args, "-B");
+	svec_push(&args, build_dir);
+	for (size_t i = 0; i < defines.nr; i++)
+		svec_pushf(&args, "-D%s", defines.v[i]);
+
+	proc.argv = args.v;
+	rc = process_run(&proc);
+
+	if (rc) {
+		struct sbuf cache = SBUF_INIT;
+
+		sbuf_addf(&cache, "%s/CMakeCache.txt", build_dir);
+		unlink(cache.buf);
+		sbuf_release(&cache);
+	}
+
+	svec_clear(&args);
+	svec_clear(&defines);
+	return rc;
+}
+
+/* ------------------------------------------------------------------ */
+/* build.ninja patching -- post-configure fixups                       */
+/*   gen_esp32part.py   -> ice idf partition-table                     */
+/*   esptool elf2image  -> ice image create                            */
+/*                                                                     */
+/* IDF's cmake files wire these scripts into build.ninja COMMAND       */
+/* lines.  We rewrite them to call the native ice equivalents so no    */
+/* Python is needed at build time.  This is a temporary hack that      */
+/* lives here (rather than being replayed on every build) because      */
+/* cmake configure is the only thing that regenerates build.ninja, so  */
+/* doing the patch once after init is sufficient.  Re-running ice init */
+/* re-applies it.                                                      */
+/* ------------------------------------------------------------------ */
+
+static const char *mem_find(const char *p, const char *end, const char *needle,
+			    size_t nlen)
+{
+	for (; p + nlen <= end; p++)
+		if (!memcmp(p, needle, nlen))
+			return p;
+	return NULL;
+}
+
+static void patch_command_line(struct sbuf *out, const char *line, size_t len)
+{
+	static const char needle[] = "gen_esp32part.py";
+	static const size_t nlen = sizeof(needle) - 1;
+	const char *p = line;
+	const char *end = line + len;
+	int occurrence = 0;
+
+	while (p < end) {
+		const char *found = mem_find(p, end, needle, nlen);
+		if (!found) {
+			sbuf_add(out, p, end - p);
+			return;
+		}
+
+		const char *script_start = found;
+		while (script_start > p && script_start[-1] != ' ')
+			script_start--;
+
+		const char *python_start = script_start;
+		if (python_start > p)
+			python_start--;
+		while (python_start > p && python_start[-1] != ' ')
+			python_start--;
+
+		sbuf_add(out, p, python_start - p);
+
+		/*
+		 * IDF calls gen_esp32part.py twice per COMMAND line:
+		 *   1st call: generate  -- replace with ice idf partition-table
+		 *   2nd call: display   -- replace with true
+		 */
+		if (occurrence == 0) {
+			const char *exe = process_exe();
+
+			sbuf_addstr(out, exe ? exe : "ice");
+			sbuf_addstr(out, " idf partition-table");
+		} else {
+			sbuf_addstr(out, "true");
+		}
+		occurrence++;
+
+		p = found + nlen;
+	}
+}
+
+static void patch_ninja_partition(const char *build_dir)
+{
+	static const char needle[] = "gen_esp32part.py";
+	static const size_t nlen = sizeof(needle) - 1;
+	struct sbuf ninja_path = SBUF_INIT;
+	struct sbuf content = SBUF_INIT;
+	struct sbuf out = SBUF_INIT;
+	const char *p, *end, *nl;
+	int modified = 0;
+
+	sbuf_addf(&ninja_path, "%s/build.ninja", build_dir);
+
+	if (sbuf_read_file(&content, ninja_path.buf) < 0)
+		goto done;
+
+	p = content.buf;
+	end = content.buf + content.len;
+
+	while (p < end) {
+		nl = memchr(p, '\n', end - p);
+		if (!nl)
+			nl = end;
+
+		size_t line_len = (size_t)(nl - p);
+
+		if (line_len > 11 && !memcmp(p, "  COMMAND =", 11) &&
+		    mem_find(p, nl, needle, nlen)) {
+			patch_command_line(&out, p, line_len);
+			modified = 1;
+		} else {
+			sbuf_add(&out, p, line_len);
+		}
+
+		if (nl < end)
+			sbuf_addch(&out, '\n');
+		p = nl + (nl < end ? 1 : 0);
+	}
+
+	if (modified)
+		write_file_atomic(ninja_path.buf, out.buf, out.len);
+
+done:
+	sbuf_release(&ninja_path);
+	sbuf_release(&content);
+	sbuf_release(&out);
+}
+
+/*
+ * Walk back @p n whitespace-delimited tokens from @p p toward
+ * @p line_start, returning a pointer to the start of the token @p n
+ * positions back.
+ */
+static const char *back_n_tokens(const char *p, const char *line_start, int n)
+{
+	while (n-- > 0) {
+		while (p > line_start && p[-1] == ' ')
+			p--;
+		while (p > line_start && p[-1] != ' ')
+			p--;
+	}
+	return p;
+}
+
+/*
+ * Replace the esptool elf2image invocation on a COMMAND line with
+ * the native `ice image create` equivalent.  IDF's COMMAND line has
+ * the form:
+ *
+ *   cd <dir> && <python> -m esptool --chip <chip> elf2image <args> \
+ *       -o <out.bin> <in.elf> && cmake -E echo "..." && ...
+ *
+ * We rewrite `<python> -m esptool` to `ice image create`, then
+ * re-emit the captured `--chip <chip>` argument (which lives between
+ * `esptool` and `elf2image`) plus everything after `elf2image`.
+ */
+static void patch_elf2image_line(struct sbuf *out, const char *line, size_t len)
+{
+	static const char e2i_needle[] = "elf2image";
+	static const size_t e2ilen = sizeof(e2i_needle) - 1;
+	static const char esptool_needle[] = "esptool";
+	static const size_t elen = sizeof(esptool_needle) - 1;
+	static const char chip_needle[] = "--chip";
+	static const size_t chip_nlen = sizeof(chip_needle) - 1;
+
+	const char *end = line + len;
+	const char *etool = mem_find(line, end, esptool_needle, elen);
+
+	if (!etool)
+		goto passthrough;
+
+	const char *e2i = mem_find(etool + elen, end, e2i_needle, e2ilen);
+	if (!e2i)
+		goto passthrough;
+
+	const char *etool_start = etool;
+	while (etool_start > line && etool_start[-1] != ' ')
+		etool_start--;
+	const char *invoke_start = back_n_tokens(etool_start, line, 2);
+
+	const char *chip_arg =
+	    mem_find(etool + elen, e2i, chip_needle, chip_nlen);
+	const char *chip_val_start = NULL;
+	const char *chip_val_end = NULL;
+	if (chip_arg) {
+		chip_val_start = chip_arg + chip_nlen;
+		while (chip_val_start < e2i && *chip_val_start == ' ')
+			chip_val_start++;
+		chip_val_end = chip_val_start;
+		while (chip_val_end < e2i && *chip_val_end != ' ')
+			chip_val_end++;
+	}
+
+	sbuf_add(out, line, invoke_start - line);
+
+	{
+		const char *exe = process_exe();
+
+		sbuf_addstr(out, exe ? exe : "ice");
+	}
+	sbuf_addstr(out, " image create");
+	if (chip_val_start && chip_val_end > chip_val_start) {
+		sbuf_addstr(out, " --chip ");
+		sbuf_add(out, chip_val_start, chip_val_end - chip_val_start);
+	}
+
+	sbuf_add(out, e2i + e2ilen, end - (e2i + e2ilen));
+	return;
+
+passthrough:
+	sbuf_add(out, line, len);
+}
+
+static void patch_ninja_elf2image(const char *build_dir)
+{
+	static const char esptool_needle[] = "esptool";
+	static const char e2i_needle[] = "elf2image";
+	static const size_t elen = sizeof(esptool_needle) - 1;
+	static const size_t e2ilen = sizeof(e2i_needle) - 1;
+
+	struct sbuf ninja_path = SBUF_INIT;
+	struct sbuf content = SBUF_INIT;
+	struct sbuf out = SBUF_INIT;
+	const char *p, *end, *nl;
+	int modified = 0;
+
+	sbuf_addf(&ninja_path, "%s/build.ninja", build_dir);
+
+	if (sbuf_read_file(&content, ninja_path.buf) < 0)
+		goto done;
+
+	p = content.buf;
+	end = content.buf + content.len;
+
+	while (p < end) {
+		nl = memchr(p, '\n', end - p);
+		if (!nl)
+			nl = end;
+
+		size_t line_len = (size_t)(nl - p);
+
+		if (line_len > 11 && !memcmp(p, "  COMMAND =", 11) &&
+		    mem_find(p, nl, esptool_needle, elen) &&
+		    mem_find(p, nl, e2i_needle, e2ilen)) {
+			patch_elf2image_line(&out, p, line_len);
+			modified = 1;
+		} else {
+			sbuf_add(&out, p, line_len);
+		}
+
+		if (nl < end)
+			sbuf_addch(&out, '\n');
+		p = nl + (nl < end ? 1 : 0);
+	}
+
+	if (modified)
+		write_file_atomic(ninja_path.buf, out.buf, out.len);
+
+done:
+	sbuf_release(&ninja_path);
+	sbuf_release(&content);
+	sbuf_release(&out);
+}
+
 /** Persist the profile under @b{[project "<name>"]} in @b{.iceconfig}.
  *
  *  Only writes to the file -- the process-wide config is not touched.
@@ -421,17 +753,24 @@ int cmd_init(int argc, const char **argv)
 	}
 
 	/*
-	 * Read the just-persisted profile back into cmake.c's state via
+	 * Read the just-persisted profile back into process state via
 	 * the same load_profile() that build/flash/etc. use.  This sets
-	 * up PATH, populates the cmake -D set (IDF_TARGET, SDKCONFIG,
-	 * SDKCONFIG_DEFAULTS, user defines), and seeds project-derived
-	 * keys.  Avoids duplicating that construction here.
+	 * up PATH so the cmake configure below can find ninja and the
+	 * cross-compiler, and populates the project.* keys that
+	 * build_define_set consumes.
 	 */
 	load_profile(name);
 
 	putenv(envstr);
 
-	rc = ensure_build_directory(1);
+	rc = cmake_configure();
+	if (rc == 0) {
+		const char *bdir = config_get("project.build-dir");
+
+		patch_ninja_partition(bdir);
+		patch_ninja_elf2image(bdir);
+	}
+
 	free(idf_path);
 	sbuf_release(&sdkconfig_buf);
 	sbuf_release(&build_dir_buf);

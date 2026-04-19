@@ -59,6 +59,9 @@ const struct cmd_desc cmd_menuconfig_desc = {
 int cmd_menuconfig(int argc, const char **argv)
 {
 	const char *name;
+	const char *build_dir;
+	struct process proc = PROCESS_INIT;
+	const char *cmake_argv[6];
 
 	argc = parse_options(argc, argv, &cmd_menuconfig_desc);
 	if (argc > 1)
@@ -66,5 +69,16 @@ int cmd_menuconfig(int argc, const char **argv)
 	name = argc >= 1 ? argv[0] : "default";
 
 	load_profile(name);
-	return run_cmake_target("menuconfig", "menuconfig", 1);
+	require_project_initialized();
+
+	build_dir = config_get("project.build-dir");
+	cmake_argv[0] = "cmake";
+	cmake_argv[1] = "--build";
+	cmake_argv[2] = build_dir;
+	cmake_argv[3] = "--target";
+	cmake_argv[4] = "menuconfig";
+	cmake_argv[5] = NULL;
+
+	proc.argv = cmake_argv;
+	return process_run(&proc);
 }
