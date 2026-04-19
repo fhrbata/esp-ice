@@ -550,62 +550,87 @@ int config_write_file(const struct config *c, enum config_scope scope,
 		      const char *path)
 {
 	struct sbuf out = SBUF_INIT;
-	struct svec sections = SVEC_INIT;
+	struct svec headers = SVEC_INIT;
 	FILE *fp;
 	size_t written;
 
-	/* Collect unique section names (order of first appearance). */
+	/*
+	 * Group by the key's parent path -- everything up to the last
+	 * dot.  "alias.b" has parent "alias"; "project.default.chip"
+	 * has parent "project.default".  A parent with a dot is written
+	 * as a git-style [section "subsection"] header; the subsection
+	 * carries characters (. in particular) that a bare section
+	 * header's key-validator would reject on reload.
+	 */
 	for (int i = 0; i < c->nr; i++) {
-		const char *dot;
-		char *sec;
+		const char *last_dot;
+		char *hdr;
 		int already;
 
 		if (c->entries[i].scope != scope)
 			continue;
 
-		dot = strchr(c->entries[i].key, '.');
-		if (!dot)
+		last_dot = strrchr(c->entries[i].key, '.');
+		if (!last_dot)
 			continue; /* section-less keys are not written */
 
-		sec = sbuf_strndup(c->entries[i].key,
-				   (size_t)(dot - c->entries[i].key));
+		hdr = sbuf_strndup(c->entries[i].key,
+				   (size_t)(last_dot - c->entries[i].key));
 
 		already = 0;
-		for (size_t j = 0; j < sections.nr; j++) {
-			if (!strcmp(sections.v[j], sec)) {
+		for (size_t j = 0; j < headers.nr; j++) {
+			if (!strcmp(headers.v[j], hdr)) {
 				already = 1;
 				break;
 			}
 		}
 		if (!already)
-			svec_push(&sections, sec);
-		free(sec);
+			svec_push(&headers, hdr);
+		free(hdr);
 	}
 
-	for (size_t s = 0; s < sections.nr; s++) {
-		const char *section = sections.v[s];
-		size_t sec_len = strlen(section);
+	for (size_t h = 0; h < headers.nr; h++) {
+		const char *header = headers.v[h];
+		size_t hdr_len = strlen(header);
+		const char *dot = strchr(header, '.');
 
-		if (s > 0)
+		if (h > 0)
 			sbuf_addch(&out, '\n');
-		sbuf_addf(&out, "[%s]\n", section);
+
+		if (dot) {
+			sbuf_addch(&out, '[');
+			sbuf_add(&out, header, dot - header);
+			sbuf_addstr(&out, " \"");
+			for (const char *p = dot + 1; *p; p++) {
+				if (*p == '"' || *p == '\\')
+					sbuf_addch(&out, '\\');
+				sbuf_addch(&out, *p);
+			}
+			sbuf_addstr(&out, "\"]\n");
+		} else {
+			sbuf_addf(&out, "[%s]\n", header);
+		}
 
 		for (int i = 0; i < c->nr; i++) {
 			const char *key = c->entries[i].key;
 
 			if (c->entries[i].scope != scope)
 				continue;
-			if (strncmp(key, section, sec_len) != 0 ||
-			    key[sec_len] != '.')
+			if (strncmp(key, header, hdr_len) != 0 ||
+			    key[hdr_len] != '.')
+				continue;
+			/* Only direct children of this header; deeper
+			 * nesting belongs to a different header entry. */
+			if (strchr(key + hdr_len + 1, '.'))
 				continue;
 
-			sbuf_addf(&out, "\t%s = ", key + sec_len + 1);
+			sbuf_addf(&out, "\t%s = ", key + hdr_len + 1);
 			write_value(c->entries[i].value, &out);
 			sbuf_addch(&out, '\n');
 		}
 	}
 
-	svec_clear(&sections);
+	svec_clear(&headers);
 
 	fp = fopen(path, "w");
 	if (!fp) {
