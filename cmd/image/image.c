@@ -50,8 +50,3 @@ const struct cmd_desc cmd_image_desc = {
     .manual = &image_manual,
     .subcommands = image_subs,
 };
-
-int cmd_image(int argc, const char **argv)
-{
-	return ice_dispatch(argc, argv, &cmd_image_desc);
-}

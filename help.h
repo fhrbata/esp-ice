@@ -48,13 +48,6 @@ struct cmd_manual {
 	const char *extras; /**< Optional; extra sections with H_SECTION. */
 
 	/**
-	 * When non-zero, print_manual() auto-emits a COMMANDS section
-	 * listing every entry in ice_commands[] with its summary.
-	 * Used by the top-level `ice --help` manual.
-	 */
-	int list_commands;
-
-	/**
 	 * When non-zero, print_manual() auto-emits an ALIASES section
 	 * listing every @c alias.<name> defined in the active config
 	 * (skipped silently if the user has no aliases).

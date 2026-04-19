@@ -308,8 +308,7 @@ const struct cmd_manual ice_root_manual = {
 	       "a single self-contained binary -- no Python, no "
 	       "@b{export.sh}, no virtual environments."),
 
-	.list_commands = 1,
-	.list_aliases  = 1,
+	.list_aliases = 1,
 
 	.examples =
 	H_EXAMPLE("ice idf clone && ice idf checkout v5.4")

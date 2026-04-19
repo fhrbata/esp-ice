@@ -155,8 +155,3 @@ const struct cmd_desc cmd_tools_desc = {
     .manual = &tools_manual,
     .subcommands = tools_subs,
 };
-
-int cmd_tools(int argc, const char **argv)
-{
-	return ice_dispatch(argc, argv, &cmd_tools_desc);
-}

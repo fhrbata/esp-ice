@@ -1,19 +1,21 @@
 # cmd/
 
 Each subdirectory here is one subcommand of the top-level `ice` binary.
-The option table in [`../ice.c`](../ice.c) maps `ice <name>` to the
-handler in `cmd/<name>/<name>.c` via `OPT_SUBCOMMAND`, similar to how
-git dispatches `commit`, `log`, etc.
+`ice_subs[]` in [`../ice.c`](../ice.c) lists the top-level descriptor
+for every `ice <name>`; dispatch walks that tree via `ice_dispatch()`,
+similar to how git dispatches `commit`, `log`, etc.
 
 ## Layout
 
 - One subdirectory per subcommand: `cmd/<name>/<name>.c`.
 - A single entry point `int cmd_<name>(int argc, const char **argv)`.
-- A per-command `static const struct cmd_manual manual` powers
+- A per-command `static const struct cmd_manual <name>_manual` powers
   `ice <name> --help` and `ice help <name>`.
-- A `static const struct option` table drives option parsing,
-  `-h` usage, `--help` manual synopsis, and `--ice-complete`
+- A `static const struct option cmd_<name>_opts[]` drives option
+  parsing, `-h` usage, `--help` manual synopsis, and `--ice-complete`
   shell completion -- all from one declaration.
+- A file-scope `const struct cmd_desc cmd_<name>_desc` ties the three
+  together and is referenced from `ice_subs[]`.
 
 The wiring is fully explicit: there is no build-time scan, constructor
 magic, or code generation.  Adding a command touches exactly three
@@ -36,7 +38,7 @@ Create `cmd/greet/greet.c`:
  */
 #include "ice.h"
 
-static const struct cmd_manual manual = {
+static const struct cmd_manual greet_manual = {
 	.name = "ice greet",
 
 	.description =
@@ -50,17 +52,23 @@ static const struct cmd_manual manual = {
 
 static int opt_loud;
 
-static const struct option greet_opts[] = {
+static const struct option cmd_greet_opts[] = {
 	OPT_BOOL(0, "loud", &opt_loud, "shout the greeting"),
 	OPT_END_COMPLETE("name", NULL),
 };
 
+const struct cmd_desc cmd_greet_desc = {
+	.name   = "greet",
+	.fn     = cmd_greet,
+	.opts   = cmd_greet_opts,
+	.manual = &greet_manual,
+};
+
 int cmd_greet(int argc, const char **argv)
 {
-	struct cmd_desc cmd_desc = {.opts = greet_opts, .manual = &manual};
 	const char *name;
 
-	argc = parse_options(argc, argv, &cmd_desc);
+	argc = parse_options(argc, argv, &cmd_greet_desc);
 	if (argc != 1)
 		die("missing <name> argument");
 
@@ -82,22 +90,24 @@ Everything is driven by the option table:
   the usage line; the second argument is an optional completion
   callback (NULL lets the shell fall through to file completion)
 
-### 2. Declare the handler in `ice.h`
+### 2. Declare the handler and descriptor in `ice.h`
 
-Add the prototype next to the other `cmd_*` declarations:
+Add the prototypes next to the other `cmd_*` / `cmd_*_desc`
+declarations:
 
 ```c
 int cmd_greet(int argc, const char **argv);
+extern const struct cmd_desc cmd_greet_desc;
 ```
 
-No extern for the option table -- it stays `static`.
+The option table and manual stay `static` to `greet.c`.
 
-### 3. Register in `ice_global_opts[]` (in `ice.c`)
+### 3. Register in `ice_subs[]` (in `ice.c`)
 
-Add an `OPT_SUBCOMMAND` entry in alphabetical order:
+Add the descriptor pointer in alphabetical order:
 
 ```c
-OPT_SUBCOMMAND("greet", &ice_fn, cmd_greet, "print a greeting"),
+&cmd_greet_desc,
 ```
 
 ### 4. Add to the Makefile
@@ -164,9 +174,6 @@ OPT_INT_CFG('b', "baud", &baud, "rate",
 OPT_STRING_LIST_CFG('D', "define", &list, "key=val",
                     "cmake.define", NULL,
                     "repeatable", NULL, NULL),
-
-/* Subcommands (for namespace commands like `ice target`) */
-OPT_SUBCOMMAND("set", &fn_var, cmd_target_set, "set the target"),
 
 /* Terminators */
 OPT_END(),                              /* no positional metadata */
@@ -278,7 +285,7 @@ resulting binary; see [`../t/0001-sbuf.t`](../t/0001-sbuf.t) and
   options.
 - [`config/config.c`](config/config.c) -- multiple boolean flags plus
   positional arguments with completion callback.
-- [`target/target.c`](target/target.c) -- namespace command with
-  `OPT_SUBCOMMAND` dispatch to set/list/info subcommands.
+- [`target/target.c`](target/target.c) -- namespace command whose
+  `cmd_target_desc` lists set/list/info leaves in `target_subs[]`.
 - [`size/size.c`](size/size.c) -- string-valued options (`--target`,
   `--format`) plus a positional file argument.

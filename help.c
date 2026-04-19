@@ -21,12 +21,7 @@ static int is_bool_opt(enum option_type t) { return t == OPTION_BOOL; }
 
 static int has_options(const struct option *opts)
 {
-	if (!opts)
-		return 0;
-	for (const struct option *o = opts; o->type != OPTION_END; o++)
-		if (o->type != OPTION_SUBCOMMAND)
-			return 1;
-	return 0;
+	return opts && opts->type != OPTION_END;
 }
 
 /*
@@ -279,8 +274,6 @@ static void print_text(const char *body)
 static void print_options_body(const struct option *opts)
 {
 	for (const struct option *o = opts; o->type != OPTION_END; o++) {
-		if (o->type == OPTION_SUBCOMMAND)
-			continue;
 		fputs(INDENT, stdout);
 		if (o->short_opt)
 			printf("@b{-%c}", o->short_opt);
@@ -469,13 +462,8 @@ void print_manual(const char *cmd_name, const struct cmd_desc *desc)
 	summary = m ? m->summary : NULL;
 
 	if (opts) {
-		for (const struct option *o = opts; o->type != OPTION_END;
-		     o++) {
-			if (o->type == OPTION_SUBCOMMAND)
-				has_subcmds = 1;
-			else
-				has_flags = 1;
-		}
+		if (opts->type != OPTION_END)
+			has_flags = 1;
 		{
 			const struct option *end = opts;
 			while (end->type != OPTION_END)

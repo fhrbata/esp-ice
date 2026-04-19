@@ -42,31 +42,25 @@
 #ifndef OPTIONS_H
 #define OPTIONS_H
 
-typedef int (*subcmd_fn)(int argc, const char **argv);
-
 enum option_type {
 	OPTION_BOOL,
 	OPTION_STRING,
 	OPTION_STRING_LIST,
 	OPTION_INT,
-	OPTION_SUBCOMMAND, /**< Positional subcommand; sets subcmd_fn *. */
 	OPTION_END,
 };
 
 struct option {
 	enum option_type type;
 	int short_opt;		 /**< Single char: 'v', 'C', 0 for none. */
-	const char *long_opt;	 /**< Long name: "verbose", NULL for none.
-				  *   For SUBCOMMAND: the subcommand name. */
+	const char *long_opt;	 /**< Long name: "verbose", NULL for none. */
 	void *value;		 /**<
-				  * For BOOL/INT:          int *.
-				  * For STRING:            const char **.
-				  * For STRING_LIST:       struct svec *.
-				  * For SUBCOMMAND:        subcmd_fn * (set on match).
+				  * For BOOL/INT:    int *.
+				  * For STRING:      const char **.
+				  * For STRING_LIST: struct svec *.
 				  */
 	const char *argh;	 /**< Placeholder for help: "path", "n", etc. */
 	const char *help;	 /**< One-line description for -h output. */
-	subcmd_fn subcommand_fn; /**< For SUBCOMMAND: the handler function. */
 	void (*complete)(void);	 /**< Prints completion candidates to stdout.
 				  *   On a value-taking option: called when
 				  *   completing that option's value.
@@ -92,26 +86,16 @@ struct option {
 /* ------------------------------------------------------------------ */
 
 #define OPT_BOOL(s, l, v, h)                                                   \
-	{OPTION_BOOL, (s), (l), (v), NULL, (h), NULL, NULL, NULL, NULL, NULL}
+	{OPTION_BOOL, (s), (l), (v), NULL, (h), NULL, NULL, NULL, NULL}
 
 #define OPT_STRING(s, l, v, a, h, c)                                           \
-	{OPTION_STRING, (s), (l), (v), (a), (h), NULL, (c), NULL, NULL, NULL}
+	{OPTION_STRING, (s), (l), (v), (a), (h), (c), NULL, NULL, NULL}
 
 #define OPT_STRING_LIST(s, l, v, a, h, c)                                      \
-	{OPTION_STRING_LIST,                                                   \
-	 (s),                                                                  \
-	 (l),                                                                  \
-	 (v),                                                                  \
-	 (a),                                                                  \
-	 (h),                                                                  \
-	 NULL,                                                                 \
-	 (c),                                                                  \
-	 NULL,                                                                 \
-	 NULL,                                                                 \
-	 NULL}
+	{OPTION_STRING_LIST, (s), (l), (v), (a), (h), (c), NULL, NULL, NULL}
 
 #define OPT_INT(s, l, v, a, h, c)                                              \
-	{OPTION_INT, (s), (l), (v), (a), (h), NULL, (c), NULL, NULL, NULL}
+	{OPTION_INT, (s), (l), (v), (a), (h), (c), NULL, NULL, NULL}
 
 /* ------------------------------------------------------------------ */
 /* _CFG variants -- seed default from config/env, richer manual.       */
@@ -125,54 +109,19 @@ struct option {
 /* ------------------------------------------------------------------ */
 
 #define OPT_BOOL_CFG(s, l, v, cfg, env, h, ch)                                 \
-	{OPTION_BOOL, (s), (l), (v), NULL, (h), NULL, NULL, (cfg), (env), (ch)}
+	{OPTION_BOOL, (s), (l), (v), NULL, (h), NULL, (cfg), (env), (ch)}
 
 #define OPT_STRING_CFG(s, l, v, a, cfg, env, h, ch, c)                         \
-	{OPTION_STRING, (s), (l), (v), (a), (h), NULL, (c), (cfg), (env), (ch)}
+	{OPTION_STRING, (s), (l), (v), (a), (h), (c), (cfg), (env), (ch)}
 
 #define OPT_STRING_LIST_CFG(s, l, v, a, cfg, env, h, ch, c)                    \
-	{OPTION_STRING_LIST,                                                   \
-	 (s),                                                                  \
-	 (l),                                                                  \
-	 (v),                                                                  \
-	 (a),                                                                  \
-	 (h),                                                                  \
-	 NULL,                                                                 \
-	 (c),                                                                  \
-	 (cfg),                                                                \
-	 (env),                                                                \
-	 (ch)}
+	{OPTION_STRING_LIST, (s), (l), (v), (a), (h), (c), (cfg), (env), (ch)}
 
 #define OPT_INT_CFG(s, l, v, a, cfg, env, h, ch, c)                            \
-	{OPTION_INT, (s), (l), (v), (a), (h), NULL, (c), (cfg), (env), (ch)}
-
-/**
- * @brief Declare a subcommand in the option table.
- *
- * @param name  Subcommand name (what the user types).
- * @param var   Pointer to a subcmd_fn variable (set on match).
- * @param fn    Handler function: int fn(int argc, const char **argv).
- * @param h     One-line description for help/completion.
- *
- * When the parser encounters @p name as a positional argument, it
- * stores @p fn into *@p var and stops parsing.  The remaining argv
- * (starting at the subcommand name) is left for the handler.
- */
-#define OPT_SUBCOMMAND(name, var, fn, h)                                       \
-	{OPTION_SUBCOMMAND,                                                    \
-	 0,                                                                    \
-	 (name),                                                               \
-	 (var),                                                                \
-	 NULL,                                                                 \
-	 (h),                                                                  \
-	 (fn),                                                                 \
-	 NULL,                                                                 \
-	 NULL,                                                                 \
-	 NULL,                                                                 \
-	 NULL}
+	{OPTION_INT, (s), (l), (v), (a), (h), (c), (cfg), (env), (ch)}
 
 #define OPT_END()                                                              \
-	{OPTION_END, 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL}
+	{OPTION_END, 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL}
 
 /**
  * @brief OPT_END with positional argument metadata.
@@ -180,7 +129,7 @@ struct option {
  * @param c     Completion callback for positional values, or NULL.
  */
 #define OPT_END_COMPLETE(argh, c)                                              \
-	{OPTION_END, 0, NULL, NULL, (argh), NULL, NULL, (c), NULL, NULL, NULL}
+	{OPTION_END, 0, NULL, NULL, (argh), NULL, (c), NULL, NULL, NULL}
 
 struct cmd_manual;
 struct cmd_desc;
@@ -208,13 +157,7 @@ struct cmd_desc;
  * @param argc    Argument count.
  * @param argv    Argument vector (modified in-place).
  * @param desc    Command descriptor carrying @c opts, @c manual and
- *                (optionally) @c subcommands.  Callers that don't have
- *                a stable descriptor can pass a compound literal:
- *                @code
- *                parse_options(argc, argv,
- *                    &(const struct cmd_desc){
- *                        .opts = opts, .manual = &manual });
- *                @endcode
+ *                (optionally) @c subcommands.
  * @return New argc (number of remaining arguments in argv).
  */
 int parse_options(int argc, const char **argv, const struct cmd_desc *desc);

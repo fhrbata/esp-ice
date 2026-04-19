@@ -83,8 +83,6 @@ static void seed_from_config(const struct option *o)
 static void seed_defaults(const struct option *opts)
 {
 	for (const struct option *o = opts; o->type != OPTION_END; o++) {
-		if (o->type == OPTION_SUBCOMMAND)
-			continue;
 		if (o->config_key)
 			seed_from_config(o);
 		if (o->env_var)
@@ -99,12 +97,8 @@ static void print_usage(const char *argv0, const struct cmd_desc *desc)
 	int has_subcmds = 0;
 	const char *positional = NULL;
 
-	for (const struct option *o = opts; o->type != OPTION_END; o++) {
-		if (o->type == OPTION_SUBCOMMAND)
-			has_subcmds = 1;
-		else
-			has_flags = 1;
-	}
+	for (const struct option *o = opts; o->type != OPTION_END; o++)
+		has_flags = 1;
 	if (desc->subcommands && *desc->subcommands)
 		has_subcmds = 1;
 
@@ -137,16 +131,6 @@ static void print_usage(const char *argv0, const struct cmd_desc *desc)
 
 	/* Print subcommands first, then options. */
 	has_subcmds = 0;
-	for (const struct option *o = opts; o->type != OPTION_END; o++) {
-		if (o->type == OPTION_SUBCOMMAND) {
-			if (!has_subcmds) {
-				fprintf(stderr, "Subcommands:\n");
-				has_subcmds = 1;
-			}
-			fprintf(stderr, "    @b{%-20s} %s\n", o->long_opt,
-				o->help ? o->help : "");
-		}
-	}
 	if (desc->subcommands) {
 		for (const struct cmd_desc *const *p = desc->subcommands; *p;
 		     p++) {
@@ -167,9 +151,6 @@ static void print_usage(const char *argv0, const struct cmd_desc *desc)
 	for (const struct option *o = opts; o->type != OPTION_END; o++) {
 		char short_str[8] = "";
 		char long_str[64] = "";
-
-		if (o->type == OPTION_SUBCOMMAND)
-			continue;
 
 		if (!has_opts) {
 			if (has_subcmds)
@@ -226,10 +207,6 @@ static NORETURN void print_completions(const struct cmd_desc *desc)
 		end++;
 
 	/* Subcommands, sorted. */
-	for (const struct option *o = opts; o->type != OPTION_END; o++) {
-		if (o->type == OPTION_SUBCOMMAND && o->long_opt[0] != '_')
-			svec_push(&v, o->long_opt);
-	}
 	if (desc->subcommands) {
 		for (const struct cmd_desc *const *p = desc->subcommands; *p;
 		     p++) {
@@ -250,7 +227,7 @@ static NORETURN void print_completions(const struct cmd_desc *desc)
 	/* Long flags, sorted. */
 	svec_push(&v, "--help");
 	for (const struct option *o = opts; o->type != OPTION_END; o++) {
-		if (o->type != OPTION_SUBCOMMAND && o->long_opt) {
+		if (o->long_opt) {
 			snprintf(buf, sizeof(buf), "--%s", o->long_opt);
 			svec_push(&v, buf);
 		}
@@ -260,7 +237,7 @@ static NORETURN void print_completions(const struct cmd_desc *desc)
 	/* Short flags, sorted. */
 	svec_push(&v, "-h");
 	for (const struct option *o = opts; o->type != OPTION_END; o++) {
-		if (o->type != OPTION_SUBCOMMAND && o->short_opt) {
+		if (o->short_opt) {
 			snprintf(buf, sizeof(buf), "-%c", o->short_opt);
 			svec_push(&v, buf);
 		}
@@ -350,17 +327,8 @@ int parse_options(int argc, const char **argv, const struct cmd_desc *desc)
 			break;
 		}
 
-		/* Not an option -- check for subcommand, else stop. */
+		/* Not an option -- stop here and let the caller dispatch. */
 		if (arg[0] != '-' || arg[1] == '\0') {
-			const struct option *sub;
-			for (sub = opts; sub->type != OPTION_END; sub++) {
-				if (sub->type == OPTION_SUBCOMMAND &&
-				    !strcmp(arg, sub->long_opt)) {
-					*(subcmd_fn *)sub->value =
-					    sub->subcommand_fn;
-					goto done;
-				}
-			}
 			if (desc->subcommands) {
 				for (const struct cmd_desc *const *p =
 					 desc->subcommands;

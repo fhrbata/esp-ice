@@ -1089,8 +1089,3 @@ const struct cmd_desc cmd_idf_desc = {
     .manual = &idf_manual,
     .subcommands = idf_subs,
 };
-
-int cmd_idf(int argc, const char **argv)
-{
-	return ice_dispatch(argc, argv, &cmd_idf_desc);
-}

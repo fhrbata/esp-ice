@@ -222,8 +222,3 @@ const struct cmd_desc cmd_target_desc = {
     .manual = &target_manual,
     .subcommands = target_subs,
 };
-
-int cmd_target(int argc, const char **argv)
-{
-	return ice_dispatch(argc, argv, &cmd_target_desc);
-}
