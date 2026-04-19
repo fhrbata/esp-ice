@@ -13,7 +13,7 @@
 #include "ice.h"
 
 /* clang-format off */
-static const struct cmd_manual manual = {
+static const struct cmd_manual fullclean_manual = {
 	.name = "ice fullclean",
 	.summary = "wipe the build directory",
 
@@ -104,11 +104,17 @@ int fullclean_run(void)
 	return rmtree(build_dir, global_verbose) < 0 ? -1 : 0;
 }
 
+static const struct option cmd_fullclean_opts[] = {OPT_END()};
+
+const struct cmd_desc cmd_fullclean_desc = {
+    .name = "fullclean",
+    .fn = cmd_fullclean,
+    .opts = cmd_fullclean_opts,
+    .manual = &fullclean_manual,
+};
+
 int cmd_fullclean(int argc, const char **argv)
 {
-	struct option opts[] = {OPT_END()};
-	struct cmd_desc cmd_desc = {.opts = opts, .manual = &manual};
-
-	parse_options(argc, argv, &cmd_desc);
+	parse_options(argc, argv, &cmd_fullclean_desc);
 	return fullclean_run();
 }

@@ -21,7 +21,7 @@
 #include "ice.h"
 
 /* clang-format off */
-static const struct cmd_manual manual = {
+static const struct cmd_manual configdep_manual = {
 	.name = "ice configdep",
 	.summary = "sdkconfig-aware compiler wrapper",
 
@@ -56,6 +56,15 @@ static const struct cmd_manual manual = {
 	       "pick up only the actually-affected sources."),
 };
 /* clang-format on */
+
+static const struct option cmd_configdep_opts[] = {OPT_END()};
+
+const struct cmd_desc cmd_configdep_desc = {
+    .name = "configdep",
+    .fn = cmd_configdep,
+    .opts = cmd_configdep_opts,
+    .manual = &configdep_manual,
+};
 
 /* ------------------------------------------------------------------ */
 /*  Parsed dependency file                                            */
@@ -377,7 +386,7 @@ int cmd_configdep(int argc, const char **argv)
 	 */
 	if (argc >= 2 &&
 	    (!strcmp(argv[1], "--help") || !strcmp(argv[1], "-h"))) {
-		print_manual(manual.name, &manual, NULL);
+		print_manual(configdep_manual.name, &configdep_manual, NULL);
 		return EXIT_SUCCESS;
 	}
 

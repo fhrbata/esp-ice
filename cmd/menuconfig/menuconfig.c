@@ -12,7 +12,7 @@
 #include "ice.h"
 
 /* clang-format off */
-static const struct cmd_manual manual = {
+static const struct cmd_manual menuconfig_manual = {
 	.name = "ice menuconfig",
 	.summary = "open the project configuration UI",
 
@@ -41,11 +41,17 @@ static const struct cmd_manual manual = {
 };
 /* clang-format on */
 
+static const struct option cmd_menuconfig_opts[] = {OPT_END()};
+
+const struct cmd_desc cmd_menuconfig_desc = {
+    .name = "menuconfig",
+    .fn = cmd_menuconfig,
+    .opts = cmd_menuconfig_opts,
+    .manual = &menuconfig_manual,
+};
+
 int cmd_menuconfig(int argc, const char **argv)
 {
-	struct option opts[] = {OPT_END()};
-	struct cmd_desc cmd_desc = {.opts = opts, .manual = &manual};
-
-	parse_options(argc, argv, &cmd_desc);
+	parse_options(argc, argv, &cmd_menuconfig_desc);
 	return run_cmake_target("menuconfig", "menuconfig", 1);
 }

@@ -12,7 +12,7 @@
 #include "partition_table.h"
 
 /* clang-format off */
-static const struct cmd_manual manual = {
+static const struct cmd_manual partition_table_manual = {
 	.name = "ice partition-table",
 	.summary = "generate partition table binary from CSV",
 
@@ -82,6 +82,13 @@ static const struct option cmd_partition_table_opts[] = {
     OPT_END(),
 };
 
+const struct cmd_desc cmd_partition_table_desc = {
+    .name = "partition-table",
+    .fn = cmd_partition_table,
+    .opts = cmd_partition_table_opts,
+    .manual = &partition_table_manual,
+};
+
 int cmd_partition_table(int argc, const char **argv)
 {
 	struct pt_options pt_opts;
@@ -91,10 +98,8 @@ int cmd_partition_table(int argc, const char **argv)
 	const char *input_path;
 	const char *output_path;
 	FILE *fp;
-	struct cmd_desc cmd_desc = {.opts = cmd_partition_table_opts,
-				    .manual = &manual};
 
-	argc = parse_options(argc, argv, &cmd_desc);
+	argc = parse_options(argc, argv, &cmd_partition_table_desc);
 
 	if (argc < 2)
 		die("usage: ice partition-table [options] <input.csv> "

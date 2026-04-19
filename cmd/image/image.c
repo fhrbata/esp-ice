@@ -14,6 +14,10 @@ int cmd_image_create(int argc, const char **argv);
 int cmd_image_info(int argc, const char **argv);
 int cmd_image_merge(int argc, const char **argv);
 
+extern const struct cmd_desc cmd_image_create_desc;
+extern const struct cmd_desc cmd_image_info_desc;
+extern const struct cmd_desc cmd_image_merge_desc;
+
 static subcmd_fn image_fn;
 
 static const struct option cmd_image_opts[] = {
@@ -27,7 +31,7 @@ static const struct option cmd_image_opts[] = {
 };
 
 /* clang-format off */
-static const struct cmd_manual manual = {
+static const struct cmd_manual image_manual = {
 	.name = "ice image",
 	.summary = "host-only image manipulation",
 
@@ -43,11 +47,23 @@ static const struct cmd_manual manual = {
 };
 /* clang-format on */
 
+static const struct cmd_desc *const image_subs[] = {
+    &cmd_image_create_desc,
+    &cmd_image_info_desc,
+    &cmd_image_merge_desc,
+    NULL,
+};
+
+const struct cmd_desc cmd_image_desc = {
+    .name = "image",
+    .opts = cmd_image_opts,
+    .manual = &image_manual,
+    .subcommands = image_subs,
+};
+
 int cmd_image(int argc, const char **argv)
 {
-	struct cmd_desc cmd_desc = {.opts = cmd_image_opts, .manual = &manual};
-
-	argc = parse_options(argc, argv, &cmd_desc);
+	argc = parse_options(argc, argv, &cmd_image_desc);
 	if (image_fn)
 		return image_fn(argc, argv);
 

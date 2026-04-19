@@ -20,7 +20,7 @@
 #include "ice.h"
 
 /* clang-format off */
-static const struct cmd_manual manual = {
+static const struct cmd_manual cmake_manual = {
 	.name = "ice cmake",
 	.summary = "run an arbitrary cmake target",
 
@@ -52,12 +52,18 @@ static const struct cmd_manual manual = {
 };
 /* clang-format on */
 
+static const struct option cmd_cmake_opts[] = {OPT_END()};
+
+const struct cmd_desc cmd_cmake_desc = {
+    .name = "cmake",
+    .fn = cmd_cmake,
+    .opts = cmd_cmake_opts,
+    .manual = &cmake_manual,
+};
+
 int cmd_cmake(int argc, const char **argv)
 {
-	struct option opts[] = {OPT_END()};
-	struct cmd_desc cmd_desc = {.opts = opts, .manual = &manual};
-
-	argc = parse_options(argc, argv, &cmd_desc);
+	argc = parse_options(argc, argv, &cmd_cmake_desc);
 
 	if (argc < 1)
 		die("missing target argument");

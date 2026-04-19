@@ -20,7 +20,7 @@
 #include "ice.h"
 
 /* clang-format off */
-static const struct cmd_manual manual = {
+static const struct cmd_manual image_merge_manual = {
 	.name = "ice image merge",
 	.summary = "combine multiple flash images at offsets into one",
 
@@ -64,6 +64,15 @@ static const struct option cmd_image_merge_opts[] = {
     OPT_END(),
 };
 
+int cmd_image_merge(int argc, const char **argv);
+
+const struct cmd_desc cmd_image_merge_desc = {
+    .name = "merge",
+    .fn = cmd_image_merge,
+    .opts = cmd_image_merge_opts,
+    .manual = &image_merge_manual,
+};
+
 static uint32_t parse_hex(const char *s, const char *flag)
 {
 	char *end;
@@ -102,10 +111,7 @@ static size_t flash_size_bytes(const char *s)
 
 int cmd_image_merge(int argc, const char **argv)
 {
-	struct cmd_desc cmd_desc = {.opts = cmd_image_merge_opts,
-				    .manual = &manual};
-
-	argc = parse_options(argc, argv, &cmd_desc);
+	argc = parse_options(argc, argv, &cmd_image_merge_desc);
 
 	if (!opt_out)
 		die("-o <output.bin> is required");

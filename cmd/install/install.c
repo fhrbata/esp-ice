@@ -26,7 +26,7 @@
 /* ------------------------------------------------------------------ */
 
 /* clang-format off */
-static const struct cmd_manual manual = {
+static const struct cmd_manual tools_install_manual = {
 	.name = "ice tools install",
 	.summary = "download and install tools from a manifest",
 
@@ -65,6 +65,13 @@ static const struct option cmd_install_opts[] = {
     OPT_BOOL(0, "force", &opt_force,
 	     "re-download and overwrite existing installations"),
     OPT_END(),
+};
+
+const struct cmd_desc cmd_tools_install_desc = {
+    .name = "install",
+    .fn = cmd_install,
+    .opts = cmd_install_opts,
+    .manual = &tools_install_manual,
 };
 
 /* ------------------------------------------------------------------ */
@@ -408,10 +415,7 @@ int cmd_install(int argc, const char **argv)
 	int n;
 	int installed = 0, skipped = 0, failed = 0;
 	int tool_found = 0;
-	struct cmd_desc cmd_desc = {.opts = cmd_install_opts,
-				    .manual = &manual};
-
-	argc = parse_options(argc, argv, &cmd_desc);
+	argc = parse_options(argc, argv, &cmd_tools_install_desc);
 	if (argc != 1)
 		die("expected exactly one argument: path to tools.json");
 

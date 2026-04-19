@@ -31,7 +31,7 @@ static const struct option cmd_monitor_opts[] = {
 	OPT_END(),
 };
 
-static const struct cmd_manual manual = {
+static const struct cmd_manual monitor_manual = {
 	.name = "ice monitor",
 	.summary = "display serial output from the device",
 
@@ -51,15 +51,20 @@ static const struct cmd_manual manual = {
 };
 /* clang-format on */
 
+const struct cmd_desc cmd_monitor_desc = {
+    .name = "monitor",
+    .fn = cmd_monitor,
+    .opts = cmd_monitor_opts,
+    .manual = &monitor_manual,
+};
+
 int cmd_monitor(int argc, const char **argv)
 {
 	struct serial *s;
 	unsigned char buf[1024];
-	struct cmd_desc cmd_desc = {.opts = cmd_monitor_opts,
-				    .manual = &manual};
 	int rc;
 
-	parse_options(argc, argv, &cmd_desc);
+	parse_options(argc, argv, &cmd_monitor_desc);
 
 	if (!opt_port)
 		die("serial.port is not set; use -p or "

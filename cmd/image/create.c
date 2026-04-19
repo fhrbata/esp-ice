@@ -17,7 +17,7 @@
 #include "ice.h"
 
 /* clang-format off */
-static const struct cmd_manual manual = {
+static const struct cmd_manual image_create_manual = {
 	.name = "ice image create",
 	.summary = "create a flash image from an ELF executable",
 
@@ -112,6 +112,15 @@ static const struct option cmd_image_create_opts[] = {
     OPT_END(),
 };
 
+int cmd_image_create(int argc, const char **argv);
+
+const struct cmd_desc cmd_image_create_desc = {
+    .name = "create",
+    .fn = cmd_image_create,
+    .opts = cmd_image_create_opts,
+    .manual = &image_create_manual,
+};
+
 static uint32_t parse_hex(const char *s, const char *flag)
 {
 	char *end;
@@ -159,11 +168,9 @@ int cmd_image_create(int argc, const char **argv)
 {
 	struct sbuf elf = SBUF_INIT;
 	struct sbuf img = SBUF_INIT;
-	struct cmd_desc cmd_desc = {.opts = cmd_image_create_opts,
-				    .manual = &manual};
 	FILE *fp;
 
-	argc = parse_options(argc, argv, &cmd_desc);
+	argc = parse_options(argc, argv, &cmd_image_create_desc);
 
 	if (argc < 1)
 		die("missing input ELF path");

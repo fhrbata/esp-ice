@@ -24,15 +24,24 @@ static void complete_help_commands(void)
 	}
 }
 
+static const struct cmd_manual help_manual = {.name = "ice help"};
+
+static const struct option cmd_help_opts[] = {
+    OPT_END_COMPLETE("command", complete_help_commands),
+};
+
+const struct cmd_desc cmd_help_desc = {
+    .name = "help",
+    .fn = cmd_help,
+    .opts = cmd_help_opts,
+    .manual = &help_manual,
+};
+
 int cmd_help(int argc, const char **argv)
 {
-	static const struct cmd_manual manual = {.name = "ice help"};
-	struct option opts[] = {
-	    OPT_END_COMPLETE("command", complete_help_commands)};
-	struct cmd_desc cmd_desc = {.opts = opts, .manual = &manual};
 	struct svec av = SVEC_INIT;
 
-	argc = parse_options(argc, argv, &cmd_desc);
+	argc = parse_options(argc, argv, &cmd_help_desc);
 
 	if (argc == 0) {
 		print_manual(ice_root_manual.name, &ice_root_manual,

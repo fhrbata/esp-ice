@@ -17,8 +17,16 @@
 
 #include <string.h>
 
+/* Defined in cmd/install/install.c; kept as a top-level symbol for the
+ * existing "ice install" compat route, and referenced from tools_subs
+ * below as the "install" leaf. */
+extern const struct cmd_desc cmd_tools_install_desc;
+
+static int cmd_tools_list(int argc, const char **argv);
+static int cmd_tools_info(int argc, const char **argv);
+
 /* ------------------------------------------------------------------ */
-/* Subcommands                                                         */
+/* ice tools list                                                      */
 /* ------------------------------------------------------------------ */
 
 struct list_version_ctx {
@@ -57,14 +65,21 @@ static int list_tool_cb(const char *name, void *ud)
 	return 0;
 }
 
+static const struct cmd_manual tools_list_manual = {.name = "ice tools list"};
+static const struct option cmd_tools_list_opts[] = {OPT_END()};
+
+static const struct cmd_desc cmd_tools_list_desc = {
+    .name = "list",
+    .fn = cmd_tools_list,
+    .opts = cmd_tools_list_opts,
+    .manual = &tools_list_manual,
+};
+
 static int cmd_tools_list(int argc, const char **argv)
 {
-	static const struct cmd_manual manual = {.name = "ice tools list"};
-	struct option opts[] = {OPT_END()};
-	struct cmd_desc cmd_desc = {.opts = opts, .manual = &manual};
 	struct sbuf tools_dir = SBUF_INIT;
 
-	parse_options(argc, argv, &cmd_desc);
+	parse_options(argc, argv, &cmd_tools_list_desc);
 
 	sbuf_addf(&tools_dir, "%s/tools", ice_home());
 
@@ -81,13 +96,23 @@ static int cmd_tools_list(int argc, const char **argv)
 	return 0;
 }
 
+/* ------------------------------------------------------------------ */
+/* ice tools info                                                      */
+/* ------------------------------------------------------------------ */
+
+static const struct cmd_manual tools_info_manual = {.name = "ice tools info"};
+static const struct option cmd_tools_info_opts[] = {OPT_END()};
+
+static const struct cmd_desc cmd_tools_info_desc = {
+    .name = "info",
+    .fn = cmd_tools_info,
+    .opts = cmd_tools_info_opts,
+    .manual = &tools_info_manual,
+};
+
 static int cmd_tools_info(int argc, const char **argv)
 {
-	static const struct cmd_manual manual = {.name = "ice tools info"};
-	struct option opts[] = {OPT_END()};
-	struct cmd_desc cmd_desc = {.opts = opts, .manual = &manual};
-
-	parse_options(argc, argv, &cmd_desc);
+	parse_options(argc, argv, &cmd_tools_info_desc);
 
 	printf("Tools path: %s\n", ice_home());
 	printf("Platform:   %s-%s\n", ICE_PLATFORM_OS, ICE_PLATFORM_ARCH);
@@ -95,7 +120,7 @@ static int cmd_tools_info(int argc, const char **argv)
 }
 
 /* ------------------------------------------------------------------ */
-/* Dispatcher                                                          */
+/* ice tools -- namespace dispatcher                                   */
 /* ------------------------------------------------------------------ */
 
 static subcmd_fn tools_fn;
@@ -110,7 +135,7 @@ static const struct option cmd_tools_opts[] = {
 };
 
 /* clang-format off */
-static const struct cmd_manual manual = {
+static const struct cmd_manual tools_manual = {
 	.name = "ice tools",
 	.summary = "manage ESP-IDF toolchains",
 
@@ -126,11 +151,23 @@ static const struct cmd_manual manual = {
 };
 /* clang-format on */
 
+static const struct cmd_desc *const tools_subs[] = {
+    &cmd_tools_install_desc,
+    &cmd_tools_list_desc,
+    &cmd_tools_info_desc,
+    NULL,
+};
+
+const struct cmd_desc cmd_tools_desc = {
+    .name = "tools",
+    .opts = cmd_tools_opts,
+    .manual = &tools_manual,
+    .subcommands = tools_subs,
+};
+
 int cmd_tools(int argc, const char **argv)
 {
-	struct cmd_desc cmd_desc = {.opts = cmd_tools_opts, .manual = &manual};
-
-	argc = parse_options(argc, argv, &cmd_desc);
+	argc = parse_options(argc, argv, &cmd_tools_desc);
 	if (tools_fn)
 		return tools_fn(argc, argv);
 

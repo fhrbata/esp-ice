@@ -22,7 +22,7 @@
 #include "ice.h"
 
 /* clang-format off */
-static const struct cmd_manual manual = {
+static const struct cmd_manual config_manual = {
 	.name = "ice config",
 	.summary = "inspect and modify configuration entries",
 
@@ -161,6 +161,13 @@ static const struct option cmd_config_opts[] = {
     OPT_END_COMPLETE("key", complete_config_keys),
 };
 
+const struct cmd_desc cmd_config_desc = {
+    .name = "config",
+    .fn = cmd_config,
+    .opts = cmd_config_opts,
+    .manual = &config_manual,
+};
+
 static enum config_scope target_scope(int user, int local)
 {
 	if (user && local)
@@ -258,11 +265,10 @@ static int do_unset(enum config_scope scope, const char *key)
 
 int cmd_config(int argc, const char **argv)
 {
-	struct cmd_desc cmd_desc = {.opts = cmd_config_opts, .manual = &manual};
 	int modes;
 	enum config_scope scope;
 
-	argc = parse_options(argc, argv, &cmd_desc);
+	argc = parse_options(argc, argv, &cmd_config_desc);
 
 	modes = opt_list + opt_add + opt_unset;
 	if (modes > 1)

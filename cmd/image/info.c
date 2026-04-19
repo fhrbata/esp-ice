@@ -21,7 +21,7 @@
 #include "vendor/sha256/sha256.h"
 
 /* clang-format off */
-static const struct cmd_manual manual = {
+static const struct cmd_manual image_info_manual = {
 	.name = "ice image info",
 	.summary = "display the structure of an ESP flash image",
 
@@ -52,10 +52,19 @@ static const struct cmd_manual manual = {
 
 static const char *opt_chip;
 
+int cmd_image_info(int argc, const char **argv);
+
 static const struct option cmd_image_info_opts[] = {
     OPT_STRING(0, "chip", &opt_chip, "name",
 	       "override the auto-detected target chip", NULL),
     OPT_END(),
+};
+
+const struct cmd_desc cmd_image_info_desc = {
+    .name = "info",
+    .fn = cmd_image_info,
+    .opts = cmd_image_info_opts,
+    .manual = &image_info_manual,
 };
 
 /* ------------------------------------------------------------------ */
@@ -173,10 +182,8 @@ static void print_chip_rev(uint16_t rev)
 int cmd_image_info(int argc, const char **argv)
 {
 	struct sbuf img = SBUF_INIT;
-	struct cmd_desc cmd_desc = {.opts = cmd_image_info_opts,
-				    .manual = &manual};
 
-	argc = parse_options(argc, argv, &cmd_desc);
+	argc = parse_options(argc, argv, &cmd_image_info_desc);
 
 	if (argc < 1)
 		die("missing <image.bin> argument");

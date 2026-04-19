@@ -11,7 +11,7 @@
 #include "ice.h"
 
 /* clang-format off */
-static const struct cmd_manual manual = {
+static const struct cmd_manual clean_manual = {
 	.name = "ice clean",
 	.summary = "remove build artifacts",
 
@@ -34,11 +34,17 @@ static const struct cmd_manual manual = {
 };
 /* clang-format on */
 
+static const struct option cmd_clean_opts[] = {OPT_END()};
+
+const struct cmd_desc cmd_clean_desc = {
+    .name = "clean",
+    .fn = cmd_clean,
+    .opts = cmd_clean_opts,
+    .manual = &clean_manual,
+};
+
 int cmd_clean(int argc, const char **argv)
 {
-	struct option opts[] = {OPT_END()};
-	struct cmd_desc cmd_desc = {.opts = opts, .manual = &manual};
-
-	parse_options(argc, argv, &cmd_desc);
+	parse_options(argc, argv, &cmd_clean_desc);
 	return run_cmake_target("clean", "clean", 0);
 }

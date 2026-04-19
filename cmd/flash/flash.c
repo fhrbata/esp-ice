@@ -11,7 +11,7 @@
 #include "ice.h"
 
 /* clang-format off */
-static const struct cmd_manual manual = {
+static const struct cmd_manual flash_manual = {
 	.name = "ice flash",
 	.summary = "flash firmware to the device",
 
@@ -38,11 +38,17 @@ static const struct cmd_manual manual = {
 };
 /* clang-format on */
 
+static const struct option cmd_flash_opts[] = {OPT_END()};
+
+const struct cmd_desc cmd_flash_desc = {
+    .name = "flash",
+    .fn = cmd_flash,
+    .opts = cmd_flash_opts,
+    .manual = &flash_manual,
+};
+
 int cmd_flash(int argc, const char **argv)
 {
-	struct option opts[] = {OPT_END()};
-	struct cmd_desc cmd_desc = {.opts = opts, .manual = &manual};
-
-	parse_options(argc, argv, &cmd_desc);
+	parse_options(argc, argv, &cmd_flash_desc);
 	return run_cmake_target("flash", "flash", 0);
 }

@@ -24,7 +24,7 @@ const char *const ice_preview_targets[] = {
 };
 
 /* clang-format off */
-static const struct cmd_manual manual = {
+static const struct cmd_manual set_target_manual = {
 	.name = "ice set-target",
 	.summary = "switch the chip target",
 
@@ -74,6 +74,13 @@ static const struct option cmd_set_target_opts[] = {
     OPT_END(),
 };
 
+const struct cmd_desc cmd_set_target_desc = {
+    .name = "set-target",
+    .fn = cmd_set_target,
+    .opts = cmd_set_target_opts,
+    .manual = &set_target_manual,
+};
+
 static int in_list(const char *target, const char *const *list)
 {
 	for (; *list; list++)
@@ -96,11 +103,9 @@ int cmd_set_target(int argc, const char **argv)
 	static char envstr[] = "_IDF_PY_SET_TARGET_ACTION=1";
 	const char *target;
 	struct sbuf define = SBUF_INIT;
-	struct cmd_desc cmd_desc = {.opts = cmd_set_target_opts,
-				    .manual = &manual};
 	int rc;
 
-	argc = parse_options(argc, argv, &cmd_desc);
+	argc = parse_options(argc, argv, &cmd_set_target_desc);
 
 	if (argc < 1)
 		die("missing <target> argument");

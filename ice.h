@@ -124,6 +124,32 @@ struct cmd_desc {
  */
 int ice_dispatch(int argc, const char **argv, const struct cmd_desc *desc);
 
+/** Top-level descriptor for `ice` itself.  Points at ice_subs[]. */
+extern const struct cmd_desc ice_root_desc;
+
+/** Top-level command descriptors, indexed by ice_subs[] in ice.c. */
+extern const struct cmd_desc cmd_build_desc;
+extern const struct cmd_desc cmd_clean_desc;
+extern const struct cmd_desc cmd_cmake_desc;
+extern const struct cmd_desc cmd_completion_desc;
+extern const struct cmd_desc cmd_config_desc;
+extern const struct cmd_desc cmd_configdep_desc;
+extern const struct cmd_desc cmd_flash_desc;
+extern const struct cmd_desc cmd_fullclean_desc;
+extern const struct cmd_desc cmd_help_desc;
+extern const struct cmd_desc cmd_idf_desc;
+extern const struct cmd_desc cmd_image_desc;
+extern const struct cmd_desc cmd_ldgen_desc;
+extern const struct cmd_desc cmd_menuconfig_desc;
+extern const struct cmd_desc cmd_monitor_desc;
+extern const struct cmd_desc cmd_partition_table_desc;
+extern const struct cmd_desc cmd_reconfigure_desc;
+extern const struct cmd_desc cmd_set_target_desc;
+extern const struct cmd_desc cmd_size_desc;
+extern const struct cmd_desc cmd_target_desc;
+extern const struct cmd_desc cmd_tools_desc;
+extern const struct cmd_desc cmd___complete_desc;
+
 /** Top-level option table and manual for `ice`. */
 extern const struct option ice_global_opts[];
 extern const struct cmd_manual ice_root_manual;

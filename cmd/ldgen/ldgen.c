@@ -12,7 +12,7 @@
 #include "lf.h"
 
 /* clang-format off */
-static const struct cmd_manual manual = {
+static const struct cmd_manual ldgen_manual = {
 	.name = "ice ldgen",
 	.summary = "analyse linker fragment (.lf) files",
 
@@ -49,11 +49,16 @@ static const struct option cmd_ldgen_opts[] = {
     OPT_END(),
 };
 
+const struct cmd_desc cmd_ldgen_desc = {
+    .name = "ldgen",
+    .fn = cmd_ldgen,
+    .opts = cmd_ldgen_opts,
+    .manual = &ldgen_manual,
+};
+
 int cmd_ldgen(int argc, const char **argv)
 {
-	struct cmd_desc cmd_desc = {.opts = cmd_ldgen_opts, .manual = &manual};
-
-	argc = parse_options(argc, argv, &cmd_desc);
+	argc = parse_options(argc, argv, &cmd_ldgen_desc);
 	if (argc < 1)
 		die("no input files; see 'ice ldgen --help'");
 

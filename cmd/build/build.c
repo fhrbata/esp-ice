@@ -11,7 +11,7 @@
 #include "ice.h"
 
 /* clang-format off */
-static const struct cmd_manual manual = {
+static const struct cmd_manual build_manual = {
 	.name = "ice build",
 	.summary = "build the default target",
 
@@ -57,11 +57,17 @@ static const struct cmd_manual manual = {
 };
 /* clang-format on */
 
+static const struct option cmd_build_opts[] = {OPT_END()};
+
+const struct cmd_desc cmd_build_desc = {
+    .name = "build",
+    .fn = cmd_build,
+    .opts = cmd_build_opts,
+    .manual = &build_manual,
+};
+
 int cmd_build(int argc, const char **argv)
 {
-	struct option opts[] = {OPT_END()};
-	struct cmd_desc cmd_desc = {.opts = opts, .manual = &manual};
-
-	parse_options(argc, argv, &cmd_desc);
+	parse_options(argc, argv, &cmd_build_desc);
 	return run_cmake_target("all", "build", 0);
 }

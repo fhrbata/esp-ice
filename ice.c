@@ -222,6 +222,38 @@ const struct option ice_global_opts[] = {
     OPT_END_COMPLETE(NULL, complete_aliases),
 };
 
+static const struct cmd_desc *const ice_subs[] = {
+    &cmd_build_desc,
+    &cmd_clean_desc,
+    &cmd_cmake_desc,
+    &cmd_completion_desc,
+    &cmd_config_desc,
+    &cmd_configdep_desc,
+    &cmd_flash_desc,
+    &cmd_fullclean_desc,
+    &cmd_help_desc,
+    &cmd_idf_desc,
+    &cmd_image_desc,
+    &cmd_ldgen_desc,
+    &cmd_menuconfig_desc,
+    &cmd_monitor_desc,
+    &cmd_partition_table_desc,
+    &cmd_reconfigure_desc,
+    &cmd_set_target_desc,
+    &cmd_size_desc,
+    &cmd_target_desc,
+    &cmd_tools_desc,
+    &cmd___complete_desc, /* hidden; name starts with underscore */
+    NULL,
+};
+
+const struct cmd_desc ice_root_desc = {
+    .name = "ice",
+    .opts = ice_global_opts,
+    .manual = &ice_root_manual,
+    .subcommands = ice_subs,
+};
+
 int cmd_ice(int argc, const char **argv)
 {
 	struct cmd_desc cmd_desc = {.opts = ice_global_opts,

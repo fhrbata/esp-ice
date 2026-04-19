@@ -137,12 +137,20 @@ static const struct cmd_manual completion_manual = {
 
 static void complete_shells(void) { printf("bash\nzsh\nfish\npowershell\n"); }
 
+static const struct option cmd_completion_opts[] = {
+    OPT_END_COMPLETE("shell", complete_shells),
+};
+
+const struct cmd_desc cmd_completion_desc = {
+    .name = "completion",
+    .fn = cmd_completion,
+    .opts = cmd_completion_opts,
+    .manual = &completion_manual,
+};
+
 int cmd_completion(int argc, const char **argv)
 {
-	struct option opts[] = {OPT_END_COMPLETE("shell", complete_shells)};
-	struct cmd_desc cmd_desc = {.opts = opts, .manual = &completion_manual};
-
-	argc = parse_options(argc, argv, &cmd_desc);
+	argc = parse_options(argc, argv, &cmd_completion_desc);
 	if (argc != 1)
 		die("usage: ice completion bash|zsh|fish|powershell");
 
@@ -162,6 +170,16 @@ int cmd_completion(int argc, const char **argv)
 }
 
 /* ---- hidden: `ice __complete <cword> <word>...` -------------------- */
+
+static const struct cmd_manual complete_manual = {.name = "ice __complete"};
+static const struct option cmd___complete_opts[] = {OPT_END()};
+
+const struct cmd_desc cmd___complete_desc = {
+    .name = "__complete",
+    .fn = cmd_complete,
+    .opts = cmd___complete_opts,
+    .manual = &complete_manual,
+};
 
 /**
  * Transform the partial command line into a cmd_ice() call with

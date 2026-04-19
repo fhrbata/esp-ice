@@ -28,7 +28,7 @@
 #include "ice.h"
 
 /* clang-format off */
-static const struct cmd_manual manual = {
+static const struct cmd_manual size_manual = {
 	.name = "ice size",
 	.summary = "analyse firmware memory usage by region",
 
@@ -72,6 +72,13 @@ static const struct option cmd_size_opts[] = {
 	       NULL),
     OPT_STRING(0, "format", &opt_format, "fmt", "output format (table)", NULL),
     OPT_END(),
+};
+
+const struct cmd_desc cmd_size_desc = {
+    .name = "size",
+    .fn = cmd_size,
+    .opts = cmd_size_opts,
+    .manual = &size_manual,
 };
 
 /* ---- helpers -------------------------------------------------------- */
@@ -576,9 +583,7 @@ static void output_table(struct memmap *mm)
 
 int cmd_size(int argc, const char **argv)
 {
-	struct cmd_desc cmd_desc = {.opts = cmd_size_opts, .manual = &manual};
-
-	argc = parse_options(argc, argv, &cmd_desc);
+	argc = parse_options(argc, argv, &cmd_size_desc);
 	if (argc < 1)
 		die("no map file; see 'ice size --help'");
 
