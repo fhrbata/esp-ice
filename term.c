@@ -182,7 +182,7 @@ void color_text(struct sbuf *out, const char *text, size_t len,
 			continue;
 		}
 		if (*p == '}') {
-			sbuf_addstr(out, "}}");
+			sbuf_addstr(out, "@}");
 			p++;
 			continue;
 		}
@@ -198,7 +198,7 @@ void color_text(struct sbuf *out, const char *text, size_t len,
  * When unset, tokens are stripped and only the text content remains.
  * The expanded result is a valid printf format string.
  *
- * Escaping: @@ -> literal @, }} -> literal } inside a color block.
+ * Escaping: @@ -> literal @, @} -> literal } inside a color block.
  *
  * Nested tokens (e.g. @r{fatal: @b{hint} tail}) work: the stack tracks
  * each pushed code so that closing an inner block emits a reset and
@@ -218,6 +218,19 @@ void expand_colors(struct sbuf *out, const char *fmt, int colorize)
 		/* @@ -> literal @ */
 		if (*fmt == '@' && fmt[1] == '@') {
 			sbuf_addch(out, '@');
+			fmt += 2;
+			continue;
+		}
+
+		/*
+		 * @} -> literal } (escape needed inside color blocks, where
+		 * a bare } would close the current block).  The previous
+		 * "}}" form was ambiguous with two stacked closes, e.g.
+		 * @r{fatal @b{foo}} -- there the trailing }} is two closes,
+		 * not an escape.  @} has no such ambiguity.
+		 */
+		if (*fmt == '@' && fmt[1] == '}') {
+			sbuf_addch(out, '}');
 			fmt += 2;
 			continue;
 		}
@@ -303,13 +316,6 @@ void expand_colors(struct sbuf *out, const char *fmt, int colorize)
 				continue;
 			}
 			/* Unrecognized: fall through, emit '@' as literal */
-		}
-
-		/* }} -> literal } when inside a color block */
-		if (*fmt == '}' && fmt[1] == '}' && depth > 0) {
-			sbuf_addch(out, '}');
-			fmt += 2;
-			continue;
 		}
 
 		/* } -> close color block: reset, restore outer codes */

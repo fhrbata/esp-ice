@@ -69,19 +69,20 @@ void load_profile(const char *name)
 	 * hint is actionable in each case -- same shape as git refusing
 	 * to run outside a work tree.
 	 */
-	if (access(local_config_path(), F_OK) != 0)
-		die("not an ice project (no @b{.iceconfig} in cwd)\n"
-		    "hint: run @b{ice init <chip> <idf>} to bind, "
-		    "or cd to an existing ice project");
+	if (access(local_config_path(), F_OK) != 0) {
+		hint("run @b{ice init <chip> <idf>} to bind, "
+		     "or cd to an existing ice project");
+		die("not an ice project (no @b{.iceconfig} in cwd)");
+	}
 
 	build_dir = config_get("project.build-dir");
 	if (!build_dir || !*build_dir) {
-		if (!strcmp(name, "default"))
-			die("project not initialised\n"
-			    "hint: run @b{ice init <chip> <idf>} first");
-		die("profile '%s' not configured\n"
-		    "hint: run @b{ice init <chip> <idf> %s} first",
-		    name, name);
+		if (!strcmp(name, "default")) {
+			hint("run @b{ice init <chip> <idf>} first");
+			die("project not initialised");
+		}
+		hint("run @b{ice init <chip> <idf> %s} first", name);
+		die("profile '%s' not configured", name);
 	}
 
 	idf_path = config_get("project.idf-path");
@@ -118,6 +119,6 @@ void require_project_initialized(void)
 		return;
 
 notinit:
-	die("project not initialised\n"
-	    "hint: run @b{ice init <chip> <idf>} first");
+	hint("run @b{ice init <chip> <idf>} first");
+	die("project not initialised");
 }

@@ -250,6 +250,53 @@ int process_finish(struct process *proc)
 	return (int)exitCode;
 }
 
+/**
+ * @brief Read from a pipe with a timeout (Windows).
+ *
+ * Anonymous pipes created by CreatePipe() are not signalable objects,
+ * so WaitForSingleObject() on the pipe handle does not block on data
+ * availability.  The canonical workaround is PeekNamedPipe() in a
+ * short poll loop: check whether any bytes are buffered, sleep if
+ * not, retry until data arrives or @p timeout_ms elapses.  Once data
+ * is known to be available, ReadFile() returns immediately.
+ */
+ssize_t pipe_read_timed(int fd, void *buf, size_t n, unsigned timeout_ms)
+{
+	/* NOLINTNEXTLINE(performance-no-int-to-ptr) */
+	HANDLE h = (HANDLE)_get_osfhandle(fd);
+	unsigned elapsed = 0;
+	DWORD avail = 0;
+	DWORD got = 0;
+
+	if (h == INVALID_HANDLE_VALUE)
+		return -1;
+
+	for (;;) {
+		if (!PeekNamedPipe(h, NULL, 0, NULL, &avail, NULL))
+			return -1; /* broken pipe / EOF / error */
+		if (avail > 0)
+			break;
+		if (elapsed >= timeout_ms)
+			return 0;
+		/* 20 ms poll granularity keeps wakeups cheap while
+		 * staying responsive enough for a 10 Hz spinner. */
+		DWORD step = timeout_ms - elapsed;
+		if (step > 20)
+			step = 20;
+		Sleep(step);
+		elapsed += step;
+	}
+
+	if (!ReadFile(h, buf, (DWORD)n, &got, NULL) || got == 0)
+		return -1;
+	return (ssize_t)got;
+}
+
+unsigned long long mono_ms(void)
+{
+	return (unsigned long long)GetTickCount64();
+}
+
 const char *process_exe(void)
 {
 	static char buf[4096];

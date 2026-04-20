@@ -21,7 +21,7 @@
  *   @[sgr]{...}     numeric SGR, e.g. @[38;5;208]{orange}
  *   @[name]{...}    named color, e.g. @[COLOR_RED]{red}
  *   @@       literal @
- *   }}       literal } inside a color block
+ *   @}       literal } inside a color block
  *
  * The @x{...} tokens are expanded by the platform fprintf/vfprintf
  * overrides (platform/posix/io.c, platform/win/io.c). When color is

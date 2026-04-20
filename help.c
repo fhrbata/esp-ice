@@ -79,11 +79,10 @@ static size_t visible_len(const char *s, size_t len)
 	size_t depth = 0;
 
 	while (i < len) {
-		/* "@@" (anywhere) or "}}" (inside a token) -- doubled char
-		 * that stands for one literal, visible character. */
-		if ((s[i] == '@' && i + 1 < len && s[i + 1] == '@') ||
-		    (depth > 0 && s[i] == '}' && i + 1 < len &&
-		     s[i + 1] == '}')) {
+		/* "@@" (literal @) or "@}" (literal }) -- two bytes that
+		 * stand for one visible character. */
+		if (s[i] == '@' && i + 1 < len &&
+		    (s[i + 1] == '@' || s[i + 1] == '}')) {
 			vw++;
 			i += 2;
 		} else if (s[i] == '@' && i + 2 < len && s[i + 2] == '{') {
@@ -125,13 +124,13 @@ static const char *word_end(const char *p)
 {
 	while (*p && *p != ' ' && *p != '\t' && *p != '\n' && *p != '\x02' &&
 	       *p != '\x03') {
-		if (*p == '@' && p[1] == '@') {
+		if (*p == '@' && (p[1] == '@' || p[1] == '}')) {
 			p += 2;
 		} else if (*p == '@' && p[1] && p[2] == '{') {
 			p += 3;
 			int depth = 1;
 			while (*p && depth > 0) {
-				if (*p == '}' && p[1] == '}')
+				if (*p == '@' && (p[1] == '@' || p[1] == '}'))
 					p += 2;
 				else if (*p == '}') {
 					depth--;
@@ -150,7 +149,7 @@ static const char *word_end(const char *p)
 				p++;
 			int depth = 1;
 			while (*p && depth > 0) {
-				if (*p == '}' && p[1] == '}')
+				if (*p == '@' && (p[1] == '@' || p[1] == '}'))
 					p += 2;
 				else if (*p == '}') {
 					depth--;
@@ -456,19 +455,18 @@ void print_manual(const char *cmd_name, const struct cmd_desc *desc)
 	const char *summary;
 	int has_flags = 0;
 	int has_subcmds = 0;
-	const char *positional = NULL;
+	int has_positionals = 0;
 
 	cmd_name = basename_of(cmd_name);
 	summary = m ? m->summary : NULL;
 
 	if (opts) {
-		if (opts->type != OPTION_END)
-			has_flags = 1;
-		{
-			const struct option *end = opts;
-			while (end->type != OPTION_END)
-				end++;
-			positional = end->argh;
+		for (const struct option *o = opts; o->type != OPTION_END;
+		     o++) {
+			if (OPT_IS_POSITIONAL(o->type))
+				has_positionals = 1;
+			else
+				has_flags = 1;
 		}
 	}
 	if (desc && desc->subcommands && *desc->subcommands)
@@ -488,18 +486,23 @@ void print_manual(const char *cmd_name, const struct cmd_desc *desc)
 	printf("%s", cmd_name ? cmd_name : "ice");
 	if (has_flags)
 		printf(" [<options>]");
-	if (has_subcmds)
+	if (has_subcmds) {
 		printf(" <subcommand> [<args>]");
-	else if (positional) {
+	} else if (has_positionals) {
 		/*
-		 * Mirrors print_usage: argh with '<' or '[' is a
-		 * pre-formatted fragment (multi-positional commands),
-		 * a bare word gets wrapped in <>.
+		 * Render every positional slot in declaration order.
+		 * OPT_POSITIONAL renders as "<x>", OPT_POSITIONAL_OPT as
+		 * "[<x>]" -- matches print_usage().
 		 */
-		if (strchr(positional, '<') || strchr(positional, '['))
-			printf(" %s", positional);
-		else
-			printf(" <%s>", positional);
+		for (const struct option *o = opts; o->type != OPTION_END;
+		     o++) {
+			if (!OPT_IS_POSITIONAL(o->type) || !o->argh)
+				continue;
+			if (o->type == OPTION_POSITIONAL_OPT)
+				printf(" [<%s>]", o->argh);
+			else
+				printf(" <%s>", o->argh);
+		}
 	}
 	fputs("\n\n", stdout);
 
@@ -507,6 +510,13 @@ void print_manual(const char *cmd_name, const struct cmd_desc *desc)
 	if (m && m->description) {
 		fputs("@b{DESCRIPTION}\n", stdout);
 		print_text(m->description);
+	}
+
+	/* GETTING STARTED -- onboarding walk-through, right after DESCRIPTION.
+	 */
+	if (m && m->getting_started) {
+		fputs("@b{GETTING STARTED}\n", stdout);
+		print_text(m->getting_started);
 	}
 
 	/* OPTIONS -- auto-generated from the option table. */

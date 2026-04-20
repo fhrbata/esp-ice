@@ -44,8 +44,14 @@ struct cmd_manual {
 	const char
 	    *summary; /**< One-line tagline after the dash on the NAME line. */
 	const char *description; /**< Prose built with H_PARA/H_LINE. */
-	const char *examples;	 /**< Optional; built with H_EXAMPLE. */
-	const char *extras; /**< Optional; extra sections with H_SECTION. */
+	/**
+	 * Optional prose rendered immediately after DESCRIPTION, before
+	 * OPTIONS.  Typically used for an onboarding "GETTING STARTED"
+	 * walk-through on the root manual.
+	 */
+	const char *getting_started;
+	const char *examples; /**< Optional; built with H_EXAMPLE. */
+	const char *extras;   /**< Optional; extra sections with H_SECTION. */
 
 	/**
 	 * When non-zero, print_manual() auto-emits an ALIASES section

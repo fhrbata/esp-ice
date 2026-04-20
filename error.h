@@ -10,7 +10,11 @@
  *
  * err() / err_errno()     -- log with source location (red); continue.
  * warn() / warn_errno()   -- print "warning: ..." (yellow); continue.
+ * hint()                  -- print "hint: ..." (orange); continue.
  * die() / die_errno()     -- print "fatal: ..." (red) and exit.
+ *
+ * Because die() exits, emit hint() *before* the paired die() so both
+ * messages reach stderr; the hint then appears above the fatal line.
  *
  * All output goes through the platform fprintf override, so color
  * tokens are expanded automatically.
@@ -48,6 +52,11 @@ void warn_msg(int add_errno, const char *fmt, ...);
 
 /** Print "warning: ...: strerror" to stderr. */
 #define warn_errno(...) warn_msg(1, __VA_ARGS__)
+
+/**
+ * @brief Print "hint: ..." to stderr (orange).
+ */
+void hint(const char *fmt, ...);
 
 /**
  * @brief Print "fatal: ..." to stderr and exit (not called directly).

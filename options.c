@@ -90,17 +90,14 @@ static void seed_defaults(const struct option *opts)
 	}
 }
 
-static void render_argh(const char *argh)
+/* Render a positional slot's argh for a synopsis line: "<x>" for a
+ * required slot, "[<x>]" for an optional one. */
+static void render_positional(FILE *out, const struct option *o)
 {
-	/*
-	 * argh with '<' or '[' is treated as a pre-formatted synopsis
-	 * fragment (e.g. "<ref> [<name|path>]" or "[<name>]").  A bare
-	 * word like "chip" gets wrapped in <> as usual.
-	 */
-	if (strchr(argh, '<') || strchr(argh, '['))
-		fprintf(stderr, " %s", argh);
+	if (o->type == OPTION_POSITIONAL_OPT)
+		fprintf(out, " [<%s>]", o->argh);
 	else
-		fprintf(stderr, " <%s>", argh);
+		fprintf(out, " <%s>", o->argh);
 }
 
 static void print_usage(const char *argv0, const struct cmd_desc *desc)
@@ -111,7 +108,7 @@ static void print_usage(const char *argv0, const struct cmd_desc *desc)
 	int has_positionals = 0;
 
 	for (const struct option *o = opts; o->type != OPTION_END; o++) {
-		if (o->type == OPTION_POSITIONAL)
+		if (OPT_IS_POSITIONAL(o->type))
 			has_positionals = 1;
 		else
 			has_flags = 1;
@@ -126,8 +123,8 @@ static void print_usage(const char *argv0, const struct cmd_desc *desc)
 		fprintf(stderr, " <subcommand> [<args>]");
 	else if (has_positionals) {
 		for (const struct option *o = opts; o->type != OPTION_END; o++)
-			if (o->type == OPTION_POSITIONAL && o->argh)
-				render_argh(o->argh);
+			if (OPT_IS_POSITIONAL(o->type) && o->argh)
+				render_positional(stderr, o);
 	}
 	fprintf(stderr, "\n\n");
 
@@ -154,7 +151,7 @@ static void print_usage(const char *argv0, const struct cmd_desc *desc)
 		char short_str[8] = "";
 		char long_str[64] = "";
 
-		if (o->type == OPTION_POSITIONAL)
+		if (OPT_IS_POSITIONAL(o->type))
 			continue;
 
 		if (!has_opts) {
@@ -264,7 +261,7 @@ static int fire_positional_complete(const struct option *opts, int slot)
 	int idx = 0;
 
 	for (const struct option *o = opts; o->type != OPTION_END; o++) {
-		if (o->type != OPTION_POSITIONAL)
+		if (!OPT_IS_POSITIONAL(o->type))
 			continue;
 		if (idx == slot) {
 			if (o->complete)
@@ -387,6 +384,15 @@ static int set_value(const struct option *o, const char *val)
 	}
 }
 
+static int has_required_positional(const struct option *opts)
+{
+	for (const struct option *o = opts; o->type != OPTION_END; o++) {
+		if (o->type == OPTION_POSITIONAL)
+			return 1;
+	}
+	return 0;
+}
+
 int parse_options(int argc, const char **argv, const struct cmd_desc *desc)
 {
 	const struct option *opts = desc->opts;
@@ -394,6 +400,16 @@ int parse_options(int argc, const char **argv, const struct cmd_desc *desc)
 	const char *name = (manual && manual->name) ? manual->name : argv[0];
 	int out = 0;
 	int i;
+
+	/*
+	 * Bare invocation of a leaf that declares required positionals:
+	 * mirror the namespace behaviour (ice.c::ice_dispatch) and show the
+	 * full manual instead of dying with a "usage: ..." one-liner.
+	 */
+	if (argc == 1 && manual && has_required_positional(opts)) {
+		print_manual(name, desc);
+		exit(1);
+	}
 
 	seed_defaults(opts);
 

@@ -35,13 +35,29 @@ static int saved_stdout_fd = -1;
 
 int pager_active(void) { return pager_pipe != NULL; }
 
-static const char *resolve_pager(void)
+/*
+ * Return 1 if the first whitespace-separated token of @p cmd resolves
+ * to an executable -- either as a path (absolute/relative) or on PATH.
+ * Used so we skip paging gracefully instead of watching the shell
+ * complain "'less' is not recognized" on systems without a pager.
+ */
+static int pager_available(const char *cmd)
 {
-	const char *p = getenv("PAGER");
+	struct sbuf prog = SBUF_INIT;
+	const char *s = cmd;
+	int ok;
 
-	if (p && *p)
-		return p;
-	return "less -R";
+	while (*s && *s != ' ' && *s != '\t')
+		s++;
+	sbuf_add(&prog, cmd, (size_t)(s - cmd));
+
+	if (strchr(prog.buf, '/') || strchr(prog.buf, '\\'))
+		ok = !access(prog.buf, F_OK);
+	else
+		ok = find_in_path(prog.buf);
+
+	sbuf_release(&prog);
+	return ok;
 }
 
 void pager_start(void)
@@ -52,15 +68,20 @@ void pager_start(void)
 		return;
 	if (!isatty(STDOUT_FILENO))
 		return;
+	if (global_no_pager)
+		return;
+
+	cmd = config_get("core.pager");
+	if (!cmd || !*cmd)
+		return;
+	if (!pager_available(cmd))
+		return;
 
 	/*
 	 * Configure `less` sensibly when the user hasn't:
 	 *   F -- exit immediately if output fits on one screen
 	 *   R -- pass raw ANSI colour sequences through
 	 *   X -- don't clear the screen on start/exit
-	 *
-	 * Done before resolve_pager() so setenv() can't invalidate the
-	 * getenv("PAGER") pointer we use below.
 	 */
 #ifdef _WIN32
 	if (!getenv("LESS"))
@@ -68,8 +89,6 @@ void pager_start(void)
 #else
 	setenv("LESS", "FRX", 0);
 #endif
-
-	cmd = resolve_pager();
 
 	pager_pipe = popen(cmd, "w");
 	if (!pager_pipe)

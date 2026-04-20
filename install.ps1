@@ -94,10 +94,8 @@ if ($pathUpdated) {
 
 @"
 
-  # Enable tab completion (add to `$PROFILE)
-  ice completion powershell | Out-String | Invoke-Expression
-
-  # Get started
+  # Get started -- see the GETTING STARTED section for tab completion
+  # setup and the rest of the onboarding walk-through.
   ice
 
 Note: the binary is currently unsigned (PoC).  On first launch,

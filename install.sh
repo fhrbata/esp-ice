@@ -110,40 +110,10 @@ EOF
 		;;
 esac
 
-case "$(basename "${SHELL:-}")" in
-	bash)
-		cat <<'EOF'
-
-  # Enable tab completion (add to ~/.bashrc)
-  eval "$(ice completion bash)"
-EOF
-		;;
-	zsh)
-		cat <<'EOF'
-
-  # Enable tab completion (add to ~/.zshrc)
-  eval "$(ice completion zsh)"
-EOF
-		;;
-	fish)
-		cat <<'EOF'
-
-  # Enable tab completion (add to ~/.config/fish/config.fish)
-  ice completion fish | source
-EOF
-		;;
-	*)
-		cat <<'EOF'
-
-  # Enable tab completion (see supported shells)
-  ice completion --help
-EOF
-		;;
-esac
-
 cat <<'EOF'
 
-  # Get started
+  # Get started -- see the GETTING STARTED section for tab completion
+  # setup and the rest of the onboarding walk-through.
   ice
 EOF
 echo

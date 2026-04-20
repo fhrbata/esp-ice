@@ -38,6 +38,7 @@
 #include "options.h"
 #include "pager.h"
 #include "platform.h"
+#include "progress.h"
 #include "sbuf.h"
 #include "svec.h"
 #include "term.h"
@@ -68,23 +69,6 @@ int cmd_config(int argc, const char **argv);
 int cmd_configdep(int argc, const char **argv);
 int cmd_help(int argc, const char **argv);
 int cmd_ice(int argc, const char **argv);
-int cmd_install(int argc, const char **argv);
-
-/**
- * @brief Install ESP-IDF tools described by a tools.json manifest.
- *
- * Reads @p manifest_path, picks the recommended version of every tool
- * marked @c install: "always" (or just @p tool_filter when non-NULL),
- * downloads and verifies each archive, and extracts under
- * ice_home()/tools/<name>/<version>/.  Tools already installed are
- * skipped unless @p force is non-zero.  When @p target_filter is
- * non-NULL only tools whose @c supported_targets list contains the
- * target (or "all") are installed.
- *
- * @return 0 on success, non-zero if any tool failed to install.
- */
-int install_from_manifest(const char *manifest_path, const char *target_filter,
-			  const char *tool_filter, int force);
 int cmd_ldgen(int argc, const char **argv);
 int cmd_monitor(int argc, const char **argv);
 int cmd_partition_table(int argc, const char **argv);
@@ -161,6 +145,7 @@ extern const struct cmd_manual ice_root_manual;
 
 /** Global option values populated by parse_options() on ice_global_opts. */
 extern int global_no_color;
+extern int global_no_pager;
 extern int global_version;
 extern int global_verbose;
 

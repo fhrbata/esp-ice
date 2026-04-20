@@ -30,7 +30,7 @@ static const struct cmd_manual help_manual = {
 };
 
 static const struct option cmd_help_opts[] = {
-    OPT_POSITIONAL("command", complete_help_commands),
+    OPT_POSITIONAL_OPT("command", complete_help_commands),
     OPT_END(),
 };
 

@@ -111,6 +111,7 @@ static int try_expand_alias(int *argcp, const char ***argvp)
  * declarations in ice.h.
  */
 int global_no_color;
+int global_no_pager;
 int global_version;
 int global_verbose;
 
@@ -153,8 +154,9 @@ static void complete_aliases(void)
  *
  * For a namespace node (has @c subcommands), parse the node's options,
  * then recurse into the child whose @c .name matches argv[0].  If no
- * child matches and the namespace has a @c .fn, fire it; otherwise
- * die with a "expected a subcommand" message.
+ * child matches and the namespace has a @c .fn, fire it.  Otherwise:
+ * with no subcommand given, print the namespace manual (same shape as
+ * bare @c ice); with an unknown subcommand, die.
  *
  * For a leaf node (no @c subcommands), do NOT call @c parse_options
  * here -- the leaf's own body calls it with the leaf's argv[0] still
@@ -180,11 +182,18 @@ int ice_dispatch(int argc, const char **argv, const struct cmd_desc *desc)
 	if (desc->fn)
 		return desc->fn(argc, argv);
 
-	die("expected a subcommand. See '%s --help'.", desc->manual->name);
+	if (argc == 0) {
+		print_manual(desc->manual->name, desc);
+		return 1;
+	}
+
+	die("'%s' is not a valid %s subcommand. See '%s --help'.", argv[0],
+	    desc->manual->name, desc->manual->name);
 }
 
 const struct option ice_global_opts[] = {
     OPT_BOOL(0, "no-color", &global_no_color, "disable colored output"),
+    OPT_BOOL(0, "no-pager", &global_no_pager, "disable the pager"),
     OPT_BOOL_CFG('v', "verbose", &global_verbose, "core.verbose", NULL,
 		 "show full command output", NULL),
     OPT_BOOL(0, "version", &global_version, "show version"),
@@ -308,8 +317,11 @@ const struct cmd_manual ice_root_manual = {
 	H_EXAMPLE("ice flash")
 	H_EXAMPLE("ice help config"),
 
-	.extras =
-	H_SECTION("GETTING STARTED")
+	.getting_started =
+	H_PARA("Enable tab completion for your shell (see "
+	       "@b{ice completion --help} for bash, zsh, fish, powershell):")
+	H_LINE("@y{$} @b{eval \"$(ice completion bash)\"}          add to ~/.bashrc")
+	H_RAW("")
 	H_PARA("Set up the ice-managed ESP-IDF reference:")
 	H_LINE("@y{$} @b{ice repo clone}                         clone ESP-IDF into ~/.ice/esp-idf")
 	H_RAW("")
@@ -325,8 +337,9 @@ const struct cmd_manual ice_root_manual = {
 	H_LINE("@y{$} @b{ice flash}")
 	H_RAW("")
 	H_PARA("No @b{export.sh} or environment setup needed -- @b{ice} "
-	       "finds the tools automatically.")
+	       "finds the tools automatically."),
 
+	.extras =
 	H_SECTION("MANAGING ESP-IDF VERSIONS")
 	H_PARA("List available versions, create more checkouts, or refresh the reference:")
 	H_LINE("@y{$} @b{ice repo list}                          show available branches and tags")

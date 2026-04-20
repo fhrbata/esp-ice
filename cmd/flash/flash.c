@@ -39,7 +39,7 @@ static const struct cmd_manual flash_manual = {
 /* clang-format on */
 
 static const struct option cmd_flash_opts[] = {
-    OPT_POSITIONAL("[<name>]", complete_profile_names),
+    OPT_POSITIONAL_OPT("name", complete_profile_names),
     OPT_END(),
 };
 

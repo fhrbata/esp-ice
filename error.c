@@ -59,6 +59,28 @@ void warn_msg(int add_errno, const char *fmt, ...)
 }
 
 /**
+ * @brief Print a hint message to stderr (orange).
+ *
+ * Output format:  hint: <message>\n
+ *
+ * Pair with a preceding err()/warn() or a following die() to suggest
+ * a next step to the user.  Because die() exits, call hint() before
+ * die() -- the hint will appear above the fatal line.
+ */
+void hint(const char *fmt, ...)
+{
+	struct sbuf msg = SBUF_INIT;
+	va_list ap;
+
+	va_start(ap, fmt);
+	sbuf_vaddf(&msg, fmt, ap);
+	va_end(ap);
+
+	fprintf(stderr, "@[38;5;208]{hint: %s}\n", msg.buf);
+	sbuf_release(&msg);
+}
+
+/**
  * @brief Print a fatal error message to stderr (red) and exit.
  *
  * Output format:  fatal: <message>[: strerror]\n
