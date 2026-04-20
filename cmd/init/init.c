@@ -772,9 +772,27 @@ int cmd_init(int argc, const char **argv)
 			&opt_defines);
 	config_reload_local();
 
-	/* Install (or skip if already installed) tools for this IDF.
-	 * Filtering by chip keeps target-specific tool sets minimal. */
-	rc = install_from_manifest(manifest.buf, chip, NULL, 0);
+	/* Install tools for this IDF by spawning "ice tools install"
+	 * under process_run_progress so its output lands in ~/.ice/logs/
+	 * and joins init's other phases behind a single spinner.  The
+	 * --target filter keeps the set narrowed to the chosen chip. */
+	{
+		struct svec cmd = SVEC_INIT;
+		struct process proc = PROCESS_INIT;
+		const char *exe = process_exe();
+
+		svec_push(&cmd, exe ? exe : "ice");
+		svec_push(&cmd, "tools");
+		svec_push(&cmd, "install");
+		svec_push(&cmd, "--target");
+		svec_push(&cmd, chip);
+		svec_push(&cmd, manifest.buf);
+
+		proc.argv = cmd.v;
+		rc = process_run_progress(&proc, "Installing tools",
+					  "init-install");
+		svec_clear(&cmd);
+	}
 	sbuf_release(&manifest);
 	if (rc) {
 		free(idf_path);
