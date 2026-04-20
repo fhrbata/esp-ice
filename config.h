@@ -233,6 +233,15 @@ void config_load_buf(struct config *c, enum config_scope scope,
 void config_load_defaults(struct config *c);
 
 /**
+ * @brief One-line description for a built-in config key, or NULL.
+ *
+ * Covers the keys seeded by config_load_defaults().  Used by the
+ * completion backend to annotate `ice config <TAB>` candidates for
+ * keys that are not declared in any option table.
+ */
+const char *config_builtin_key_help(const char *key);
+
+/**
  * @brief Write all entries at @p scope to @p path as an INI file.
  *
  * Entries are grouped by section (the part of the key before the

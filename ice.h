@@ -168,4 +168,19 @@ extern int global_verbose;
 extern const char *const ice_supported_targets[];
 extern const char *const ice_preview_targets[];
 
+/** One-line summary for chip @p name, or NULL if the chip is unknown. */
+const char *ice_chip_summary(const char *name);
+
+/**
+ * @brief Emit a completion candidate to stdout.
+ *
+ * Prints "<name>\t<desc>\n" when a description is provided and the
+ * @c completion.descriptions config flag is enabled (its default),
+ * or plain "<name>\n" otherwise.  Used by completion callbacks that
+ * generate candidates dynamically (aliases, config keys, chip
+ * targets, idf checkouts) so the description-disable toggle applies
+ * uniformly across every emission site.
+ */
+void complete_emit(const char *name, const char *desc);
+
 #endif /* ICE_H */

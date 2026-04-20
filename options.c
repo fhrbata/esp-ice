@@ -192,6 +192,17 @@ static void print_usage(const char *argv0, const struct cmd_desc *desc)
 /**
  * Print all completion candidates for this option table and exit.
  * Called when --ice-complete is encountered as a standalone argument.
+ *
+ * Each candidate is printed as a line of the form
+ *
+ *     <name>[\t<description>]
+ *
+ * The TAB separator is consumed by the per-shell glue in
+ * cmd/completion/completion.c: zsh feeds it to _describe, fish and
+ * PowerShell read it natively, bash strips it via cut -f1 and keeps
+ * name-only behaviour.  Candidates without a description (dynamic
+ * values emitted by OPT_POSITIONAL callbacks, aliases, config values,
+ * ...) stay as a bare name -- the TAB is optional.
  */
 static void print_sorted(struct svec *v)
 {
@@ -199,6 +210,46 @@ static void print_sorted(struct svec *v)
 	for (size_t i = 0; i < v->nr; i++)
 		printf("%s\n", v->v[i]);
 	svec_clear(v);
+}
+
+/*
+ * Honors the completion.descriptions config flag.  Defaults to on.
+ * Cached so completion callbacks that emit many candidates in a loop
+ * don't re-scan the config store on every candidate.
+ */
+static int completion_with_desc(void)
+{
+	static int cache = -1;
+
+	if (cache < 0) {
+		int enabled = 1;
+		config_get_bool("completion.descriptions", &enabled);
+		cache = enabled ? 1 : 0;
+	}
+	return cache;
+}
+
+/** Push a completion candidate with an optional one-line description. */
+static void push_cand(struct svec *v, const char *name, const char *desc)
+{
+	if (desc && *desc && completion_with_desc())
+		svec_pushf(v, "%s\t%s", name, desc);
+	else
+		svec_push(v, name);
+}
+
+/**
+ * Emit a candidate line to stdout.  Public helper for completion
+ * callbacks that print directly (as opposed to pushing into the
+ * sorted svec used by print_completions).  Drops the description
+ * when @c completion.descriptions is set to false.
+ */
+void complete_emit(const char *name, const char *desc)
+{
+	if (desc && *desc && completion_with_desc())
+		printf("%s\t%s\n", name, desc);
+	else
+		printf("%s\n", name);
 }
 
 /**
@@ -236,8 +287,10 @@ static NORETURN void print_completions(const struct cmd_desc *desc)
 	if (desc->subcommands) {
 		for (const struct cmd_desc *const *p = desc->subcommands; *p;
 		     p++) {
-			if ((*p)->name[0] != '_')
-				svec_push(&v, (*p)->name);
+			if ((*p)->name[0] == '_')
+				continue;
+			push_cand(&v, (*p)->name,
+				  (*p)->manual ? (*p)->manual->summary : NULL);
 		}
 	}
 	print_sorted(&v);
@@ -250,33 +303,34 @@ static NORETURN void print_completions(const struct cmd_desc *desc)
 	if (!desc->subcommands)
 		fire_positional_complete(opts, 0);
 
+	/*
+	 * Namespace-level extra candidates (e.g. user aliases at the
+	 * root) appear between subcommands and flags: they read as
+	 * user-defined commands to the user, so they belong next to the
+	 * real commands rather than after the flag listing.
+	 */
+	if (desc->extra_complete)
+		desc->extra_complete();
+
 	/* Long flags, sorted. */
-	svec_push(&v, "--help");
+	push_cand(&v, "--help", "show full manual");
 	for (const struct option *o = opts; o->type != OPTION_END; o++) {
 		if (o->long_opt) {
 			snprintf(buf, sizeof(buf), "--%s", o->long_opt);
-			svec_push(&v, buf);
+			push_cand(&v, buf, o->help);
 		}
 	}
 	print_sorted(&v);
 
 	/* Short flags, sorted. */
-	svec_push(&v, "-h");
+	push_cand(&v, "-h", "show short usage");
 	for (const struct option *o = opts; o->type != OPTION_END; o++) {
 		if (o->short_opt) {
 			snprintf(buf, sizeof(buf), "-%c", o->short_opt);
-			svec_push(&v, buf);
+			push_cand(&v, buf, o->help);
 		}
 	}
 	print_sorted(&v);
-
-	/*
-	 * Namespace-level extra candidates (e.g. user aliases at the
-	 * root) are emitted after the structured listings so they slot
-	 * in alongside flag/subcommand completions.
-	 */
-	if (desc->extra_complete)
-		desc->extra_complete();
 
 	exit(0);
 }

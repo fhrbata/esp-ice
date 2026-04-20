@@ -499,11 +499,38 @@ int config_load_file(struct config *c, enum config_scope scope,
 /*  Non-file loaders                                                  */
 /* ------------------------------------------------------------------ */
 
+/*
+ * Built-in default keys.  Listed here so the same table drives both
+ * default seeding (config_load_defaults) and description lookup for
+ * completion (config_builtin_key_help).  Keep descriptions short --
+ * they appear next to the key in the completion pop-up.
+ */
+static const struct {
+	const char *key;
+	const char *value;
+	const char *summary;
+} builtin_defaults[] = {
+    {"core.build-dir", "build", "default build directory"},
+    {"core.generator", "Ninja", "default cmake generator"},
+    {"core.verbose", "false", "default verbose mode"},
+    {"completion.descriptions", "true",
+     "show descriptions in shell completion"},
+    {NULL, NULL, NULL},
+};
+
 void config_load_defaults(struct config *c)
 {
-	config_set(c, "core.build-dir", "build", CONFIG_SCOPE_DEFAULT);
-	config_set(c, "core.generator", "Ninja", CONFIG_SCOPE_DEFAULT);
-	config_set(c, "core.verbose", "false", CONFIG_SCOPE_DEFAULT);
+	for (size_t i = 0; builtin_defaults[i].key; i++)
+		config_set(c, builtin_defaults[i].key,
+			   builtin_defaults[i].value, CONFIG_SCOPE_DEFAULT);
+}
+
+const char *config_builtin_key_help(const char *key)
+{
+	for (size_t i = 0; builtin_defaults[i].key; i++)
+		if (!strcmp(builtin_defaults[i].key, key))
+			return builtin_defaults[i].summary;
+	return NULL;
 }
 
 static int value_needs_quoting(const char *v)

@@ -120,6 +120,7 @@ static void complete_aliases(void)
 
 	for (int i = 0; i < config.nr; i++) {
 		const char *key = config.entries[i].key;
+		const char *value = config.entries[i].value;
 		const char *name;
 		int dup = 0;
 
@@ -133,8 +134,15 @@ static void complete_aliases(void)
 				break;
 			}
 		if (!dup) {
+			char desc[256];
 			svec_push(&seen, name);
-			printf("%s\n", name);
+			if (value && *value) {
+				snprintf(desc, sizeof(desc), "alias for '%s'",
+					 value);
+				complete_emit(name, desc);
+			} else {
+				complete_emit(name, NULL);
+			}
 		}
 	}
 	svec_clear(&seen);

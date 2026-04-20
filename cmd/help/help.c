@@ -24,7 +24,10 @@ static void complete_help_commands(void)
 	}
 }
 
-static const struct cmd_manual help_manual = {.name = "ice help"};
+static const struct cmd_manual help_manual = {
+    .name = "ice help",
+    .summary = "show help for a command",
+};
 
 static const struct option cmd_help_opts[] = {
     OPT_POSITIONAL("command", complete_help_commands),

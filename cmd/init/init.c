@@ -105,20 +105,61 @@ static struct svec opt_defines;
 /* Per-slot completion                                                 */
 /* ------------------------------------------------------------------ */
 
-static int complete_dir_cb(const char *name, void *ud)
+/*
+ * Read the checkout's HEAD file and format a short label for the
+ * completion description.  Cheap: one stat + one read (no git fork,
+ * no packed-refs walk), so latency stays negligible even with many
+ * checkouts.  Returns 1 on success with @p out populated.
+ */
+static int checkout_head_label(const char *checkout, struct sbuf *out)
 {
-	(void)ud;
-	printf("%s\n", name);
+	struct sbuf head_path = SBUF_INIT;
+	struct sbuf content = SBUF_INIT;
+	int ok = 0;
+
+	sbuf_addf(&head_path, "%s/.git/HEAD", checkout);
+	if (sbuf_read_file(&content, head_path.buf) >= 0) {
+		sbuf_rtrim(&content);
+		if (!strncmp(content.buf, "ref: refs/heads/", 16)) {
+			sbuf_addf(out, "on branch %s", content.buf + 16);
+			ok = 1;
+		} else if (content.len >= 7) {
+			sbuf_addf(out, "at %.7s", content.buf);
+			ok = 1;
+		}
+	}
+	sbuf_release(&head_path);
+	sbuf_release(&content);
+	return ok;
+}
+
+static int complete_idf_cb(const char *name, void *ud)
+{
+	const char *base = ud;
+	struct sbuf full = SBUF_INIT;
+	struct sbuf label = SBUF_INIT;
+
+	sbuf_addf(&full, "%s/%s", base, name);
+	if (checkout_head_label(full.buf, &label))
+		complete_emit(name, label.buf);
+	else
+		complete_emit(name, NULL);
+	sbuf_release(&full);
+	sbuf_release(&label);
 	return 0;
 }
 
 /** Slot 0 (chip): emit every supported and preview chip. */
 static void complete_chip(void)
 {
+	const char *s;
+
 	for (const char *const *t = ice_supported_targets; *t; t++)
-		printf("%s\n", *t);
-	for (const char *const *t = ice_preview_targets; *t; t++)
-		printf("%s\n", *t);
+		complete_emit(*t, ice_chip_summary(*t));
+	for (const char *const *t = ice_preview_targets; *t; t++) {
+		s = ice_chip_summary(*t);
+		complete_emit(*t, s ? s : "(preview)");
+	}
 }
 
 /** Slot 1 (idf): emit names of @b{~/.ice/checkouts/} entries. */
@@ -128,7 +169,7 @@ static void complete_idf(void)
 
 	sbuf_addf(&path, "%s/checkouts", ice_home());
 	if (access(path.buf, F_OK) == 0)
-		dir_foreach(path.buf, complete_dir_cb, NULL);
+		dir_foreach(path.buf, complete_idf_cb, path.buf);
 	sbuf_release(&path);
 }
 

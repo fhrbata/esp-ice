@@ -32,6 +32,39 @@ const char *const ice_preview_targets[] = {
     "linux", "esp32h21", "esp32h4", "esp32s31", NULL,
 };
 
+/*
+ * One-line summaries for the completion menu.  Kept deliberately
+ * terse -- full specs live in the ESP product matrix, not here.
+ */
+static const struct {
+	const char *name;
+	const char *summary;
+} chip_summaries[] = {
+    {"esp32", "Xtensa dual-core, WiFi + BT"},
+    {"esp32s2", "Xtensa single-core, WiFi"},
+    {"esp32s3", "Xtensa dual-core, WiFi + BLE"},
+    {"esp32c2", "RISC-V, WiFi 4 + BLE (cost-optimized)"},
+    {"esp32c3", "RISC-V, WiFi 4 + BLE"},
+    {"esp32c5", "RISC-V, WiFi 6 dual-band + BLE"},
+    {"esp32c6", "RISC-V, WiFi 6 + BLE + 802.15.4"},
+    {"esp32c61", "RISC-V, WiFi 6 + BLE (cost-optimized)"},
+    {"esp32h2", "RISC-V, BLE + 802.15.4 (no WiFi)"},
+    {"esp32p4", "RISC-V dual-core + LP, HMI-focused"},
+    {"linux", "host simulation (preview)"},
+    {"esp32h21", "(preview)"},
+    {"esp32h4", "(preview)"},
+    {"esp32s31", "(preview)"},
+    {NULL, NULL},
+};
+
+const char *ice_chip_summary(const char *name)
+{
+	for (size_t i = 0; chip_summaries[i].name; i++)
+		if (!strcmp(chip_summaries[i].name, name))
+			return chip_summaries[i].summary;
+	return NULL;
+}
+
 /* ------------------------------------------------------------------ */
 /* ice target list                                                     */
 /* ------------------------------------------------------------------ */

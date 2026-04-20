@@ -148,10 +148,68 @@ static int opt_unset;
 static int opt_user;
 static int opt_local;
 
+/*
+ * Look up the help text for a config key by walking the descriptor
+ * tree and finding the option that declared it via config_key.
+ * Options attach their human description to a config key through
+ * .config_help (with .help as the fallback); see options.h.
+ */
+static const char *find_key_help(const char *key, const struct cmd_desc *desc)
+{
+	for (const struct option *o = desc->opts; o->type != OPTION_END; o++) {
+		if (!o->config_key || strcmp(o->config_key, key) != 0)
+			continue;
+		return o->config_help ? o->config_help : o->help;
+	}
+	if (desc->subcommands) {
+		for (const struct cmd_desc *const *p = desc->subcommands; *p;
+		     p++) {
+			const char *h = find_key_help(key, *p);
+			if (h)
+				return h;
+		}
+	}
+	return NULL;
+}
+
 static void complete_config_keys(void)
 {
-	for (int i = 0; i < config.nr; i++)
-		printf("%s\n", config.entries[i].key);
+	struct svec seen = SVEC_INIT;
+
+	for (int i = 0; i < config.nr; i++) {
+		const char *key = config.entries[i].key;
+		const char *value = config.entries[i].value;
+		const char *help;
+		int dup = 0;
+
+		/* A key may live in multiple scopes -- emit it only once. */
+		for (size_t j = 0; j < seen.nr; j++)
+			if (!strcmp(seen.v[j], key)) {
+				dup = 1;
+				break;
+			}
+		if (dup)
+			continue;
+		svec_push(&seen, key);
+
+		if (!strncmp(key, "alias.", 6) && key[6]) {
+			char desc[256];
+			if (value && *value) {
+				snprintf(desc, sizeof(desc), "alias for '%s'",
+					 value);
+				complete_emit(key, desc);
+			} else {
+				complete_emit(key, NULL);
+			}
+			continue;
+		}
+
+		help = find_key_help(key, &ice_root_desc);
+		if (!help)
+			help = config_builtin_key_help(key);
+		complete_emit(key, help);
+	}
+	svec_clear(&seen);
 }
 
 static const struct option cmd_config_opts[] = {
