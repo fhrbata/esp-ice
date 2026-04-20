@@ -18,9 +18,10 @@ static const struct cmd_manual build_manual = {
 	.description =
 	H_PARA("Compiles the project's @b{all} target through cmake.  "
 	       "Progress is shown on a single status line and the full "
-	       "command output is captured to "
-	       "@b{<build-dir>/log/build.log}, surfaced on failure or "
-	       "when @b{-v} / @b{core.verbose} is set.")
+	       "command output is captured under "
+	       "@b{~/.ice/logs/}; the exact log path is printed if the "
+	       "build fails, and the raw output is mirrored live when "
+	       "@b{-v} / @b{core.verbose} is set.")
 	H_PARA("@b{[<name>]} selects the project profile (default: "
 	       "@b{default}).  The profile must already have been bound "
 	       "with @b{ice init <chip> <idf> [<name>]}.  cmake re-runs "
@@ -88,5 +89,5 @@ int cmd_build(int argc, const char **argv)
 	cmake_argv[5] = NULL;
 
 	proc.argv = cmake_argv;
-	return process_run(&proc);
+	return process_run_progress(&proc, "Building", "build");
 }
