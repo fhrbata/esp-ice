@@ -47,6 +47,13 @@ static const char *const spinner_frames[] = {
  * live, slow enough to be cheap. */
 #define PROGRESS_POLL_MS 100
 
+/* After this much elapsed time we append a reassurance tag to the
+ * spinner so a slow op (toolchain download, big clone, ...) doesn't
+ * look stuck.  Short enough that only genuinely slow work trips it;
+ * long enough that fast ops stay quiet. */
+#define PROGRESS_SLOW_HINT_MS 5000
+#define PROGRESS_SLOW_HINT " @[2]{[this can take a while]}"
+
 static int progress_interactive(void) { return isatty(STDOUT_FILENO); }
 
 static void format_elapsed(char *out, size_t cap, unsigned long long ms)
@@ -68,26 +75,36 @@ static void build_log_path(struct sbuf *out, const char *slug)
 
 static void progress_draw(const char *msg, int frame, unsigned long long start)
 {
+	unsigned long long elapsed_ms = mono_ms() - start;
 	char elapsed[32];
+	const char *hint = "";
 
-	format_elapsed(elapsed, sizeof elapsed, mono_ms() - start);
+	format_elapsed(elapsed, sizeof elapsed, elapsed_ms);
+	if (elapsed_ms >= PROGRESS_SLOW_HINT_MS)
+		hint = PROGRESS_SLOW_HINT;
 	/* \r returns to column 0; the line only grows in length as
-	 * seconds tick up, so no explicit clear sequence is needed
-	 * between redraws.  Colors go through the @c{} token so they
-	 * degrade to plain text on non-tty output. */
-	fprintf(stdout, "\r@c{%s} %s (%s)",
-		spinner_frames[frame % SPINNER_NFRAMES], msg, elapsed);
+	 * seconds tick up (and once across the slow-hint threshold),
+	 * so no explicit clear sequence is needed between redraws.
+	 * Colors go through the @c{} / @[2]{} tokens so they degrade
+	 * to plain text on non-tty output. */
+	fprintf(stdout, "\r@c{%s} %s (%s)%s",
+		spinner_frames[frame % SPINNER_NFRAMES], msg, elapsed, hint);
 	fflush(stdout);
 }
 
 static void progress_clear(void)
 {
-	/* Generous space padding erases the spinner line on all
-	 * terminals without relying on ANSI [K -- the legacy Windows
-	 * console writer does not parse non-SGR escapes. */
-	fputs("\r                                                              "
-	      "                  \r",
-	      stdout);
+	/* ANSI [K erases from cursor to end of line without advancing,
+	 * which is both correct and immune to terminal-width wrapping.
+	 * The legacy Windows console writer only parses SGR sequences,
+	 * so there fall back to a bounded space pad sized to fit any
+	 * realistic terminal without wrapping above the final line. */
+	if (use_vt)
+		fputs("\r\x1b[K", stdout);
+	else
+		fputs("\r                                                      "
+		      "                          \r",
+		      stdout);
 	fflush(stdout);
 }
 
