@@ -46,7 +46,7 @@ static const struct cmd_manual status_manual = {
 /* clang-format on */
 
 static const struct option cmd_status_opts[] = {
-    OPT_POSITIONAL("[<name>]", complete_profile_names),
+    OPT_POSITIONAL_OPT("name", complete_profile_names),
     OPT_END(),
 };
 

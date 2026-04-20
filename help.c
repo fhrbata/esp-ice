@@ -463,7 +463,7 @@ void print_manual(const char *cmd_name, const struct cmd_desc *desc)
 	if (opts) {
 		for (const struct option *o = opts; o->type != OPTION_END;
 		     o++) {
-			if (o->type == OPTION_POSITIONAL)
+			if (OPT_IS_POSITIONAL(o->type))
 				has_positionals = 1;
 			else
 				has_flags = 1;
@@ -490,17 +490,16 @@ void print_manual(const char *cmd_name, const struct cmd_desc *desc)
 		printf(" <subcommand> [<args>]");
 	} else if (has_positionals) {
 		/*
-		 * Render every OPT_POSITIONAL slot in declaration order.
-		 * argh containing '<' or '[' is pre-formatted (optional
-		 * slots, multi-word fragments); a bare word gets wrapped
-		 * in <> -- matches print_usage().
+		 * Render every positional slot in declaration order.
+		 * OPT_POSITIONAL renders as "<x>", OPT_POSITIONAL_OPT as
+		 * "[<x>]" -- matches print_usage().
 		 */
 		for (const struct option *o = opts; o->type != OPTION_END;
 		     o++) {
-			if (o->type != OPTION_POSITIONAL || !o->argh)
+			if (!OPT_IS_POSITIONAL(o->type) || !o->argh)
 				continue;
-			if (strchr(o->argh, '<') || strchr(o->argh, '['))
-				printf(" %s", o->argh);
+			if (o->type == OPTION_POSITIONAL_OPT)
+				printf(" [<%s>]", o->argh);
 			else
 				printf(" <%s>", o->argh);
 		}

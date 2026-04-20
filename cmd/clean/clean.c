@@ -38,7 +38,7 @@ static const struct cmd_manual clean_manual = {
 /* clang-format on */
 
 static const struct option cmd_clean_opts[] = {
-    OPT_POSITIONAL("[<name>]", complete_profile_names),
+    OPT_POSITIONAL_OPT("name", complete_profile_names),
     OPT_END(),
 };
 

@@ -47,9 +47,14 @@ enum option_type {
 	OPTION_STRING,
 	OPTION_STRING_LIST,
 	OPTION_INT,
-	OPTION_POSITIONAL,
+	OPTION_POSITIONAL,     /**< Required positional slot. */
+	OPTION_POSITIONAL_OPT, /**< Optional positional slot. */
 	OPTION_END,
 };
+
+/** @c 1 iff @p t is either positional variant. */
+#define OPT_IS_POSITIONAL(t)                                                   \
+	((t) == OPTION_POSITIONAL || (t) == OPTION_POSITIONAL_OPT)
 
 struct option {
 	enum option_type type;
@@ -127,15 +132,23 @@ struct option {
 /**
  * @brief Declare a positional argument slot with per-slot completion.
  *
- * Place one OPT_POSITIONAL per slot before OPT_END.  The slot's @p argh
- * appears in the auto-generated synopsis (wrapped in @c <> if it does
- * not already contain @c < or @c [) and the slot's @p complete fires
- * when the user TABs at that positional's column.
+ * Place one OPT_POSITIONAL / OPT_POSITIONAL_OPT per slot before
+ * OPT_END.  The slot's @p argh is a bare word ("chip", "ref", ...); the
+ * synopsis wraps it in @c <> for required slots and @c [<>] for
+ * optional slots, and the slot's @p complete fires when the user TABs
+ * at that positional's column.
+ *
+ * A leaf declaring at least one required OPT_POSITIONAL that is
+ * invoked bare (no arguments) auto-prints its manual and exits -- the
+ * user gets the same onboarding as a bare namespace instead of a
+ * cryptic "usage: ..." one-liner.  Commands that can run usefully
+ * without a positional should use OPT_POSITIONAL_OPT so bare
+ * invocation reaches their handler.
  *
  * Example:
- *   OPT_POSITIONAL("chip",      complete_chip),
- *   OPT_POSITIONAL("idf",       complete_idf),
- *   OPT_POSITIONAL("[<name>]",  complete_profile),
+ *   OPT_POSITIONAL("chip",      complete_chip),     // required
+ *   OPT_POSITIONAL("idf",       complete_idf),      // required
+ *   OPT_POSITIONAL_OPT("name",  complete_profile),  // optional
  *   OPT_END(),
  *
  * For namespace-level extra completion candidates (alongside
@@ -144,6 +157,18 @@ struct option {
  */
 #define OPT_POSITIONAL(argh, c)                                                \
 	{OPTION_POSITIONAL, 0, NULL, NULL, (argh), NULL, (c), NULL, NULL, NULL}
+
+#define OPT_POSITIONAL_OPT(argh, c)                                            \
+	{OPTION_POSITIONAL_OPT,                                                \
+	 0,                                                                    \
+	 NULL,                                                                 \
+	 NULL,                                                                 \
+	 (argh),                                                               \
+	 NULL,                                                                 \
+	 (c),                                                                  \
+	 NULL,                                                                 \
+	 NULL,                                                                 \
+	 NULL}
 
 struct cmd_manual;
 struct cmd_desc;

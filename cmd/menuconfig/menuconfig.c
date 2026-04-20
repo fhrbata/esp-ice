@@ -45,7 +45,7 @@ static const struct cmd_manual menuconfig_manual = {
 /* clang-format on */
 
 static const struct option cmd_menuconfig_opts[] = {
-    OPT_POSITIONAL("[<name>]", complete_profile_names),
+    OPT_POSITIONAL_OPT("name", complete_profile_names),
     OPT_END(),
 };
 

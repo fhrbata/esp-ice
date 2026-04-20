@@ -187,7 +187,7 @@ static const struct option cmd_init_opts[] = {
     OPT_BOOL(0, "preview", &opt_preview, "allow preview chip targets"),
     OPT_POSITIONAL("chip", complete_chip),
     OPT_POSITIONAL("idf", complete_idf),
-    OPT_POSITIONAL("[<name>]", complete_profile_names),
+    OPT_POSITIONAL_OPT("name", complete_profile_names),
     OPT_END(),
 };
 
