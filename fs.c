@@ -180,12 +180,24 @@ static void lock_atexit_cleanup(void)
 
 /*
  * Called from a signal handler -- must stay async-signal-safe.
- * unlink() is AS-safe; free() is not, so we leak the strdup'd
- * paths (the process is terminating anyway).
+ *
+ * POSIX: unlink(2) is on the async-signal-safe list; free() is not,
+ * so we leak the strdup'd paths (the process is terminating anyway).
+ *
+ * Windows: unlink macro-expands to unlink_w (mbs_to_wcs + _wunlink +
+ * free), which isn't strictly AS-safe on paper because of the
+ * internal malloc/free.  In practice this doesn't matter: MSVCRT
+ * delivers SIGINT on a brand-new thread -- not on the interrupted
+ * thread's stack -- so the usual "handler re-entering a half-done
+ * malloc" hazard that motivates the POSIX AS-safe list doesn't
+ * apply.  Same tradeoff lock_acquire() already documents.  The
+ * NOLINT below silences bugprone-signal-handler, which (correctly)
+ * can't see past the platform macro to know it's intentional.
  */
 static void lock_signal_cleanup(int sig)
 {
 	for (size_t i = 0; i < held_locks_nr; i++)
+		/* NOLINTNEXTLINE(bugprone-signal-handler) */
 		unlink(held_locks[i]);
 	_exit(128 + sig);
 }
