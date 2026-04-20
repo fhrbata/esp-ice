@@ -159,6 +159,7 @@ LIB_SRCS := \
 	partition_table.c \
 	binary.c \
 	elf2image.c \
+	progress.c \
 	sbuf.c \
 	slip.c \
 	svec.c \

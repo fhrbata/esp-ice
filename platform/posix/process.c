@@ -15,7 +15,9 @@
  */
 #include "ice.h"
 
+#include <sys/select.h>
 #include <sys/wait.h>
+#include <time.h>
 
 #ifdef __APPLE__
 #include <mach-o/dyld.h>
@@ -179,4 +181,49 @@ int process_finish(struct process *proc)
 		return WTERMSIG(status) + 128;
 
 	return -1;
+}
+
+/**
+ * @brief Read from a pipe with a timeout (POSIX).
+ *
+ * select() waits up to @p timeout_ms; read() then drains whatever is
+ * available.  A successful select() followed by read() == 0 means the
+ * writing end has been closed (EOF), reported as -1 so the caller can
+ * exit its read loop without a separate EOF signal.
+ */
+ssize_t pipe_read_timed(int fd, void *buf, size_t n, unsigned timeout_ms)
+{
+	fd_set rfds;
+	struct timeval tv;
+	int rc;
+	ssize_t got;
+
+	FD_ZERO(&rfds);
+	FD_SET(fd, &rfds);
+
+	tv.tv_sec = (long)(timeout_ms / 1000u);
+	tv.tv_usec = (long)((timeout_ms % 1000u) * 1000u);
+
+	do {
+		rc = select(fd + 1, &rfds, NULL, NULL, &tv);
+	} while (rc < 0 && errno == EINTR);
+
+	if (rc < 0)
+		return -1;
+	if (rc == 0)
+		return 0;
+
+	got = read(fd, buf, n);
+	if (got <= 0)
+		return -1;
+	return got;
+}
+
+unsigned long long mono_ms(void)
+{
+	struct timespec ts;
+
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	return (unsigned long long)ts.tv_sec * 1000ull +
+	       (unsigned long long)ts.tv_nsec / 1000000ull;
 }

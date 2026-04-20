@@ -317,4 +317,38 @@ static inline int process_run(struct process *proc)
 	return process_finish(proc);
 }
 
+/**
+ * @brief Read from a pipe file descriptor with a timeout.
+ *
+ * Waits up to @p timeout_ms milliseconds for data, then reads whatever
+ * is buffered into @p buf (up to @p n bytes).  Designed for reading
+ * the output side of a pipe created by process_start() (proc->out or
+ * proc->err) while keeping the parent responsive -- e.g. to animate a
+ * progress indicator between bursts of child output.
+ *
+ * POSIX uses select() + read(); Windows uses PeekNamedPipe() in a
+ * short poll loop + ReadFile().  Anonymous pipes on Windows are not
+ * signalable objects, so WaitForSingleObject() is not an option there.
+ *
+ * @param fd          Read end of the pipe (e.g. proc->out).
+ * @param buf         Destination buffer.
+ * @param n           Maximum bytes to read.
+ * @param timeout_ms  Maximum time to wait for data (0 = poll once).
+ * @return bytes read (> 0), 0 on timeout, -1 on EOF or error.
+ */
+ssize_t pipe_read_timed(int fd, void *buf, size_t n, unsigned timeout_ms);
+
+/**
+ * @brief Return a monotonic timestamp in milliseconds.
+ *
+ * Suitable for measuring elapsed intervals inside a single process
+ * run.  The value is monotonic (never decreases across wall-clock
+ * adjustments) but its epoch is unspecified -- only differences are
+ * meaningful.  Resolution is ~1 ms on both platforms.
+ *
+ * POSIX uses clock_gettime(CLOCK_MONOTONIC); Windows uses
+ * GetTickCount64().
+ */
+unsigned long long mono_ms(void);
+
 #endif /* PLATFORM_H */
