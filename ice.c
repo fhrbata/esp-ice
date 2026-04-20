@@ -154,8 +154,9 @@ static void complete_aliases(void)
  *
  * For a namespace node (has @c subcommands), parse the node's options,
  * then recurse into the child whose @c .name matches argv[0].  If no
- * child matches and the namespace has a @c .fn, fire it; otherwise
- * die with a "expected a subcommand" message.
+ * child matches and the namespace has a @c .fn, fire it.  Otherwise:
+ * with no subcommand given, print the namespace manual (same shape as
+ * bare @c ice); with an unknown subcommand, die.
  *
  * For a leaf node (no @c subcommands), do NOT call @c parse_options
  * here -- the leaf's own body calls it with the leaf's argv[0] still
@@ -181,7 +182,13 @@ int ice_dispatch(int argc, const char **argv, const struct cmd_desc *desc)
 	if (desc->fn)
 		return desc->fn(argc, argv);
 
-	die("expected a subcommand. See '%s --help'.", desc->manual->name);
+	if (argc == 0) {
+		print_manual(desc->manual->name, desc);
+		return 1;
+	}
+
+	die("'%s' is not a valid %s subcommand. See '%s --help'.", argv[0],
+	    desc->manual->name, desc->manual->name);
 }
 
 const struct option ice_global_opts[] = {
