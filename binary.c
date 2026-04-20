@@ -55,6 +55,7 @@ static const struct seg_range r_esp32s3[] = {
     {0x3FC88000u, 0x3FD00000u, BIN_SEG_DRAM},
     {0x40370000u, 0x403E0000u, BIN_SEG_IRAM},
     {0x42000000u, 0x44000000u, BIN_SEG_IROM},
+    {0x50000000u, 0x50002000u, BIN_SEG_RTC_DATA},
     {0x600FE000u, 0x60100000u, BIN_SEG_RTC_DATA},
     SEG_END,
 };

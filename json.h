@@ -37,6 +37,8 @@
 
 #include <stddef.h>
 
+struct sbuf; /* forward declaration — defined in sbuf.h */
+
 enum json_type {
 	JSON_NULL,
 	JSON_BOOL,
