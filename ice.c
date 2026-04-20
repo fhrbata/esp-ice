@@ -317,8 +317,11 @@ const struct cmd_manual ice_root_manual = {
 	H_EXAMPLE("ice flash")
 	H_EXAMPLE("ice help config"),
 
-	.extras =
-	H_SECTION("GETTING STARTED")
+	.getting_started =
+	H_PARA("Enable tab completion for your shell (see "
+	       "@b{ice completion --help} for bash, zsh, fish, powershell):")
+	H_LINE("@y{$} @b{eval \"$(ice completion bash)\"}          add to ~/.bashrc")
+	H_RAW("")
 	H_PARA("Set up the ice-managed ESP-IDF reference:")
 	H_LINE("@y{$} @b{ice repo clone}                         clone ESP-IDF into ~/.ice/esp-idf")
 	H_RAW("")
@@ -334,8 +337,9 @@ const struct cmd_manual ice_root_manual = {
 	H_LINE("@y{$} @b{ice flash}")
 	H_RAW("")
 	H_PARA("No @b{export.sh} or environment setup needed -- @b{ice} "
-	       "finds the tools automatically.")
+	       "finds the tools automatically."),
 
+	.extras =
 	H_SECTION("MANAGING ESP-IDF VERSIONS")
 	H_PARA("List available versions, create more checkouts, or refresh the reference:")
 	H_LINE("@y{$} @b{ice repo list}                          show available branches and tags")

@@ -508,6 +508,13 @@ void print_manual(const char *cmd_name, const struct cmd_desc *desc)
 		print_text(m->description);
 	}
 
+	/* GETTING STARTED -- onboarding walk-through, right after DESCRIPTION.
+	 */
+	if (m && m->getting_started) {
+		fputs("@b{GETTING STARTED}\n", stdout);
+		print_text(m->getting_started);
+	}
+
 	/* OPTIONS -- auto-generated from the option table. */
 	if (has_options(opts)) {
 		fputs("@b{OPTIONS}\n", stdout);
