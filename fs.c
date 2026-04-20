@@ -247,6 +247,21 @@ void lock_release(const char *path)
 	}
 }
 
+/*
+ * On Windows the executable check is "does a matching file exist",
+ * since _access() doesn't implement X_OK.  We try the bare name and a
+ * small set of common PATHEXT extensions; that covers ~everything
+ * users put in core.pager / ice-<name> in practice.  On POSIX we need
+ * X_OK (execute bit) -- bare existence isn't enough.
+ */
+#ifdef _WIN32
+static const char *const path_exts[] = {"", ".exe", ".cmd", ".bat", NULL};
+#define ACCESS_MODE F_OK
+#else
+static const char *const path_exts[] = {"", NULL};
+#define ACCESS_MODE X_OK
+#endif
+
 int find_in_path(const char *name)
 {
 	const char *p = getenv("PATH");
@@ -257,19 +272,21 @@ int find_in_path(const char *name)
 
 	while (*p) {
 		const char *end = p;
-		while (*end && *end != ':')
+		while (*end && *end != PATH_SEP_CHAR)
 			end++;
 
-		sbuf_reset(&buf);
-		if (end != p) {
-			sbuf_add(&buf, p, (size_t)(end - p));
-			sbuf_addch(&buf, '/');
-		}
-		sbuf_addstr(&buf, name);
-
-		if (!access(buf.buf, X_OK)) {
-			sbuf_release(&buf);
-			return 1;
+		for (int i = 0; path_exts[i]; i++) {
+			sbuf_reset(&buf);
+			if (end != p) {
+				sbuf_add(&buf, p, (size_t)(end - p));
+				sbuf_addch(&buf, '/');
+			}
+			sbuf_addstr(&buf, name);
+			sbuf_addstr(&buf, path_exts[i]);
+			if (!access(buf.buf, ACCESS_MODE)) {
+				sbuf_release(&buf);
+				return 1;
+			}
 		}
 
 		if (!*end)

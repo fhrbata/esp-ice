@@ -512,6 +512,7 @@ static const struct {
 } builtin_defaults[] = {
     {"core.build-dir", "build", "default build directory"},
     {"core.generator", "Ninja", "default cmake generator"},
+    {"core.pager", "less -R", "pager for long output (empty to disable)"},
     {"core.verbose", "false", "default verbose mode"},
     {"completion.descriptions", "true",
      "show descriptions in shell completion"},

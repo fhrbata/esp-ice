@@ -124,6 +124,9 @@ int link_w(const char *target, const char *linkpath);
 /** Environment variable that holds the user's home directory. */
 #define HOME_ENV "USERPROFILE"
 
+/** PATH entry separator (';' on Windows, ':' on POSIX). */
+#define PATH_SEP_CHAR ';'
+
 #else /* POSIX */
 
 /** End-of-line sequence (LF on POSIX). */
@@ -131,6 +134,9 @@ int link_w(const char *target, const char *linkpath);
 
 /** Environment variable that holds the user's home directory. */
 #define HOME_ENV "HOME"
+
+/** PATH entry separator (';' on Windows, ':' on POSIX). */
+#define PATH_SEP_CHAR ':'
 
 #include <unistd.h>
 

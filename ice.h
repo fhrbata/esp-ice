@@ -161,6 +161,7 @@ extern const struct cmd_manual ice_root_manual;
 
 /** Global option values populated by parse_options() on ice_global_opts. */
 extern int global_no_color;
+extern int global_no_pager;
 extern int global_version;
 extern int global_verbose;
 
