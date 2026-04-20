@@ -464,6 +464,7 @@ static const struct option clone_opts[] = {
 };
 
 static int cmd_repo_clone(int argc, const char **argv);
+static int cmd_repo___clone(int argc, const char **argv);
 
 /* clang-format off */
 static const struct cmd_manual repo_clone_manual = {
@@ -496,13 +497,53 @@ static const struct cmd_desc cmd_repo_clone_desc = {
     .manual = &repo_clone_manual,
 };
 
+/* Hidden plumbing: does the work.  The porcelain cmd_repo_clone above
+ * invokes this via process_run_progress so the combined output lands
+ * in a single log under ~/.ice/logs. */
+static const struct cmd_desc cmd_repo___clone_desc = {
+    .name = "__clone",
+    .fn = cmd_repo___clone,
+    .opts = clone_opts,
+    .manual = &repo_clone_manual,
+};
+
+/* Porcelain wrapper -- forwards to __clone with progress display. */
 static int cmd_repo_clone(int argc, const char **argv)
+{
+	struct svec cmd = SVEC_INIT;
+	struct process proc = PROCESS_INIT;
+	const char *exe = process_exe();
+	int rc;
+
+	/* Copy argv BEFORE parse_options runs, because it compacts argv
+	 * in place (packs positionals to the front, discarding option
+	 * tokens).  argv[0] is the leaf's own command name ("clone"),
+	 * so skip it -- the child __clone parses fresh. */
+	svec_push(&cmd, exe ? exe : "ice");
+	svec_push(&cmd, "repo");
+	svec_push(&cmd, "__clone");
+	for (int i = 1; i < argc; i++)
+		svec_push(&cmd, argv[i]);
+
+	/* parse_options handles --help / -h / --ice-complete (exits)
+	 * and dies on unknown options so the user gets a diagnostic
+	 * before any spinner flashes.  Its returned argc/argv mutation
+	 * is discarded -- we forward the saved copy above. */
+	parse_options(argc, argv, &cmd_repo_clone_desc);
+
+	proc.argv = cmd.v;
+	rc = process_run_progress(&proc, "Cloning", "repo-clone");
+	svec_clear(&cmd);
+	return rc;
+}
+
+static int cmd_repo___clone(int argc, const char **argv)
 {
 	const char *url;
 	char jobs_str[16];
 	struct svec args = SVEC_INIT;
 
-	argc = parse_options(argc, argv, &cmd_repo_clone_desc);
+	argc = parse_options(argc, argv, &cmd_repo___clone_desc);
 	url = argc >= 1 ? argv[0] : IDF_CLONE_URL;
 
 	reference_lock();
@@ -573,6 +614,7 @@ static const struct option pull_opts[] = {
 };
 
 static int cmd_repo_pull(int argc, const char **argv);
+static int cmd_repo___pull(int argc, const char **argv);
 
 /* clang-format off */
 static const struct cmd_manual repo_pull_manual = {
@@ -600,12 +642,40 @@ static const struct cmd_desc cmd_repo_pull_desc = {
     .manual = &repo_pull_manual,
 };
 
+static const struct cmd_desc cmd_repo___pull_desc = {
+    .name = "__pull",
+    .fn = cmd_repo___pull,
+    .opts = pull_opts,
+    .manual = &repo_pull_manual,
+};
+
 static int cmd_repo_pull(int argc, const char **argv)
+{
+	struct svec cmd = SVEC_INIT;
+	struct process proc = PROCESS_INIT;
+	const char *exe = process_exe();
+	int rc;
+
+	svec_push(&cmd, exe ? exe : "ice");
+	svec_push(&cmd, "repo");
+	svec_push(&cmd, "__pull");
+	for (int i = 1; i < argc; i++)
+		svec_push(&cmd, argv[i]);
+
+	parse_options(argc, argv, &cmd_repo_pull_desc);
+
+	proc.argv = cmd.v;
+	rc = process_run_progress(&proc, "Pulling", "repo-pull");
+	svec_clear(&cmd);
+	return rc;
+}
+
+static int cmd_repo___pull(int argc, const char **argv)
 {
 	const char *base = reference_path();
 	char jobs_str[16];
 
-	parse_options(argc, argv, &cmd_repo_pull_desc);
+	parse_options(argc, argv, &cmd_repo___pull_desc);
 	ensure_reference();
 	reference_lock();
 
@@ -765,6 +835,7 @@ static const struct option checkout_opts[] = {
 };
 
 static int cmd_repo_checkout(int argc, const char **argv);
+static int cmd_repo___checkout(int argc, const char **argv);
 
 /* clang-format off */
 static const struct cmd_manual repo_checkout_manual = {
@@ -806,14 +877,57 @@ static const struct cmd_desc cmd_repo_checkout_desc = {
     .manual = &repo_checkout_manual,
 };
 
+static const struct cmd_desc cmd_repo___checkout_desc = {
+    .name = "__checkout",
+    .fn = cmd_repo___checkout,
+    .opts = checkout_opts,
+    .manual = &repo_checkout_manual,
+};
+
 static int cmd_repo_checkout(int argc, const char **argv)
+{
+	struct svec cmd = SVEC_INIT;
+	struct process proc = PROCESS_INIT;
+	const char *exe = process_exe();
+	int rc;
+
+	svec_push(&cmd, exe ? exe : "ice");
+	svec_push(&cmd, "repo");
+	svec_push(&cmd, "__checkout");
+	for (int i = 1; i < argc; i++)
+		svec_push(&cmd, argv[i]);
+
+	parse_options(argc, argv, &cmd_repo_checkout_desc);
+
+	/* --list is an instant local listing; running it through
+	 * process_run_progress would hide the output inside the log and
+	 * show only a "done" line.  Fall through to the plumbing
+	 * in-process so the names print normally to stdout.  The child
+	 * branch below handles every other mode.  cmd is
+	 * [exe, "repo", "__checkout", ...forwarded args], so cmd.v + 2
+	 * puts "__checkout" at argv[0] -- parse_options skips argv[0] as
+	 * the prog-name slot, so any real options/positionals start at
+	 * index 1 as they would under the normal dispatcher path. */
+	if (opt_checkout_list) {
+		rc = cmd_repo___checkout((int)cmd.nr - 2, cmd.v + 2);
+		svec_clear(&cmd);
+		return rc;
+	}
+
+	proc.argv = cmd.v;
+	rc = process_run_progress(&proc, "Checking out", "repo-checkout");
+	svec_clear(&cmd);
+	return rc;
+}
+
+static int cmd_repo___checkout(int argc, const char **argv)
 {
 	const char *base = reference_path();
 	const char *ref;
 	char *dest;
 	struct sbuf origin_url = SBUF_INIT;
 
-	argc = parse_options(argc, argv, &cmd_repo_checkout_desc);
+	argc = parse_options(argc, argv, &cmd_repo___checkout_desc);
 
 	if (opt_checkout_list) {
 		struct svec names = SVEC_INIT;
@@ -1083,8 +1197,16 @@ static const struct cmd_manual repo_manual = {
 /* clang-format on */
 
 static const struct cmd_desc *const repo_subs[] = {
-    &cmd_repo_clone_desc,    &cmd_repo_pull_desc, &cmd_repo_list_desc,
-    &cmd_repo_checkout_desc, &cmd_repo_info_desc, NULL,
+    &cmd_repo_clone_desc,
+    &cmd_repo_pull_desc,
+    &cmd_repo_list_desc,
+    &cmd_repo_checkout_desc,
+    &cmd_repo_info_desc,
+    /* Hidden plumbing (name starts with '_'); help/completion skip. */
+    &cmd_repo___clone_desc,
+    &cmd_repo___pull_desc,
+    &cmd_repo___checkout_desc,
+    NULL,
 };
 
 const struct cmd_desc cmd_repo_desc = {
