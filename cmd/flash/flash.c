@@ -25,7 +25,6 @@ static int opt_baud = 460800;
 
 /* clang-format off */
 static const struct option cmd_flash_opts[] = {
-	OPT_POSITIONAL_OPT("name", complete_profile_names),
 	OPT_STRING_CFG('p', "port", &opt_port, "dev",
 		       "serial.port", "ESPPORT",
 		       "serial port device", NULL, NULL),
@@ -53,9 +52,8 @@ static const struct cmd_manual manual = {
 
 	.examples =
 	H_EXAMPLE("ice flash")
-	H_EXAMPLE("ice flash production")
+	H_EXAMPLE("ice --profile production flash")
 	H_EXAMPLE("ice flash --port /dev/ttyUSB0")
-	H_EXAMPLE("ice flash s3 --port /dev/ttyACM0")
 	H_EXAMPLE("ice flash --port /dev/ttyUSB0 --baud 921600")
 	H_EXAMPLE("ice config serial.port /dev/ttyUSB0 && ice flash")
 	H_EXAMPLE("ESPPORT=/dev/ttyUSB1 ice flash"),
@@ -90,20 +88,19 @@ const struct cmd_desc cmd_flash_desc = {
     .fn = cmd_flash,
     .opts = cmd_flash_opts,
     .manual = &manual,
+    .needs = PROJECT_BUILT,
 };
 
 int cmd_flash(int argc, const char **argv)
 {
 	argc = parse_options(argc, argv, &cmd_flash_desc);
-	if (argc > 1)
+	if (argc > 0)
 		die("too many arguments");
 
-	project_load(argc >= 1 ? argv[0] : "default");
-
-	const char *chip_str = config_get("project.chip");
+	const char *chip_str = config_get("_project.chip");
 
 	struct config_entry **flash_files;
-	int n_files = config_get_all("project.flash-file", &flash_files);
+	int n_files = config_get_all("_project.flash-file", &flash_files);
 	if (n_files == 0) {
 		fprintf(stderr,
 			"ice flash: no flash files in flasher_args.json\n"

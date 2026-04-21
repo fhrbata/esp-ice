@@ -14,6 +14,17 @@
 
 struct config config = CONFIG_INIT;
 
+/*
+ * Keys beginning with '_' are reserved for ice runtime state (the
+ * promoted "_project.X" family and anything else that reflects state
+ * derived from the current profile or build tree, not user intent).
+ * They must never reach the on-disk config -- parser drops them on
+ * load, writer skips them on save, and config_set() refuses to even
+ * put them into the store.  Internal writers that need to seed
+ * runtime state use config_add() against a scope they just cleared.
+ */
+static int is_reserved_key(const char *key) { return key && key[0] == '_'; }
+
 void config_init(struct config *c)
 {
 	c->entries = NULL;
@@ -50,6 +61,9 @@ void config_add(struct config *c, const char *key, const char *value,
 void config_set(struct config *c, const char *key, const char *value,
 		enum config_scope scope)
 {
+	if (is_reserved_key(key))
+		die("keys starting with '_' are reserved for ice runtime "
+		    "state");
 	config_unset(c, key, scope);
 	append_entry(c, key, value, scope);
 }
@@ -233,7 +247,7 @@ const char *user_config_path(void)
 	return path.buf;
 }
 
-const char *local_config_path(void) { return "./.iceconfig"; }
+const char *local_config_path(void) { return "./.ice/config"; }
 
 const char *ice_home(void)
 {
@@ -433,8 +447,21 @@ static void parse_kv(struct config *c, enum config_scope scope,
 	sbuf_addch(&fullkey, '.');
 	sbuf_add(&fullkey, key, key_end - key);
 
+	/*
+	 * Runtime-only `_*` keys shouldn't be in config files in the
+	 * first place (writer skips them), but warn-and-skip on load is
+	 * a belt-and-suspenders guard in case a stray entry survived a
+	 * crash before the atomic write or was hand-edited in.
+	 */
+	if (is_reserved_key(fullkey.buf)) {
+		warn("%s:%d: ignoring reserved key '%s'", path, lineno,
+		     fullkey.buf);
+		goto done;
+	}
+
 	config_add(c, fullkey.buf, val.buf, scope);
 
+done:
 	sbuf_release(&fullkey);
 	sbuf_release(&val);
 }
@@ -514,8 +541,20 @@ static const struct {
     {"core.generator", "Ninja", "default cmake generator"},
     {"core.pager", "less -R", "pager for long output (empty to disable)"},
     {"core.verbose", "false", "default verbose mode"},
+    {"core.build-always", "false",
+     "auto-run ninja before commands that need a built project"},
     {"completion.descriptions", "true",
      "show descriptions in shell completion"},
+    /*
+     * Default aliases carry the idf.py-style "build + flash"
+     * ergonomic without coupling the primitives.  Users who rebind
+     * bf/bfm in their own config win by scope precedence (user /
+     * local > default), no uninstall step needed.
+     */
+    {"alias.bf", "!ice build && ice flash",
+     "build then flash (convenience alias)"},
+    {"alias.bfm", "!ice build && ice flash && ice monitor",
+     "build, flash, then monitor (convenience alias)"},
     {NULL, NULL, NULL},
 };
 
@@ -574,13 +613,10 @@ static void write_value(const char *v, struct sbuf *out)
 	sbuf_addch(out, '"');
 }
 
-int config_write_file(const struct config *c, enum config_scope scope,
-		      const char *path)
+void config_render_ini(const struct config *c, enum config_scope scope,
+		       struct sbuf *out)
 {
-	struct sbuf out = SBUF_INIT;
 	struct svec headers = SVEC_INIT;
-	FILE *fp;
-	size_t written;
 
 	/*
 	 * Group by the key's parent path -- everything up to the last
@@ -596,6 +632,9 @@ int config_write_file(const struct config *c, enum config_scope scope,
 		int already;
 
 		if (c->entries[i].scope != scope)
+			continue;
+		/* Runtime-only state never reaches the on-disk config. */
+		if (is_reserved_key(c->entries[i].key))
 			continue;
 
 		last_dot = strrchr(c->entries[i].key, '.');
@@ -623,20 +662,20 @@ int config_write_file(const struct config *c, enum config_scope scope,
 		const char *dot = strchr(header, '.');
 
 		if (h > 0)
-			sbuf_addch(&out, '\n');
+			sbuf_addch(out, '\n');
 
 		if (dot) {
-			sbuf_addch(&out, '[');
-			sbuf_add(&out, header, dot - header);
-			sbuf_addstr(&out, " \"");
+			sbuf_addch(out, '[');
+			sbuf_add(out, header, dot - header);
+			sbuf_addstr(out, " \"");
 			for (const char *p = dot + 1; *p; p++) {
 				if (*p == '"' || *p == '\\')
-					sbuf_addch(&out, '\\');
-				sbuf_addch(&out, *p);
+					sbuf_addch(out, '\\');
+				sbuf_addch(out, *p);
 			}
-			sbuf_addstr(&out, "\"]\n");
+			sbuf_addstr(out, "\"]\n");
 		} else {
-			sbuf_addf(&out, "[%s]\n", header);
+			sbuf_addf(out, "[%s]\n", header);
 		}
 
 		for (int i = 0; i < c->nr; i++) {
@@ -652,29 +691,69 @@ int config_write_file(const struct config *c, enum config_scope scope,
 			if (strchr(key + hdr_len + 1, '.'))
 				continue;
 
-			sbuf_addf(&out, "\t%s = ", key + hdr_len + 1);
-			write_value(c->entries[i].value, &out);
-			sbuf_addch(&out, '\n');
+			sbuf_addf(out, "\t%s = ", key + hdr_len + 1);
+			write_value(c->entries[i].value, out);
+			sbuf_addch(out, '\n');
 		}
 	}
 
 	svec_clear(&headers);
+}
 
-	fp = fopen(path, "w");
-	if (!fp) {
-		sbuf_release(&out);
-		return -1;
-	}
+int config_write_file(const struct config *c, enum config_scope scope,
+		      const char *path)
+{
+	struct sbuf out = SBUF_INIT;
+	struct sbuf lockfile = SBUF_INIT;
+	FILE *fp;
+	size_t written;
+	int rc = -1;
+	int saved;
+
+	config_render_ini(c, scope, &out);
+
+	/*
+	 * Atomic whole-file rewrite: take an exclusive lock on
+	 * "<path>.lock", write the rendered content to that file, then
+	 * rename it onto @p path.  rename(2) is atomic on POSIX and
+	 * atomic-replace on Windows (via rename_w / MoveFileExW), so a
+	 * crash mid-write leaves the original @p path untouched.  The
+	 * lock serialises concurrent writers: only one actor writes at
+	 * a time and every reader either sees the old content or the
+	 * new content, never a torn file.  lock_forget() drops the
+	 * atexit registration because the rename consumed the lockfile
+	 * name.
+	 */
+	sbuf_addf(&lockfile, "%s.lock", path);
+	if (lock_acquire(lockfile.buf, 2000) < 0)
+		goto out;
+
+	fp = fopen(lockfile.buf, "wb");
+	if (!fp)
+		goto unlock;
+
 	written = fwrite(out.buf, 1, out.len, fp);
-	fclose(fp);
-
-	if (written != out.len) {
-		sbuf_release(&out);
-		errno = EIO;
-		return -1;
+	if (fclose(fp) != 0 || written != out.len) {
+		if (written != out.len)
+			errno = EIO;
+		goto unlock;
 	}
+
+	if (rename(lockfile.buf, path) != 0)
+		goto unlock;
+
+	lock_forget(lockfile.buf);
+	rc = 0;
+	goto out;
+
+unlock:
+	saved = errno;
+	lock_release(lockfile.buf);
+	errno = saved;
+out:
+	sbuf_release(&lockfile);
 	sbuf_release(&out);
-	return 0;
+	return rc;
 }
 
 /** Remove every entry at @p scope from @p c.  Returns count removed. */
@@ -720,7 +799,7 @@ void config_load_profile(const char *name)
 	config_clear_scope(&config, CONFIG_SCOPE_PROJECT);
 
 	/*
-	 * Promote @b{[project "<name>"]} entries (loaded from .iceconfig
+	 * Promote @b{[project "<name>"]} entries (loaded from .ice/config
 	 * at LOCAL scope) up to a uniform @b{project.X} namespace at
 	 * PROJECT scope so commands can read @b{project.build-dir} etc.
 	 * without knowing which profile they're in.
@@ -734,14 +813,17 @@ void config_load_profile(const char *name)
 		if (strncmp(key, prefix.buf, prefix.len) != 0)
 			continue;
 		sbuf_reset(&new_key);
-		sbuf_addf(&new_key, "project.%s", key + prefix.len);
+		sbuf_addf(&new_key, "_project.%s", key + prefix.len);
 		config_add(&config, new_key.buf, config.entries[i].value,
 			   CONFIG_SCOPE_PROJECT);
 	}
 
-	/* Derive project.target / project.mapfile / project.elf from the
-	 * profile's build directory, if it has been configured. */
-	build_dir = config_get("project.build-dir");
+	/* Derive _project.target / _project.mapfile / _project.elf from
+	 * the profile's build directory, if it has been configured.
+	 * Writes go through config_add() because runtime _* keys are
+	 * rejected by config_set(); PROJECT scope was cleared above so
+	 * append still has single-value semantics. */
+	build_dir = config_get("_project.build-dir");
 	if (!build_dir)
 		goto out;
 
@@ -749,7 +831,7 @@ void config_load_profile(const char *name)
 	if (cmakecache_load(&cache, path.buf) == 0) {
 		const char *target = cmakecache_get(&cache, "IDF_TARGET");
 		if (target)
-			config_set(&config, "project.target", target,
+			config_add(&config, "_project.target", target,
 				   CONFIG_SCOPE_PROJECT);
 	}
 
@@ -764,13 +846,13 @@ void config_load_profile(const char *name)
 		if (project_name) {
 			sbuf_addf(&derived, "%s/%s.map", build_dir,
 				  project_name);
-			config_set(&config, "project.mapfile", derived.buf,
+			config_add(&config, "_project.mapfile", derived.buf,
 				   CONFIG_SCOPE_PROJECT);
 
 			sbuf_reset(&derived);
 			sbuf_addf(&derived, "%s/%s.elf", build_dir,
 				  project_name);
-			config_set(&config, "project.elf", derived.buf,
+			config_add(&config, "_project.elf", derived.buf,
 				   CONFIG_SCOPE_PROJECT);
 		}
 	}

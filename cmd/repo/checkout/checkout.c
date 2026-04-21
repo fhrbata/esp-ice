@@ -416,6 +416,7 @@ int cmd_repo___checkout(int argc, const char **argv)
 	const char *ref;
 	char *dest;
 	struct sbuf origin_url = SBUF_INIT;
+	struct sbuf lock = SBUF_INIT;
 
 	argc = parse_options(argc, argv, &cmd_repo___checkout_desc);
 
@@ -465,7 +466,9 @@ int cmd_repo___checkout(int argc, const char **argv)
 	if (checkout_jobs < 1)
 		checkout_jobs = 1;
 
-	repo_reference_lock();
+	sbuf_addf(&lock, "%s/esp-idf.lock", ice_home());
+	if (lock_acquire(lock.buf, 2000) < 0)
+		die_errno("lock '%s' (remove if no ice is running)", lock.buf);
 
 	fprintf(stderr, "Preparing reference at @b{%s} ...\n", base);
 	prepare_reference(ref, checkout_jobs);
@@ -568,7 +571,8 @@ int cmd_repo___checkout(int argc, const char **argv)
 			warn("could not restore reference to master");
 	}
 
-	repo_reference_unlock();
+	lock_release(lock.buf);
+	sbuf_release(&lock);
 	fprintf(stderr, "@g{Checked out %s at %s}\n", ref, dest);
 	sbuf_release(&origin_url);
 	free(dest);

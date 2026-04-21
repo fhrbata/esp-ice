@@ -36,7 +36,7 @@ tap_done "default core.generator resolves to 'Ninja'"
 "$BINARY" config core.build-dir out
 "$BINARY" config core.build-dir >got
 tap_check grep -qx 'out' got
-tap_check test -f .iceconfig
+tap_check test -f .ice/config
 tap_done "set then get round-trip via --local default"
 
 # Direct re-assignment replaces; single-value semantics.

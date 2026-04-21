@@ -42,36 +42,6 @@ const char *repo_checkouts_path(void)
 	return path.buf;
 }
 
-/** ~/.ice/esp-idf.lock -- serialises clone/pull/checkout. */
-static const char *reference_lock_path(void)
-{
-	static struct sbuf path = SBUF_INIT;
-
-	if (!path.len)
-		sbuf_addf(&path, "%s/esp-idf.lock", ice_home());
-	return path.buf;
-}
-
-void repo_reference_lock(void)
-{
-	const char *lock = reference_lock_path();
-
-	if (mkdirp_for_file(lock) < 0)
-		die_errno("cannot create parent of '%s'", lock);
-
-	if (lock_acquire(lock) < 0) {
-		if (errno == EEXIST) {
-			hint("remove it if no ice is running");
-			die("another @b{ice} process holds the reference "
-			    "lock at @b{%s}",
-			    lock);
-		}
-		die_errno("cannot create lock '%s'", lock);
-	}
-}
-
-void repo_reference_unlock(void) { lock_release(reference_lock_path()); }
-
 int repo_run_git(const char *dir, const char **argv)
 {
 	struct process proc = PROCESS_INIT;

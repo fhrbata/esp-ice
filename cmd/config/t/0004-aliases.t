@@ -46,7 +46,7 @@ tap_done "shell alias propagates non-zero exit status"
 
 # Aliases also live under --user scope.
 "$BINARY" config --user alias.uh "help"
-rm -f .iceconfig
+rm -rf .ice
 "$BINARY" uh >out
 tap_check grep -q '^NAME$' out
 tap_done "alias defined at --user scope is honoured"

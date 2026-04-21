@@ -235,3 +235,12 @@ void delay_ms(uint32_t ms)
 	ts.tv_nsec = (long)((ms % 1000u) * 1000000u);
 	nanosleep(&ts, NULL);
 }
+
+int run_shell(const char *cmd)
+{
+	const char *argv[] = {"/bin/sh", "-c", cmd, NULL};
+	struct process proc = PROCESS_INIT;
+
+	proc.argv = argv;
+	return process_run(&proc);
+}

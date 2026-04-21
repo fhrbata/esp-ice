@@ -164,6 +164,7 @@ int rmtree(const char *path, int verbose)
  * on acquire and freed on release (or at exit).
  */
 #define LOCK_MAX 4
+#define LOCK_POLL_MS 100
 static char *held_locks[LOCK_MAX];
 static size_t held_locks_nr;
 static int lock_handlers_registered;
@@ -202,8 +203,9 @@ static void lock_signal_cleanup(int sig)
 	_exit(128 + sig);
 }
 
-int lock_acquire(const char *path)
+int lock_acquire(const char *path, unsigned timeout_ms)
 {
+	unsigned long long deadline = 0;
 	int fd;
 
 	if (held_locks_nr >= LOCK_MAX) {
@@ -211,9 +213,24 @@ int lock_acquire(const char *path)
 		return -1;
 	}
 
-	fd = open(path, O_CREAT | O_EXCL | O_WRONLY, 0644);
-	if (fd < 0)
+	if (mkdirp_for_file(path) < 0)
 		return -1;
+
+	if (timeout_ms)
+		deadline = mono_ms() + timeout_ms;
+
+	for (;;) {
+		fd = open(path, O_CREAT | O_EXCL | O_WRONLY, 0644);
+		if (fd >= 0)
+			break;
+		if (errno != EEXIST || !timeout_ms)
+			return -1;
+		if (mono_ms() >= deadline) {
+			errno = EEXIST;
+			return -1;
+		}
+		delay_ms(LOCK_POLL_MS);
+	}
 	close(fd);
 
 	if (!lock_handlers_registered) {
@@ -239,6 +256,18 @@ void lock_release(const char *path)
 	for (size_t i = 0; i < held_locks_nr; i++) {
 		if (!strcmp(held_locks[i], path)) {
 			unlink(path);
+			free(held_locks[i]);
+			held_locks[i] = held_locks[--held_locks_nr];
+			held_locks[held_locks_nr] = NULL;
+			return;
+		}
+	}
+}
+
+void lock_forget(const char *path)
+{
+	for (size_t i = 0; i < held_locks_nr; i++) {
+		if (!strcmp(held_locks[i], path)) {
 			free(held_locks[i]);
 			held_locks[i] = held_locks[--held_locks_nr];
 			held_locks[held_locks_nr] = NULL;

@@ -34,6 +34,8 @@
 
 #include <stddef.h>
 
+struct sbuf;
+
 /** Config source, ordered low -> high precedence. */
 enum config_scope {
 	CONFIG_SCOPE_DEFAULT, /**< Built-in defaults. */
@@ -257,6 +259,18 @@ const char *config_builtin_key_help(const char *key);
  */
 int config_write_file(const struct config *c, enum config_scope scope,
 		      const char *path);
+
+/**
+ * @brief Render all entries of @p scope to @p out as INI content.
+ *
+ * Same grouping and quoting rules as config_write_file(); exposed so
+ * callers that already hold a lock on the destination (e.g. @b{ice
+ * init}'s stage-then-commit under .ice/config.lock) can render into a
+ * buffer and decide when to rename.  Runtime-only @c _* keys are
+ * skipped, as are keys with no section.
+ */
+void config_render_ini(const struct config *c, enum config_scope scope,
+		       struct sbuf *out);
 
 /**
  * @brief Derive project-scope values from build-directory artifacts.

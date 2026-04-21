@@ -82,12 +82,16 @@ int find_in_path(const char *name);
  * @brief Acquire an exclusive advisory lock by creating @p path.
  *
  * Uses open(O_CREAT | O_EXCL) to atomically create @p path (git's
- * "<filename>.lock" pattern).  If the file already exists, fails with
+ * "<filename>.lock" pattern).  If the file already exists, retries on
+ * a 100 ms cadence until @p timeout_ms has elapsed, then fails with
  * errno == EEXIST so the caller can report that another ice process
- * holds the lock.  On success the PID of the current process is
- * written into the file for diagnostics and @p path is registered
- * with atexit() so the lock is removed even if die() is called before
- * lock_release().
+ * holds the lock.  @p timeout_ms == 0 fails immediately on EEXIST
+ * with no retries.
+ *
+ * The parent directory of @p path is created on demand (mkdir -p),
+ * so callers do not have to precreate it.  On success @p path is
+ * registered with atexit() so the lock is removed even if die() is
+ * called before lock_release().
  *
  * Works cross-filesystem and cross-platform -- the atomicity is
  * guaranteed by the kernel, not by filesystem semantics.  Signals
@@ -96,7 +100,7 @@ int find_in_path(const char *name);
  *
  * @return 0 on success, -1 on failure (errno set).
  */
-int lock_acquire(const char *path);
+int lock_acquire(const char *path, unsigned timeout_ms);
 
 /**
  * @brief Release a lock previously acquired with lock_acquire().
@@ -106,5 +110,17 @@ int lock_acquire(const char *path);
  * lock we don't own would unlink another process's file.
  */
 void lock_release(const char *path);
+
+/**
+ * @brief Deregister a lock path from the atexit cleanup list without
+ *        unlinking it.
+ *
+ * Used by atomic-write patterns that rename(lockfile, target): the
+ * lockfile name has been consumed by the rename, so the exit handler
+ * must not unlink it -- otherwise a future re-acquisition of the same
+ * lockfile path by another process could be torn down by our atexit.
+ * Silent no-op if @p path is not in the registry.
+ */
+void lock_forget(const char *path);
 
 #endif /* FS_H */

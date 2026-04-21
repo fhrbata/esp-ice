@@ -29,7 +29,17 @@
 
 #include <time.h>
 
+#include "color_rules.h"
 #include "progress.h"
+
+/*
+ * Fixed-width header written at file open (padded with spaces) and
+ * rewritten in-place at file close.  First line of every log;
+ * @b{ice log --all} parses it to summarise a run without reading the
+ * whole body.  Width keeps it simple: slug + iso timestamp +
+ * duration_ms + exit code fit comfortably in 128 bytes.
+ */
+#define LOG_HEADER_BYTES 128
 
 /* ⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏ -- U+280B .. U+280F braille patterns. */
 static const char *const spinner_frames[] = {
@@ -54,27 +64,6 @@ static const char *const spinner_frames[] = {
 #define PROGRESS_SLOW_HINT_MS 5000
 #define PROGRESS_SLOW_HINT " @[2]{[this can take a while]}"
 
-/*
- * Default keyword -> color rules for the failure dump.  Covers the
- * output shapes produced by the tools ice spawns (cmake, ninja, gcc,
- * git, ld) so a plain dump already looks useful.  Callers can still
- * supply an on_fail filter to trim which lines reach colorization.
- */
-static const struct color_rule default_color_rules[] = {
-    COLOR_RULE("fatal error:", "COLOR_BOLD_RED"),
-    COLOR_RULE("FAILED:", "COLOR_BOLD_RED"),
-    COLOR_RULE("CMake Error", "COLOR_RED"),
-    COLOR_RULE("CMake Warning", "COLOR_YELLOW"),
-    COLOR_RULE("undefined reference to", "COLOR_RED"),
-    COLOR_RULE("multiple definition of", "COLOR_RED"),
-    COLOR_RULE("warning:", "COLOR_BOLD_YELLOW"),
-    COLOR_RULE("error:", "COLOR_BOLD_RED"),
-    COLOR_RULE("note:", "COLOR_CYAN"),
-    COLOR_RULE("In file included from", "COLOR_CYAN"),
-    COLOR_RULE("In function", "COLOR_CYAN"),
-    {NULL, 0, NULL},
-};
-
 static int progress_interactive(void) { return isatty(STDOUT_FILENO); }
 
 static void format_elapsed(char *out, size_t cap, unsigned long long ms)
@@ -84,14 +73,94 @@ static void format_elapsed(char *out, size_t cap, unsigned long long ms)
 	snprintf(out, cap, "%u.%us", secs, tenths);
 }
 
+/*
+ * Resolve where this invocation's log file lives.  @c _project.log-dir
+ * is populated by setup_project() once a CONFIGURED project is in
+ * scope and points at @c <build>/.ice/logs; when it's unset (e.g.
+ * @b{ice repo clone}, @b{ice tools install}, @b{ice init} before the
+ * marker is written) the log falls back to ~/.ice/logs/ so early
+ * failures still have a place to land.
+ */
 static void build_log_path(struct sbuf *out, const char *slug)
 {
 	time_t now = time(NULL);
 	struct tm *tm = localtime(&now);
+	const char *log_dir = config_get("_project.log-dir");
 
-	sbuf_addf(out, "%s/logs/%04d%02d%02d-%02d%02d%02d-%s.log", ice_home(),
-		  tm->tm_year + 1900, tm->tm_mon + 1, tm->tm_mday, tm->tm_hour,
-		  tm->tm_min, tm->tm_sec, slug);
+	if (log_dir && *log_dir)
+		sbuf_addf(out, "%s/", log_dir);
+	else
+		sbuf_addf(out, "%s/logs/", ice_home());
+
+	sbuf_addf(out, "%04d%02d%02d-%02d%02d%02d-%s.log", tm->tm_year + 1900,
+		  tm->tm_mon + 1, tm->tm_mday, tm->tm_hour, tm->tm_min,
+		  tm->tm_sec, slug);
+}
+
+/*
+ * Update @c <log-dir>/last to point at @p log_path.  Atomic rename
+ * gives last-writer-wins with no torn reads even under concurrent
+ * spawns; no lock needed.  Plain text (not a symlink) because
+ * Windows symlink support is flaky.
+ */
+static void update_last_pointer(const char *log_path)
+{
+	struct sbuf last_path = SBUF_INIT;
+	struct sbuf last_tmp = SBUF_INIT;
+	const char *sep = strrchr(log_path, '/');
+	FILE *fp;
+
+	if (!sep)
+		return;
+
+	sbuf_add(&last_path, log_path, (size_t)(sep - log_path));
+	sbuf_addstr(&last_path, "/last");
+	sbuf_addf(&last_tmp, "%s.tmp", last_path.buf);
+
+	fp = fopen(last_tmp.buf, "wb");
+	if (fp) {
+		fprintf(fp, "%s\n", log_path);
+		fclose(fp);
+		if (rename(last_tmp.buf, last_path.buf) != 0)
+			unlink(last_tmp.buf);
+	}
+
+	sbuf_release(&last_path);
+	sbuf_release(&last_tmp);
+}
+
+/*
+ * ISO-8601 local time, to the second, no offset -- cheap and readable
+ * in @b{ice log --all}, which is the only consumer.
+ */
+static void format_iso_ts(char *out, size_t cap, time_t t)
+{
+	struct tm *tm = localtime(&t);
+
+	snprintf(out, cap, "%04d-%02d-%02dT%02d:%02d:%02d", tm->tm_year + 1900,
+		 tm->tm_mon + 1, tm->tm_mday, tm->tm_hour, tm->tm_min,
+		 tm->tm_sec);
+}
+
+/*
+ * Render the header line for the log file, padded to exactly
+ * LOG_HEADER_BYTES so it can be overwritten in place at close.  The
+ * trailing '\n' is at the last byte so the padding looks clean when
+ * someone runs `head -1` on a finalised log.
+ */
+static void format_log_header(char *out, const char *slug, const char *iso,
+			      unsigned long long duration_ms, int rc)
+{
+	int n = snprintf(out, LOG_HEADER_BYTES,
+			 "# ice-log: slug=%s start=%s duration_ms=%llu exit=%d",
+			 slug, iso, duration_ms, rc);
+
+	if (n < 0)
+		n = 0;
+	if (n > LOG_HEADER_BYTES - 1)
+		n = LOG_HEADER_BYTES - 1;
+	memset(out + n, ' ', (size_t)(LOG_HEADER_BYTES - 1 - n));
+	out[LOG_HEADER_BYTES - 1] = '\n';
 }
 
 static void progress_draw(const char *msg, int frame, unsigned long long start)
@@ -152,7 +221,8 @@ static void dump_failure_log(const char *log_path, progress_fail_cb on_fail)
 	if (filtered.len == 0)
 		goto done;
 
-	color_text(&colored, filtered.buf, filtered.len, default_color_rules);
+	color_text(&colored, filtered.buf, filtered.len,
+		   ice_default_color_rules);
 
 	fputs("\n", stderr);
 	fputs(colored.buf, stderr);
@@ -169,15 +239,19 @@ int process_run_progress(struct process *proc, const char *msg,
 			 const char *slug, progress_fail_cb on_fail)
 {
 	struct sbuf log_path = SBUF_INIT;
+	char header[LOG_HEADER_BYTES];
+	char iso[32];
 	FILE *log;
 	char buf[4096];
 	char elapsed[32];
+	time_t start_wall;
 	ssize_t n;
 	int rc;
 	int frame = 0;
 	int interactive;
 	int verbose = global_verbose;
 	unsigned long long start;
+	unsigned long long duration_ms;
 
 	build_log_path(&log_path, slug);
 
@@ -194,9 +268,29 @@ int process_run_progress(struct process *proc, const char *msg,
 		return -1;
 	}
 
+	/*
+	 * Reserve the header's bytes at file start; real values get
+	 * written back at close once duration and exit are known.  A
+	 * newline at the last byte keeps `head -1` output tidy even if
+	 * the run abends before we rewrite in place.
+	 */
+	memset(header, ' ', LOG_HEADER_BYTES);
+	header[LOG_HEADER_BYTES - 1] = '\n';
+	fwrite(header, 1, LOG_HEADER_BYTES, log);
+
+	/*
+	 * Publish the log path for `ice log` before we run the child,
+	 * so even a kill -9 leaves `last` pointing at the file that did
+	 * get created.
+	 */
+	update_last_pointer(log_path.buf);
+
 	proc->pipe_out = 1;
 	proc->pipe_err = 0;
 	proc->merge_err = 1;
+
+	start_wall = time(NULL);
+	format_iso_ts(iso, sizeof iso, start_wall);
 
 	start = mono_ms();
 	if (process_start(proc)) {
@@ -228,12 +322,23 @@ int process_run_progress(struct process *proc, const char *msg,
 	}
 
 	rc = process_finish(proc);
+	duration_ms = mono_ms() - start;
+
+	/*
+	 * Rewrite the reserved header in place with the real values.
+	 * Fixed width keeps the seek simple: formatted output is
+	 * truncated to LOG_HEADER_BYTES - 1 and space-padded, and the
+	 * trailing newline stays at the same offset.
+	 */
+	format_log_header(header, slug, iso, duration_ms, rc);
+	fseek(log, 0, SEEK_SET);
+	fwrite(header, 1, LOG_HEADER_BYTES, log);
 	fclose(log);
 
 	if (!verbose && interactive)
 		progress_clear();
 
-	format_elapsed(elapsed, sizeof elapsed, mono_ms() - start);
+	format_elapsed(elapsed, sizeof elapsed, duration_ms);
 	if (rc == 0) {
 		printf("@g{" CHECK_MARK "} %s @g{done}. (%s)\n", msg, elapsed);
 	} else {
@@ -247,7 +352,18 @@ int process_run_progress(struct process *proc, const char *msg,
 		 * the dump to avoid printing the same output twice. */
 		if (!verbose)
 			dump_failure_log(log_path.buf, on_fail);
-		hint("see %s for details", log_path.buf);
+		/*
+		 * `ice log` only works inside a configured project (it
+		 * walks the profile's log-dir).  Gate the "run ice log"
+		 * hint on that so standalone commands (ice repo clone,
+		 * ice tools install) don't suggest a command that will
+		 * die for unrelated reasons.
+		 */
+		if (config_has("_project.configured"))
+			hint("see %s for details, or run @b{ice log}",
+			     log_path.buf);
+		else
+			hint("see %s for details", log_path.buf);
 	}
 
 	sbuf_release(&log_path);

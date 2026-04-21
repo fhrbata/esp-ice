@@ -22,12 +22,13 @@ static const struct cmd_manual clean_manual = {
 	       "(@b{CMakeCache.txt}, generator files, cached variables) "
 	       "intact.  Safe to run at any time; the next @b{ice build} "
 	       "recompiles from source without reconfiguring.")
-	H_PARA("@b{[<name>]} selects the project profile (default: "
-	       "@b{default})."),
+	H_PARA("The active profile is selected via @b{--profile}, the "
+	       "@b{ICE_PROFILE} env var, or @b{project.default-profile} "
+	       "in config (in that order)."),
 
 	.examples =
 	H_EXAMPLE("ice clean")
-	H_EXAMPLE("ice clean production"),
+	H_EXAMPLE("ice --profile production clean"),
 
 	.extras =
 	H_SECTION("SEE ALSO")
@@ -37,34 +38,27 @@ static const struct cmd_manual clean_manual = {
 };
 /* clang-format on */
 
-static const struct option cmd_clean_opts[] = {
-    OPT_POSITIONAL_OPT("name", complete_profile_names),
-    OPT_END(),
-};
+static const struct option cmd_clean_opts[] = {OPT_END()};
 
 const struct cmd_desc cmd_clean_desc = {
     .name = "clean",
     .fn = cmd_clean,
     .opts = cmd_clean_opts,
     .manual = &clean_manual,
+    .needs = PROJECT_CONFIGURED,
 };
 
 int cmd_clean(int argc, const char **argv)
 {
-	const char *name;
 	const char *build_dir;
 	struct process proc = PROCESS_INIT;
 	const char *cmake_argv[6];
 
 	argc = parse_options(argc, argv, &cmd_clean_desc);
-	if (argc > 1)
+	if (argc > 0)
 		die("too many arguments");
-	name = argc >= 1 ? argv[0] : "default";
 
-	load_profile(name);
-	require_project_initialized();
-
-	build_dir = config_get("project.build-dir");
+	build_dir = config_get("_project.build-dir");
 	cmake_argv[0] = "cmake";
 	cmake_argv[1] = "--build";
 	cmake_argv[2] = build_dir;

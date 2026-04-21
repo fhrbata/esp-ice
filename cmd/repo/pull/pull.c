@@ -79,10 +79,14 @@ int cmd_repo___pull(int argc, const char **argv)
 {
 	const char *base = repo_reference_path();
 	char jobs_str[16];
+	struct sbuf lock = SBUF_INIT;
 
 	parse_options(argc, argv, &cmd_repo___pull_desc);
 	repo_ensure_reference();
-	repo_reference_lock();
+
+	sbuf_addf(&lock, "%s/esp-idf.lock", ice_home());
+	if (lock_acquire(lock.buf, 2000) < 0)
+		die_errno("lock '%s' (remove if no ice is running)", lock.buf);
 
 	if (pull_jobs < 1)
 		pull_jobs = 1;
@@ -123,7 +127,8 @@ int cmd_repo___pull(int argc, const char **argv)
 			warn("some submodules failed to update");
 	}
 
-	repo_reference_unlock();
+	lock_release(lock.buf);
+	sbuf_release(&lock);
 	fprintf(stderr, "@g{done}\n");
 	return 0;
 }

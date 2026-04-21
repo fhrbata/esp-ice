@@ -104,11 +104,14 @@ int cmd_repo___clone(int argc, const char **argv)
 	const char *url;
 	char jobs_str[16];
 	struct svec args = SVEC_INIT;
+	struct sbuf lock = SBUF_INIT;
 
 	argc = parse_options(argc, argv, &cmd_repo___clone_desc);
 	url = argc >= 1 ? argv[0] : IDF_CLONE_URL;
 
-	repo_reference_lock();
+	sbuf_addf(&lock, "%s/esp-idf.lock", ice_home());
+	if (lock_acquire(lock.buf, 2000) < 0)
+		die_errno("lock '%s' (remove if no ice is running)", lock.buf);
 
 	if (!access(repo_reference_path(), F_OK)) {
 		hint("use @b{ice repo pull} to update");
@@ -163,7 +166,8 @@ int cmd_repo___clone(int argc, const char **argv)
 			die("git submodule update failed");
 	}
 
-	repo_reference_unlock();
+	lock_release(lock.buf);
+	sbuf_release(&lock);
 	fprintf(stderr, "@g{done}\n");
 	return 0;
 }

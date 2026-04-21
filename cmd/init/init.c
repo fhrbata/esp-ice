@@ -16,7 +16,7 @@
  *
  * Every @b{ice init} call:
  *   1. Validates the chip and the IDF path (must contain tools/tools.json).
- *   2. Persists the profile under @b{[project "<name>"]} in @b{.iceconfig}.
+ *   2. Persists the profile under @b{[project "<name>"]} in @b{.ice/config}.
  *   3. Installs (or skips if already installed) the IDF's tools.
  *   4. Renames the profile's @b{sdkconfig} to @b{sdkconfig.old}.
  *   5. Wipes the profile's build directory.
@@ -52,7 +52,7 @@ static const struct cmd_manual init_manual = {
 	       "@b{~/.ice/checkouts/v5.4/}) or any path to an existing "
 	       "ESP-IDF tree.  Create named checkouts with @b{ice repo "
 	       "checkout}.")
-	H_PARA("Profile state is persisted to @b{.iceconfig} under "
+	H_PARA("Profile state is persisted to @b{.ice/config} under "
 	       "@b{[project \"<name>\"]} so subsequent ice commands can "
 	       "look up what was configured."),
 
@@ -291,8 +291,8 @@ done:
  *  Caller owns @p out and must svec_clear() it after use. */
 static void build_define_set(struct svec *out)
 {
-	const char *chip = config_get("project.chip");
-	const char *sdkconfig = config_get("project.sdkconfig");
+	const char *chip = config_get("_project.chip");
+	const char *sdkconfig = config_get("_project.sdkconfig");
 	struct config_entry **entries;
 	int n;
 
@@ -301,7 +301,7 @@ static void build_define_set(struct svec *out)
 	if (sdkconfig)
 		svec_pushf(out, "SDKCONFIG=%s", sdkconfig);
 
-	n = config_get_all("project.sdkconfig-defaults", &entries);
+	n = config_get_all("_project.sdkconfig-defaults", &entries);
 	if (n > 0) {
 		struct sbuf e = SBUF_INIT;
 
@@ -316,7 +316,7 @@ static void build_define_set(struct svec *out)
 	}
 	free(entries);
 
-	n = config_get_all("project.define", &entries);
+	n = config_get_all("_project.define", &entries);
 	for (int i = 0; i < n; i++)
 		svec_push(out, entries[i]->value);
 	free(entries);
@@ -325,8 +325,8 @@ static void build_define_set(struct svec *out)
 /** Run cmake's configure step on the active profile. */
 static int cmake_configure(void)
 {
-	const char *build_dir = config_get("project.build-dir");
-	const char *generator = config_get("project.generator");
+	const char *build_dir = config_get("_project.build-dir");
+	const char *generator = config_get("_project.generator");
 	struct svec defines = SVEC_INIT;
 	struct svec args = SVEC_INIT;
 	struct process proc = PROCESS_INIT;
@@ -632,65 +632,110 @@ done:
 	sbuf_release(&out);
 }
 
-/** Persist the profile under @b{[project "<name>"]} in @b{.iceconfig}.
- *
- *  Only writes to the file -- the process-wide config is not touched.
- *  load_profile() re-reads .iceconfig fresh, so it picks up what we
- *  just wrote without an in-memory mirror. */
-static void persist_profile(const char *name, const char *chip,
-			    const char *idf_path, const char *sdkconfig,
-			    const struct svec *sdkconfig_defaults,
-			    const char *build_dir, const char *generator,
-			    const struct svec *defines)
+/*
+ * Build an in-memory @c struct config holding the existing on-disk
+ * entries at LOCAL scope plus the newly-staged profile entries -- the
+ * serialised form of what @b{.ice/config} should contain if cmake
+ * succeeds.  Caller owns @p out and must config_release() it.
+ */
+static void stage_local_config(struct config *out, const char *name,
+			       const char *chip, const char *idf_path,
+			       const char *sdkconfig,
+			       const struct svec *sdkconfig_defaults,
+			       const char *build_dir, const char *generator,
+			       const struct svec *defines)
 {
-	struct config c = CONFIG_INIT;
-	const char *path = local_config_path();
 	struct sbuf key = SBUF_INIT;
 
-	if (!path)
-		die("cannot locate project @b{.iceconfig}");
-
-	config_load_file(&c, CONFIG_SCOPE_LOCAL, path);
+	config_load_file(out, CONFIG_SCOPE_LOCAL, local_config_path());
 
 	/* Scalar entries. */
 	sbuf_reset(&key);
 	sbuf_addf(&key, "project.%s.chip", name);
-	config_set(&c, key.buf, chip, CONFIG_SCOPE_LOCAL);
+	config_set(out, key.buf, chip, CONFIG_SCOPE_LOCAL);
 
 	sbuf_reset(&key);
 	sbuf_addf(&key, "project.%s.idf-path", name);
-	config_set(&c, key.buf, idf_path, CONFIG_SCOPE_LOCAL);
+	config_set(out, key.buf, idf_path, CONFIG_SCOPE_LOCAL);
 
 	sbuf_reset(&key);
 	sbuf_addf(&key, "project.%s.sdkconfig", name);
-	config_set(&c, key.buf, sdkconfig, CONFIG_SCOPE_LOCAL);
+	config_set(out, key.buf, sdkconfig, CONFIG_SCOPE_LOCAL);
 
 	sbuf_reset(&key);
 	sbuf_addf(&key, "project.%s.build-dir", name);
-	config_set(&c, key.buf, build_dir, CONFIG_SCOPE_LOCAL);
+	config_set(out, key.buf, build_dir, CONFIG_SCOPE_LOCAL);
 
 	sbuf_reset(&key);
 	sbuf_addf(&key, "project.%s.generator", name);
-	config_set(&c, key.buf, generator, CONFIG_SCOPE_LOCAL);
+	config_set(out, key.buf, generator, CONFIG_SCOPE_LOCAL);
 
 	/* Multi-values (clear + re-add so re-init replaces, not appends). */
 	sbuf_reset(&key);
 	sbuf_addf(&key, "project.%s.sdkconfig-defaults", name);
-	config_unset(&c, key.buf, CONFIG_SCOPE_LOCAL);
+	config_unset(out, key.buf, CONFIG_SCOPE_LOCAL);
 	for (size_t i = 0; i < sdkconfig_defaults->nr; i++)
-		config_add(&c, key.buf, sdkconfig_defaults->v[i],
+		config_add(out, key.buf, sdkconfig_defaults->v[i],
 			   CONFIG_SCOPE_LOCAL);
 
 	sbuf_reset(&key);
 	sbuf_addf(&key, "project.%s.define", name);
-	config_unset(&c, key.buf, CONFIG_SCOPE_LOCAL);
+	config_unset(out, key.buf, CONFIG_SCOPE_LOCAL);
 	for (size_t i = 0; i < defines->nr; i++)
-		config_add(&c, key.buf, defines->v[i], CONFIG_SCOPE_LOCAL);
+		config_add(out, key.buf, defines->v[i], CONFIG_SCOPE_LOCAL);
 
-	if (config_write_file(&c, CONFIG_SCOPE_LOCAL, path))
-		die_errno("cannot write '%s'", path);
-	config_release(&c);
 	sbuf_release(&key);
+}
+
+/*
+ * Populate the process-wide @c _project.* keys that cmake_configure()
+ * reads -- equivalent to what setup_project() would do, minus the
+ * configured-marker check (which cannot succeed mid-init).  Scope is
+ * PROJECT so a re-run of config_load_profile() elsewhere would
+ * replace these cleanly.
+ */
+static void activate_staged_profile(const char *chip, const char *idf_path,
+				    const char *sdkconfig,
+				    const char *build_dir,
+				    const char *generator,
+				    const struct svec *sdkconfig_defaults,
+				    const struct svec *defines)
+{
+	struct sbuf env = SBUF_INIT;
+	struct sbuf log_dir = SBUF_INIT;
+
+	config_add(&config, "_project.chip", chip, CONFIG_SCOPE_PROJECT);
+	config_add(&config, "_project.idf-path", idf_path,
+		   CONFIG_SCOPE_PROJECT);
+	config_add(&config, "_project.sdkconfig", sdkconfig,
+		   CONFIG_SCOPE_PROJECT);
+	config_add(&config, "_project.build-dir", build_dir,
+		   CONFIG_SCOPE_PROJECT);
+	config_add(&config, "_project.generator", generator,
+		   CONFIG_SCOPE_PROJECT);
+	for (size_t i = 0; i < sdkconfig_defaults->nr; i++)
+		config_add(&config, "_project.sdkconfig-defaults",
+			   sdkconfig_defaults->v[i], CONFIG_SCOPE_PROJECT);
+	for (size_t i = 0; i < defines->nr; i++)
+		config_add(&config, "_project.define", defines->v[i],
+			   CONFIG_SCOPE_PROJECT);
+
+	/*
+	 * Route the cmake-configure log under this init call into the
+	 * per-profile log dir so it's reachable via @b{ice log} the
+	 * same way @b{ice build} logs are.  Without this, init's log
+	 * would land in ~/.ice/logs/ (the standalone fallback) and
+	 * @b{ice log} wouldn't find it.
+	 */
+	sbuf_addf(&log_dir, "%s/.ice/logs", build_dir);
+	config_add(&config, "_project.log-dir", log_dir.buf,
+		   CONFIG_SCOPE_PROJECT);
+	sbuf_release(&log_dir);
+
+	setup_tool_env(idf_path);
+	sbuf_addf(&env, "IDF_PATH=%s", idf_path);
+	putenv(sbuf_detach(&env));
+	putenv((char *)"IDF_COMPONENT_MANAGER=0");
 }
 
 /* ------------------------------------------------------------------ */
@@ -715,6 +760,9 @@ int cmd_init(int argc, const char **argv)
 	struct sbuf manifest = SBUF_INIT;
 	struct sbuf sdkconfig_buf = SBUF_INIT;
 	struct sbuf build_dir_buf = SBUF_INIT;
+	struct sbuf lock_path = SBUF_INIT;
+	struct sbuf marker = SBUF_INIT;
+	struct sbuf log_dir = SBUF_INIT;
 	const char *sdkconfig;
 	const char *build_dir;
 	const char *generator;
@@ -773,18 +821,12 @@ int cmd_init(int argc, const char **argv)
 
 	generator = opt_generator ? opt_generator : "Ninja";
 
-	/* Persist the profile to .iceconfig, then refresh the in-memory
-	 * config from disk so the load_profile() below sees what we just
-	 * wrote -- without having to dual-write into the global config. */
-	persist_profile(name, chip, idf_path, sdkconfig,
-			&opt_sdkconfig_defaults, build_dir, generator,
-			&opt_defines);
-	config_reload_local();
-
 	/* Install tools for this IDF by spawning "ice tools install"
 	 * under process_run_progress so its output lands in ~/.ice/logs/
 	 * and joins init's other phases behind a single spinner.  The
-	 * --target filter keeps the set narrowed to the chosen chip. */
+	 * --target filter keeps the set narrowed to the chosen chip.
+	 * Tools are idempotent and their state is keyed by IDF tree, not
+	 * by ice profile, so no lock needed around this step. */
 	{
 		struct svec cmd = SVEC_INIT;
 		struct process proc = PROCESS_INIT;
@@ -803,40 +845,95 @@ int cmd_init(int argc, const char **argv)
 		svec_clear(&cmd);
 	}
 	sbuf_release(&manifest);
-	if (rc) {
-		free(idf_path);
-		return rc;
-	}
+	if (rc)
+		goto out;
 
 	/* Wipe the profile's build dir and back up its sdkconfig. */
 	backup_sdkconfig(sdkconfig);
 	rc = wipe_build_dir(build_dir);
-	if (rc) {
-		free(idf_path);
-		return rc;
-	}
+	if (rc)
+		goto out;
+
+	/* Pre-create the per-profile log dir so the spawned cmake run
+	 * has somewhere to land its output even if configure fails. */
+	sbuf_addf(&log_dir, "%s/.ice/logs", build_dir);
+	if (mkdirp(log_dir.buf) < 0)
+		die_errno("cannot create '%s'", log_dir.buf);
 
 	/*
-	 * Read the just-persisted profile back into process state via
-	 * the same load_profile() that build/flash/etc. use.  This sets
-	 * up PATH so the cmake configure below can find ninja and the
-	 * cross-compiler, and populates the project.* keys that
-	 * build_define_set consumes.
+	 * Stage-then-commit: take .ice/config.lock up front, run cmake,
+	 * and touch `<build>/.ice/configured` + rewrite `.ice/config`
+	 * atomically ONLY if cmake succeeds.  On failure the on-disk
+	 * config and the `configured` marker are left untouched, so a
+	 * partial-init state the rest of ice would key off of never
+	 * exists.
 	 */
-	load_profile(name);
+	sbuf_addf(&lock_path, "%s.lock", local_config_path());
+	if (lock_acquire(lock_path.buf, 2000) < 0)
+		die_errno("lock '%s' (remove if no ice is running)",
+			  lock_path.buf);
+
+	/* Populate _project.* so cmake_configure reads the staged values
+	 * without us having to dual-write into the on-disk config first. */
+	activate_staged_profile(chip, idf_path, sdkconfig, build_dir, generator,
+				&opt_sdkconfig_defaults, &opt_defines);
 
 	putenv(envstr);
 
 	rc = cmake_configure();
-	if (rc == 0) {
-		const char *bdir = config_get("project.build-dir");
-
-		patch_ninja_partition(bdir);
-		patch_ninja_elf2image(bdir);
+	if (rc != 0) {
+		/* Failure: release lock, leave `.ice/config` untouched. */
+		lock_release(lock_path.buf);
+		goto out;
 	}
 
+	/* Success: touch configured marker. */
+	sbuf_addf(&marker, "%s/.ice/configured", build_dir);
+	if (write_file_atomic(marker.buf, "", 0) < 0)
+		die_errno("cannot touch '%s'", marker.buf);
+
+	/* Write `.ice/config` via atomic rename of the held lockfile. */
+	{
+		struct config staged = CONFIG_INIT;
+		struct sbuf rendered = SBUF_INIT;
+		FILE *fp;
+		size_t written;
+
+		stage_local_config(&staged, name, chip, idf_path, sdkconfig,
+				   &opt_sdkconfig_defaults, build_dir,
+				   generator, &opt_defines);
+		config_render_ini(&staged, CONFIG_SCOPE_LOCAL, &rendered);
+
+		fp = fopen(lock_path.buf, "wb");
+		if (!fp)
+			die_errno("open '%s'", lock_path.buf);
+		written = fwrite(rendered.buf, 1, rendered.len, fp);
+		if (fclose(fp) != 0 || written != rendered.len)
+			die_errno("write '%s'", lock_path.buf);
+		if (rename(lock_path.buf, local_config_path()) != 0)
+			die_errno("rename '%s' -> '%s'", lock_path.buf,
+				  local_config_path());
+		lock_forget(lock_path.buf);
+
+		sbuf_release(&rendered);
+		config_release(&staged);
+	}
+
+	/* Unlink any stale `built` marker: the previous build is no
+	 * longer consistent with the just-rewritten config / cache. */
+	sbuf_reset(&marker);
+	sbuf_addf(&marker, "%s/.ice/built", build_dir);
+	unlink(marker.buf);
+
+	patch_ninja_partition(build_dir);
+	patch_ninja_elf2image(build_dir);
+
+out:
 	free(idf_path);
 	sbuf_release(&sdkconfig_buf);
 	sbuf_release(&build_dir_buf);
+	sbuf_release(&lock_path);
+	sbuf_release(&marker);
+	sbuf_release(&log_dir);
 	return rc;
 }

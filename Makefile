@@ -140,6 +140,7 @@ LIB_SRCS := \
 	cmd/image/info/info.c \
 	cmd/image/merge/merge.c \
 	cmd/init/init.c \
+	cmd/log/log.c \
 	cmd/menuconfig/menuconfig.c \
 	cmd/repo/repo.c \
 	cmd/repo/clone/clone.c \
@@ -185,6 +186,7 @@ LIB_SRCS := \
 	toolenv.c \
 	vendor/sha256/sha256.c \
 	chip.c \
+	color_rules.c \
 	esf_port.c
 
 # MAIN_SRCS provide the program entry point.  Excluded from libice.a
