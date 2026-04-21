@@ -83,6 +83,17 @@ static const struct option cmd_image_create_opts[] = {
 	       "flash clock, chip-specific (e.g. 80m, 40m, 20m)", NULL),
     OPT_STRING(0, "flash-size", &opt_flash_size, "size",
 	       "1MB | 2MB | 4MB | 8MB | 16MB | ...  (default 2MB)", NULL),
+    /*
+     * Esptool's legacy underscore-form spellings -- IDF's cmake passes
+     * these on the elf2image command line, so the rewritten
+     * `ice image create` invocation must accept them unchanged.
+     */
+    OPT_STRING(0, "flash_mode", &opt_flash_mode, "mode",
+	       "alias for @b{--flash-mode} (esptool compatibility)", NULL),
+    OPT_STRING(0, "flash_freq", &opt_flash_freq, "freq",
+	       "alias for @b{--flash-freq} (esptool compatibility)", NULL),
+    OPT_STRING(0, "flash_size", &opt_flash_size, "size",
+	       "alias for @b{--flash-size} (esptool compatibility)", NULL),
     OPT_STRING(0, "elf-sha256-offset", &opt_elf_sha256_offset, "hex",
 	       "patch ELF SHA-256 at this absolute image offset", NULL),
     OPT_INT(0, "min-rev-full", &opt_min_rev_full, "n",
