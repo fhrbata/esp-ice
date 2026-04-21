@@ -505,14 +505,14 @@ static const char *back_n_tokens(const char *p, const char *line_start, int n)
 /*
  * Replace the esptool elf2image invocation on a COMMAND line with
  * the native `ice image create` equivalent.  IDF's COMMAND line has
- * the form:
+ * one of two shapes:
  *
- *   cd <dir> && <python> -m esptool --chip <chip> elf2image <args> \
- *       -o <out.bin> <in.elf> && cmake -E echo "..." && ...
+ *   cd <dir> && <python> -m esptool --chip <chip> elf2image ...   (module)
+ *   cd <dir> && <python> <esptool.py> --chip <chip> elf2image ... (script)
  *
- * We rewrite `<python> -m esptool` to `ice image create`, then
- * re-emit the captured `--chip <chip>` argument (which lives between
- * `esptool` and `elf2image`) plus everything after `elf2image`.
+ * v5.3 uses the script form; newer trees sometimes use -m.  Either
+ * way we need to land on the python invocation so the preceding
+ * `cd <dir> && ` chain is preserved when we splice in the ice call.
  */
 static void patch_elf2image_line(struct sbuf *out, const char *line, size_t len)
 {
@@ -536,7 +536,17 @@ static void patch_elf2image_line(struct sbuf *out, const char *line, size_t len)
 	const char *etool_start = etool;
 	while (etool_start > line && etool_start[-1] != ' ')
 		etool_start--;
-	const char *invoke_start = back_n_tokens(etool_start, line, 2);
+
+	/*
+	 * One token back from @esptool_start is either "-m" (module
+	 * form; python is one further back) or the python invocation
+	 * itself (script form).
+	 */
+	const char *prev = back_n_tokens(etool_start, line, 1);
+	int module_form = prev + 2 < etool_start && prev[0] == '-' &&
+			  prev[1] == 'm' && prev[2] == ' ';
+	const char *invoke_start =
+	    module_form ? back_n_tokens(etool_start, line, 2) : prev;
 
 	const char *chip_arg =
 	    mem_find(etool + elen, e2i, chip_needle, chip_nlen);
