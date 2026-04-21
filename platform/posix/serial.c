@@ -227,6 +227,27 @@ int serial_set_rts(struct serial *s, int on)
 	return set_modem_bit(s->fd, TIOCM_RTS, on);
 }
 
+int serial_set_dtr_rts(struct serial *s, int dtr, int rts)
+{
+	int bits;
+
+	if (ioctl(s->fd, TIOCMGET, &bits) < 0)
+		return -errno;
+
+	if (dtr)
+		bits |= TIOCM_DTR;
+	else
+		bits &= ~TIOCM_DTR;
+	if (rts)
+		bits |= TIOCM_RTS;
+	else
+		bits &= ~TIOCM_RTS;
+
+	if (ioctl(s->fd, TIOCMSET, &bits) < 0)
+		return -errno;
+	return 0;
+}
+
 int serial_flush_input(struct serial *s)
 {
 	if (tcflush(s->fd, TCIFLUSH) < 0)

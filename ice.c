@@ -15,31 +15,6 @@
 #include "ice.h"
 
 /*
- * Run a shell alias ("!<cmd>") via /bin/sh -c (POSIX) or cmd.exe /c
- * (Windows) and exit with its status.  Never returns.
- */
-static NORETURN void run_shell_alias(const char *cmd)
-{
-	const char *sh_argv[4];
-	struct process proc = PROCESS_INIT;
-	int rc;
-
-#ifdef _WIN32
-	sh_argv[0] = "cmd.exe";
-	sh_argv[1] = "/c";
-#else
-	sh_argv[0] = "/bin/sh";
-	sh_argv[1] = "-c";
-#endif
-	sh_argv[2] = cmd;
-	sh_argv[3] = NULL;
-
-	proc.argv = sh_argv;
-	rc = process_run(&proc);
-	exit(rc < 0 ? EXIT_FAILURE : rc);
-}
-
-/*
  * Try to expand argv[0] as an alias (config key alias.<name>).
  *
  * Value starting with '!' is a shell alias: passed straight to the
@@ -66,8 +41,11 @@ static int try_expand_alias(int *argcp, const char ***argvp)
 	if (!value)
 		return 0;
 
-	if (value[0] == '!')
-		run_shell_alias(value + 1);
+	if (value[0] == '!') {
+		int rc = run_shell(value + 1);
+
+		exit(rc < 0 ? EXIT_FAILURE : rc);
+	}
 
 	for (int i = 1; i < *argcp; i++)
 		svec_push(&prev_args, (*argvp)[i]);
@@ -101,6 +79,22 @@ static int try_expand_alias(int *argcp, const char ***argvp)
 	return 1;
 }
 
+/*
+ * Return 1 if argv contains --help or -h before the first "--"
+ * separator.  Used to skip setup_project() for help/usage requests
+ * so @b{ice build --help} works outside a configured project.
+ */
+static int argv_wants_help(int argc, const char **argv)
+{
+	for (int i = 1; i < argc; i++) {
+		if (!strcmp(argv[i], "--"))
+			return 0;
+		if (!strcmp(argv[i], "--help") || !strcmp(argv[i], "-h"))
+			return 1;
+	}
+	return 0;
+}
+
 /* Dispatch: parse globals then fire the matched subcommand. */
 
 /*
@@ -114,6 +108,7 @@ int global_no_color;
 int global_no_pager;
 int global_version;
 int global_verbose;
+const char *global_profile;
 
 static void complete_aliases(void)
 {
@@ -166,8 +161,18 @@ static void complete_aliases(void)
  */
 int ice_dispatch(int argc, const char **argv, const struct cmd_desc *desc)
 {
-	if (!desc->subcommands)
+	if (!desc->subcommands) {
+		/*
+		 * --help / -h short-circuits to the manual inside
+		 * parse_options before the handler does any real work,
+		 * so skip setup_project() for that path -- otherwise
+		 * @b{ice build --help} would demand a configured project
+		 * just to render its usage.
+		 */
+		if (!argv_wants_help(argc, argv))
+			setup_project(desc->needs);
 		return desc->fn(argc, argv);
+	}
 
 	argc = parse_options(argc, argv, desc);
 
@@ -179,8 +184,11 @@ int ice_dispatch(int argc, const char **argv, const struct cmd_desc *desc)
 		}
 	}
 
-	if (desc->fn)
+	if (desc->fn) {
+		if (!argv_wants_help(argc, argv))
+			setup_project(desc->needs);
 		return desc->fn(argc, argv);
+	}
 
 	if (argc == 0) {
 		print_manual(desc->manual->name, desc);
@@ -196,6 +204,9 @@ const struct option ice_global_opts[] = {
     OPT_BOOL(0, "no-pager", &global_no_pager, "disable the pager"),
     OPT_BOOL_CFG('v', "verbose", &global_verbose, "core.verbose", NULL,
 		 "show full command output", NULL),
+    OPT_STRING_CFG(0, "profile", &global_profile, "name",
+		   "project.default-profile", "ICE_PROFILE",
+		   "select profile (default: \"default\")", NULL, NULL),
     OPT_BOOL(0, "version", &global_version, "show version"),
     OPT_END(),
 };
@@ -211,12 +222,15 @@ static const struct cmd_desc *const ice_subs[] = {
     &cmd_monitor_desc,
     &cmd_image_desc,
     &cmd_init_desc,
+    &cmd_log_desc,
     &cmd_menuconfig_desc,
     &cmd_repo_desc,
     &cmd_status_desc,
     &cmd_target_desc,
     &cmd_tools_desc,
-    &cmd___complete_desc, /* hidden; name starts with underscore */
+    /* Hidden plumbing (names start with '_'); help/completion skip. */
+    &cmd___complete_desc,
+    &cmd___flash_desc,
     NULL,
 };
 

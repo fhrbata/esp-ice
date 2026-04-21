@@ -17,11 +17,11 @@ mkdir -p home
 export HOME="$PWD/home" USERPROFILE="$PWD/home"
 unset ESPPORT ESPBAUD IDF_TARGET
 
-# --user writes to ~/.iceconfig; --local to ./.iceconfig.
+# --user writes to ~/.iceconfig; --local to ./.ice/config.
 "$BINARY" config --user core.generator from_user
 "$BINARY" config --local core.build-dir from_local
 tap_check test -f "$HOME/.iceconfig"
-tap_check test -f .iceconfig
+tap_check test -f .ice/config
 tap_done "--user and --local target their own files"
 
 # local beats user.

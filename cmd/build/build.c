@@ -18,21 +18,22 @@ static const struct cmd_manual build_manual = {
 	.description =
 	H_PARA("Compiles the project's @b{all} target through cmake.  "
 	       "Progress is shown on a single status line and the full "
-	       "command output is captured under "
-	       "@b{~/.ice/logs/}; the exact log path is printed if the "
+	       "command output is captured under the build directory's "
+	       "@b{.ice/logs/}; the exact log path is printed if the "
 	       "build fails, and the raw output is mirrored live when "
 	       "@b{-v} / @b{core.verbose} is set.")
-	H_PARA("@b{[<name>]} selects the project profile (default: "
-	       "@b{default}).  The profile must already have been bound "
-	       "with @b{ice init <chip> <idf> [<name>]}.  cmake re-runs "
-	       "automatically when its own tracked dependencies "
-	       "(top-level @b{CMakeLists.txt}, included @b{*.cmake} "
-	       "files) change.  For a from-scratch rebuild, re-run "
-	       "@b{ice init}."),
+	H_PARA("The active profile is selected via @b{--profile}, the "
+	       "@b{ICE_PROFILE} env var, or @b{project.default-profile} "
+	       "in config (in that order).  The profile must already "
+	       "have been bound with @b{ice init <chip> <idf> [<name>]}.  "
+	       "cmake re-runs automatically when its own tracked "
+	       "dependencies (top-level @b{CMakeLists.txt}, included "
+	       "@b{*.cmake} files) change.  For a from-scratch rebuild, "
+	       "re-run @b{ice init}."),
 
 	.examples =
 	H_EXAMPLE("ice build")
-	H_EXAMPLE("ice build production")
+	H_EXAMPLE("ice --profile production build")
 	H_EXAMPLE("ice -v build"),
 
 	.extras =
@@ -53,16 +54,14 @@ static const struct cmd_manual build_manual = {
 };
 /* clang-format on */
 
-static const struct option cmd_build_opts[] = {
-    OPT_POSITIONAL_OPT("name", complete_profile_names),
-    OPT_END(),
-};
+static const struct option cmd_build_opts[] = {OPT_END()};
 
 const struct cmd_desc cmd_build_desc = {
     .name = "build",
     .fn = cmd_build,
     .opts = cmd_build_opts,
     .manual = &build_manual,
+    .needs = PROJECT_CONFIGURED,
 };
 
 /*
@@ -103,20 +102,29 @@ static void build_fail_filter(struct sbuf *out, const char *log, size_t len)
 
 int cmd_build(int argc, const char **argv)
 {
-	const char *name;
 	const char *build_dir;
 	struct process proc = PROCESS_INIT;
 	const char *cmake_argv[6];
+	struct sbuf lock_path = SBUF_INIT;
+	struct sbuf marker = SBUF_INIT;
+	int rc;
 
 	argc = parse_options(argc, argv, &cmd_build_desc);
-	if (argc > 1)
+	if (argc > 0)
 		die("too many arguments");
-	name = argc >= 1 ? argv[0] : "default";
 
-	load_profile(name);
-	require_project_initialized();
+	build_dir = config_get("_project.build-dir");
 
-	build_dir = config_get("project.build-dir");
+	/*
+	 * `<build>/.ice/lock` serialises any writer that mutates the
+	 * build directory (us, a concurrent `ice build`, a future
+	 * `ice clean`, ...).  Held for the duration of ninja.
+	 */
+	sbuf_addf(&lock_path, "%s/.ice/lock", build_dir);
+	if (lock_acquire(lock_path.buf, 2000) < 0)
+		die_errno("lock '%s' (remove if no ice is running)",
+			  lock_path.buf);
+
 	cmake_argv[0] = "cmake";
 	cmake_argv[1] = "--build";
 	cmake_argv[2] = build_dir;
@@ -125,6 +133,24 @@ int cmd_build(int argc, const char **argv)
 	cmake_argv[5] = NULL;
 
 	proc.argv = cmake_argv;
-	return process_run_progress(&proc, "Building", "build",
-				    build_fail_filter);
+	rc =
+	    process_run_progress(&proc, "Building", "build", build_fail_filter);
+
+	/*
+	 * On success the `built` marker advertises to other commands
+	 * that the build tree is in a self-consistent state.  Failure
+	 * leaves any previous marker alone -- if the user just edited a
+	 * single source and the build failed, the artefacts from the
+	 * last successful build are still valid.
+	 */
+	if (rc == 0) {
+		sbuf_addf(&marker, "%s/.ice/built", build_dir);
+		if (write_file_atomic(marker.buf, "", 0) < 0)
+			warn_errno("cannot touch '%s'", marker.buf);
+	}
+
+	lock_release(lock_path.buf);
+	sbuf_release(&lock_path);
+	sbuf_release(&marker);
+	return rc;
 }

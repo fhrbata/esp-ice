@@ -155,6 +155,16 @@ int putenv(char *);
 void delay_ms(uint32_t ms);
 
 /**
+ * @brief Run @p cmd through the platform shell and return its exit code.
+ *
+ * POSIX: @c /bin/sh -c <cmd>.  Windows: @c cmd.exe /c <cmd>.  Absorbs
+ * the #ifdef so callers (shell aliases, pager piping, ...) stay
+ * platform-agnostic.  Returns the child's exit code, or a negative
+ * value on spawn failure (same convention as process_run()).
+ */
+int run_shell(const char *cmd);
+
+/**
  * @brief Get terminal width for a given file descriptor.
  *
  * @param fd  File descriptor (typically STDOUT_FILENO or STDERR_FILENO).

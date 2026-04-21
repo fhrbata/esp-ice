@@ -9,15 +9,18 @@
  * @brief The "ice flash" subcommand -- porcelain wrapper around
  * `ice target flash`.
  *
- * Calls project_load() to resolve port, chip, baud rate, and flash
- * file list from the active profile, then delegates to
- * cmd_target_flash() which carries out the actual connection and write.
+ * Split into a user-facing porcelain (@c cmd_flash) that spawns
+ * @c ice @c __flash under process_run_progress so the full flasher
+ * output is captured in a log, and a hidden plumbing command
+ * (@c cmd___flash) that does the actual port resolution, chip
+ * handshake, and bit-banging.  @c ice @c target @c flash remains the
+ * low-level entry for scripted / externally-driven flashing.
  */
 #include "cmake.h"
 #include "esf_port.h"
 #include "ice.h"
 
-/* Plumbing entry point declared in cmd/target/flash.c. */
+/* Plumbing entry point declared in cmd/target/flash/flash.c. */
 int cmd_target_flash(int argc, const char **argv);
 
 static const char *opt_port;
@@ -25,7 +28,6 @@ static int opt_baud = 460800;
 
 /* clang-format off */
 static const struct option cmd_flash_opts[] = {
-	OPT_POSITIONAL_OPT("name", complete_profile_names),
 	OPT_STRING_CFG('p', "port", &opt_port, "dev",
 		       "serial.port", "ESPPORT",
 		       "serial port device", NULL, NULL),
@@ -53,9 +55,8 @@ static const struct cmd_manual manual = {
 
 	.examples =
 	H_EXAMPLE("ice flash")
-	H_EXAMPLE("ice flash production")
+	H_EXAMPLE("ice --profile production flash")
 	H_EXAMPLE("ice flash --port /dev/ttyUSB0")
-	H_EXAMPLE("ice flash s3 --port /dev/ttyACM0")
 	H_EXAMPLE("ice flash --port /dev/ttyUSB0 --baud 921600")
 	H_EXAMPLE("ice config serial.port /dev/ttyUSB0 && ice flash")
 	H_EXAMPLE("ESPPORT=/dev/ttyUSB1 ice flash"),
@@ -85,25 +86,76 @@ static const struct cmd_manual manual = {
 };
 /* clang-format on */
 
+int cmd_flash(int argc, const char **argv);
+int cmd___flash(int argc, const char **argv);
+
 const struct cmd_desc cmd_flash_desc = {
     .name = "flash",
     .fn = cmd_flash,
     .opts = cmd_flash_opts,
     .manual = &manual,
+    .needs = PROJECT_BUILT,
 };
 
+/* Hidden plumbing: does the actual work.  The porcelain cmd_flash
+ * above invokes this via process_run_progress so the combined output
+ * lands in a single log under <build>/.ice/logs/. */
+const struct cmd_desc cmd___flash_desc = {
+    .name = "__flash",
+    .fn = cmd___flash,
+    .opts = cmd_flash_opts,
+    .manual = &manual,
+    .needs = PROJECT_BUILT,
+};
+
+/* Porcelain wrapper -- forwards to __flash with progress display. */
 int cmd_flash(int argc, const char **argv)
 {
-	argc = parse_options(argc, argv, &cmd_flash_desc);
-	if (argc > 1)
+	struct svec cmd = SVEC_INIT;
+	struct process proc = PROCESS_INIT;
+	const char *exe = process_exe();
+	const char *env_items[2] = {NULL, NULL};
+	struct sbuf env_profile = SBUF_INIT;
+	int rc;
+
+	/* Capture argv BEFORE parse_options runs -- it compacts argv in
+	 * place and we need the original option tokens to forward. */
+	svec_push(&cmd, exe ? exe : "ice");
+	svec_push(&cmd, "__flash");
+	for (int i = 1; i < argc; i++)
+		svec_push(&cmd, argv[i]);
+
+	/* Parse for --help / -h / --ice-complete handling and for early
+	 * rejection of bad flags, but discard the mutated argv. */
+	parse_options(argc, argv, &cmd_flash_desc);
+
+	/* Propagate --profile to the child via ICE_PROFILE; plain env
+	 * inheritance already covers the ICE_PROFILE / config / default
+	 * cases, so only the CLI-set value needs an explicit push. */
+	if (global_profile && *global_profile) {
+		sbuf_addf(&env_profile, "ICE_PROFILE=%s", global_profile);
+		env_items[0] = env_profile.buf;
+		proc.env = env_items;
+	}
+
+	proc.argv = cmd.v;
+	rc = process_run_progress(&proc, "Flashing", "flash", NULL);
+
+	sbuf_release(&env_profile);
+	svec_clear(&cmd);
+	return rc;
+}
+
+int cmd___flash(int argc, const char **argv)
+{
+	argc = parse_options(argc, argv, &cmd___flash_desc);
+	if (argc > 0)
 		die("too many arguments");
 
-	project_load(argc >= 1 ? argv[0] : "default");
-
-	const char *chip_str = config_get("project.chip");
+	const char *chip_str = config_get("_project.chip");
 
 	struct config_entry **flash_files;
-	int n_files = config_get_all("project.flash-file", &flash_files);
+	int n_files = config_get_all("_project.flash-file", &flash_files);
 	if (n_files == 0) {
 		fprintf(stderr,
 			"ice flash: no flash files in flasher_args.json\n"

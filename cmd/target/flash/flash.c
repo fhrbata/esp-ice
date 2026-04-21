@@ -5,7 +5,7 @@
  */
 
 /**
- * @file cmd/target/flash.c
+ * @file cmd/target/flash/flash.c
  * @brief `ice target flash` -- plumbing flash command.
  *
  * Operates on an explicitly specified serial port; has no knowledge of

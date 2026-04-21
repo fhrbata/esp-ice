@@ -34,17 +34,6 @@ const char *repo_reference_path(void);
 /** Return ~/.ice/checkouts (parent of named checkouts). */
 const char *repo_checkouts_path(void);
 
-/**
- * Acquire the ~/.ice/esp-idf.lock lockfile and die() with a user-facing
- * message if another ice process already holds it.  Serialises
- * clone/pull/checkout against concurrent modifications of the
- * reference.
- */
-void repo_reference_lock(void);
-
-/** Release the lock taken by repo_reference_lock(). */
-void repo_reference_unlock(void);
-
 /** Run a git command in @p dir.  Returns the exit code. */
 int repo_run_git(const char *dir, const char **argv);
 

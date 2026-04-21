@@ -26,7 +26,6 @@ static int opt_no_reset;
 
 /* clang-format off */
 static const struct option cmd_monitor_opts[] = {
-	OPT_POSITIONAL_OPT("name", complete_profile_names),
 	OPT_STRING_CFG('p', "port", &opt_port, "path",
 		       "serial.port", "ESPPORT",
 		       "serial port device path", NULL, NULL),
@@ -83,20 +82,19 @@ const struct cmd_desc cmd_monitor_desc = {
     .fn = cmd_monitor,
     .opts = cmd_monitor_opts,
     .manual = &manual,
+    .needs = PROJECT_CONFIGURED,
 };
 
 int cmd_monitor(int argc, const char **argv)
 {
 	argc = parse_options(argc, argv, &cmd_monitor_desc);
-	if (argc > 1)
+	if (argc > 0)
 		die("too many arguments");
-
-	project_load(argc >= 1 ? argv[0] : "default");
 
 	if (opt_no_reset && !opt_port)
 		die("--no-reset requires -p/--port");
 
-	const char *chip_str = config_get("project.chip");
+	const char *chip_str = config_get("_project.chip");
 	const char *port = opt_port;
 	unsigned baud = (unsigned)opt_baud;
 	char *autoport = NULL;

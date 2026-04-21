@@ -181,6 +181,21 @@ int serial_set_rts(struct serial *s, int on)
 	return 0;
 }
 
+int serial_set_dtr_rts(struct serial *s, int dtr, int rts)
+{
+	/*
+	 * Windows has no atomic "set both" API -- EscapeCommFunction
+	 * only handles one line at a time.  The USB driver layer below
+	 * it batches the control transfer pair so the two calls still
+	 * arrive as one USB frame on most bridges.
+	 */
+	if (!EscapeCommFunction(s->handle, dtr ? SETDTR : CLRDTR))
+		return -EIO;
+	if (!EscapeCommFunction(s->handle, rts ? SETRTS : CLRRTS))
+		return -EIO;
+	return 0;
+}
+
 int serial_flush_input(struct serial *s)
 {
 	if (!PurgeComm(s->handle, PURGE_RXCLEAR))

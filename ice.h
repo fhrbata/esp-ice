@@ -72,6 +72,27 @@ int cmd_ice(int argc, const char **argv);
 int cmd_status(int argc, const char **argv);
 
 /**
+ * @brief Precondition a command needs before its handler runs.
+ *
+ * The dispatcher calls setup_project() with a leaf's @c .needs before
+ * firing the leaf's @c .fn so project-aware commands never have to
+ * re-discover "is this actually an ice project / has it been
+ * configured / has it been built".  Values are ordered: a command
+ * asking for @c PROJECT_BUILT implicitly receives the @c
+ * PROJECT_CONFIGURED guarantee too.
+ */
+enum project_need {
+	PROJECT_NONE,	    /**< Command runs outside any project (repo,
+				 tools, config, help, completion, ...). */
+	PROJECT_CONFIGURED, /**< Cwd must be inside an ice project and
+				 @c ice init must have completed
+				 successfully on the active profile. */
+	PROJECT_BUILT,	    /**< CONFIGURED plus the active profile's
+				 build directory has a successful build
+				 marker (touched by @c ice build). */
+};
+
+/**
  * @brief Descriptor for a command node (leaf or namespace).
  *
  * Every `ice <path>` command -- leaf or pure namespace -- is described
@@ -98,6 +119,12 @@ struct cmd_desc {
 				       *   and flag listings (e.g. user
 				       *   aliases at the root).  NULL
 				       *   if none. */
+	enum project_need needs;      /**< Preconditions the dispatcher
+				       *   validates via setup_project()
+				       *   before firing @c fn.  Zero-
+				       *   init = PROJECT_NONE, so only
+				       *   project-aware commands declare
+				       *   this. */
 };
 
 /**
@@ -113,6 +140,21 @@ int ice_dispatch(int argc, const char **argv, const struct cmd_desc *desc);
 /** Top-level descriptor for `ice` itself.  Points at ice_subs[]. */
 extern const struct cmd_desc ice_root_desc;
 
+/**
+ * @brief Bring the process state to @p needs for the active profile.
+ *
+ * Called by ice_dispatch() with the leaf's @c .needs right before
+ * @c .fn fires.  See cmake.c for the full contract:
+ *
+ *   - @c PROJECT_NONE: no-op.
+ *   - @c PROJECT_CONFIGURED: load the profile, verify @b{ice init}
+ *     has landed (cfg marker + tool env + flasher_args parse).
+ *   - @c PROJECT_BUILT: CONFIGURED plus @b{ice build} built marker.
+ *
+ * Dies with an actionable hint on every precondition failure.
+ */
+void setup_project(enum project_need needs);
+
 /** Top-level command descriptors, indexed by ice_subs[] in ice.c. */
 extern const struct cmd_desc cmd_build_desc;
 extern const struct cmd_desc cmd_clean_desc;
@@ -123,6 +165,7 @@ extern const struct cmd_desc cmd_help_desc;
 extern const struct cmd_desc cmd_idf_desc;
 extern const struct cmd_desc cmd_image_desc;
 extern const struct cmd_desc cmd_init_desc;
+extern const struct cmd_desc cmd_log_desc;
 extern const struct cmd_desc cmd_menuconfig_desc;
 extern const struct cmd_desc cmd_monitor_desc;
 extern const struct cmd_desc cmd_repo_desc;
@@ -130,6 +173,7 @@ extern const struct cmd_desc cmd_status_desc;
 extern const struct cmd_desc cmd_target_desc;
 extern const struct cmd_desc cmd_tools_desc;
 extern const struct cmd_desc cmd___complete_desc;
+extern const struct cmd_desc cmd___flash_desc;
 
 /** Top-level option table and manual for `ice`. */
 extern const struct option ice_global_opts[];
@@ -140,6 +184,7 @@ extern int global_no_color;
 extern int global_no_pager;
 extern int global_version;
 extern int global_verbose;
+extern const char *global_profile;
 
 /**
  * @brief Emit a completion candidate to stdout.

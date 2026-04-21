@@ -15,7 +15,7 @@
  *   ice config --add <key> <value>  append (multi-value semantics)
  *   ice config --unset <key>        remove every entry for <key>
  *
- * Target scope for writes: --local (./.iceconfig, default) or --user
+ * Target scope for writes: --local (./.ice/config, default) or --user
  * (~/.iceconfig).  Config files are whole-rewritten on every write;
  * comments and blank lines in the existing file are lost.
  */
@@ -37,7 +37,7 @@ static const struct cmd_manual config_manual = {
 	       "effective value of that key (exits non-zero if unset), "
 	       "and two positional arguments set the key in the target "
 	       "scope.  The target scope for writes is @b{--local} "
-	       "(./.iceconfig) by default; pass @b{--user} to write "
+	       "(./.ice/config) by default; pass @b{--user} to write "
 	       "~/.iceconfig.")
 	H_PARA("@b{--list} dumps every entry in the active configuration "
 	       "together with the scope it came from.  @b{--add} appends "
@@ -62,14 +62,14 @@ static const struct cmd_manual config_manual = {
 	       "from project_description.json.  Best-effort; silently "
 	       "skipped when the build tree is not yet configured.")
 	H_ITEM("local",
-	       "@b{./.iceconfig} in the current working directory.")
+	       "@b{./.ice/config} in the current working directory.")
 	H_ITEM("user",
 	       "@b{~/.iceconfig} in the user's home directory.")
 	H_ITEM("defaults",
 	       "Built-in fallbacks (currently only @b{core.verbose=false}).")
 
 	H_SECTION("FILES")
-	H_ITEM("./.iceconfig",
+	H_ITEM("./.ice/config",
 	       "Local project configuration (--local scope).")
 	H_ITEM("~/.iceconfig",
 	       "User configuration (--user scope).")
@@ -218,7 +218,7 @@ static const struct option cmd_config_opts[] = {
     OPT_BOOL(0, "unset", &opt_unset, "remove all entries for a key"),
     OPT_BOOL(0, "user", &opt_user, "act on the user config (~/.iceconfig)"),
     OPT_BOOL(0, "local", &opt_local,
-	     "act on the local config (./.iceconfig) [default]"),
+	     "act on the local config (./.ice/config) [default]"),
     OPT_POSITIONAL("key", complete_config_keys),
     OPT_END(),
 };

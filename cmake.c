@@ -6,14 +6,18 @@
 
 /**
  * @file cmake.c
- * @brief Profile loading + init-gate checks for cmake-using commands.
+ * @brief Project lifecycle glue for the dispatcher: resolve profile,
+ *        enforce configured/built preconditions, populate runtime
+ *        state under @c _project.* before a leaf handler runs.
  *
  * @b{ice init} is the single owner of the cmake configure-time state
- * (generator, -D flags, build-dir layout, build.ninja fixups).  Every
- * other cmake-based command just reads the profile, verifies init has
- * been run, and shells out to @b{cmake --build}.  If the user mangles
- * the build directory by hand or wants raw cmake control, that's on
- * them -- re-run @b{ice init} to get back to a known state.
+ * (generator, -D flags, build-dir layout, build.ninja fixups); every
+ * other cmake-based command shells out to @b{cmake --build} or
+ * consumes artefacts in the build directory.  Commands declare what
+ * they need via @c cmd_desc.needs and the dispatcher calls
+ * setup_project() to bring the process to that state -- load the
+ * profile, stat the @c .ice/configured / @c .ice/built markers, parse
+ * @c flasher_args.json into @c _project.flash-file, and so on.
  */
 #include "ice.h"
 
@@ -56,26 +60,122 @@ void complete_profile_names(void)
 		printf("default\n");
 }
 
-void load_profile(const char *name)
+/*
+ * Prepend the active profile's IDF tool directories to PATH and set
+ * IDF_PATH / IDF_COMPONENT_MANAGER so any cmake/ninja child inherits
+ * the right toolchain without ever sourcing @b{export.sh}.
+ *
+ * The IDF_COMPONENT_MANAGER=0 export is global (not just during init)
+ * because ninja later spawns sub-cmakes (bootloader, ULP, ...) that
+ * re-read project.cmake; without the env var they'd reintroduce the
+ * Python component manager we explicitly opt out of.
+ */
+static void setup_tooling_env(void)
 {
-	const char *build_dir;
-	const char *idf_path;
+	const char *idf_path = config_get("_project.idf-path");
 
-	config_load_profile(name);
+	if (idf_path && *idf_path) {
+		struct sbuf env = SBUF_INIT;
 
-	/*
-	 * Distinguish "not an ice project" (no .iceconfig anywhere near)
-	 * from "project exists but this profile isn't bound yet" so the
-	 * hint is actionable in each case -- same shape as git refusing
-	 * to run outside a work tree.
-	 */
-	if (access(local_config_path(), F_OK) != 0) {
-		hint("run @b{ice init <chip> <idf>} to bind, "
-		     "or cd to an existing ice project");
-		die("not an ice project (no @b{.iceconfig} in cwd)");
+		setup_tool_env(idf_path);
+		sbuf_addf(&env, "IDF_PATH=%s", idf_path);
+		putenv(sbuf_detach(&env));
 	}
 
-	build_dir = config_get("project.build-dir");
+	putenv((char *)"IDF_COMPONENT_MANAGER=0");
+}
+
+/*
+ * Parse @b{<build>/flasher_args.json} into @c _project.chip and
+ * @c _project.flash-file entries so @b{ice flash} / @b{ice monitor}
+ * don't have to re-read it.  Best-effort: a missing or unparseable
+ * file leaves the keys absent, and the caller must check
+ * config_has() before using them.
+ */
+static void populate_flash_info(const char *build_dir)
+{
+	struct sbuf path = SBUF_INIT;
+	struct sbuf buf = SBUF_INIT;
+
+	sbuf_addf(&path, "%s/flasher_args.json", build_dir);
+	if (sbuf_read_file(&buf, path.buf) < 0)
+		goto done;
+
+	struct json_value *root = json_parse(buf.buf, buf.len);
+	if (!root)
+		goto done;
+
+	const char *chip = json_as_string(
+	    json_get(json_get(root, "extra_esptool_args"), "chip"));
+	if (chip && *chip)
+		config_add(&config, "_project.chip", chip,
+			   CONFIG_SCOPE_PROJECT);
+
+	struct json_value *files = json_get(root, "flash_files");
+	if (files && files->type == JSON_OBJECT) {
+		for (int i = 0; i < files->u.object.nr; i++) {
+			const char *offset = files->u.object.members[i].key;
+			const char *rel =
+			    json_as_string(files->u.object.members[i].value);
+			struct sbuf entry = SBUF_INIT;
+
+			if (!offset || !rel)
+				continue;
+			sbuf_addf(&entry, "%s=%s/%s", offset, build_dir, rel);
+			config_add(&config, "_project.flash-file", entry.buf,
+				   CONFIG_SCOPE_PROJECT);
+			sbuf_release(&entry);
+		}
+	}
+	json_free(root);
+
+done:
+	sbuf_release(&buf);
+	sbuf_release(&path);
+}
+
+/*
+ * Resolve the active profile name.  Precedence: CLI (--profile / env
+ * ICE_PROFILE seed parse_options already folded into global_profile) >
+ * config @c project.default-profile > "default".  Never returns NULL.
+ */
+static const char *resolve_profile_name(void)
+{
+	const char *name = global_profile;
+
+	if (name && *name)
+		return name;
+
+	name = config_get("project.default-profile");
+	if (name && *name)
+		return name;
+
+	return "default";
+}
+
+void setup_project(enum project_need needs)
+{
+	const char *name;
+	const char *build_dir;
+	struct sbuf marker = SBUF_INIT;
+
+	if (needs == PROJECT_NONE)
+		return;
+
+	/*
+	 * No .ice/config in cwd means we're not inside an ice project.
+	 * Same shape as git refusing to run outside a work tree.
+	 */
+	if (access(local_config_path(), F_OK) != 0) {
+		hint("run @b{ice init <chip> <idf>} to bind, or cd to an "
+		     "existing ice project");
+		die("not an ice project (no @b{.ice/config} in cwd)");
+	}
+
+	name = resolve_profile_name();
+	config_load_profile(name);
+
+	build_dir = config_get("_project.build-dir");
 	if (!build_dir || !*build_dir) {
 		if (!strcmp(name, "default")) {
 			hint("run @b{ice init <chip> <idf>} first");
@@ -85,113 +185,63 @@ void load_profile(const char *name)
 		die("profile '%s' not configured", name);
 	}
 
-	idf_path = config_get("project.idf-path");
-	if (idf_path && *idf_path) {
-		struct sbuf env = SBUF_INIT;
+	/*
+	 * PATH / IDF env set unconditionally for any PROJECT_CONFIGURED+
+	 * command so child cmake/ninja invocations see the right
+	 * toolchain.  PROJECT_NONE returned early above.
+	 */
+	setup_tooling_env();
 
-		setup_tool_env(idf_path);
-		/*
-		 * The profile owns the binding, so IDF_PATH in the
-		 * inherited shell env (e.g. a previously sourced
-		 * export.sh) must not win over what init recorded.
-		 * putenv keeps the pointer, so detach and leak -- the
-		 * process lifetime is the env entry's lifetime.
-		 */
-		sbuf_addf(&env, "IDF_PATH=%s", idf_path);
-		putenv(sbuf_detach(&env));
+	/*
+	 * `<build>/.ice/configured` is touched atomically by @b{ice
+	 * init} after cmake succeeds.  Absence means either init has
+	 * never run for this profile or it failed partway through --
+	 * either way the right recovery is to re-run init.
+	 */
+	sbuf_reset(&marker);
+	sbuf_addf(&marker, "%s/.ice/configured", build_dir);
+	if (access(marker.buf, F_OK) != 0) {
+		hint("run @b{ice init <chip> <idf>%s%s} first",
+		     strcmp(name, "default") ? " " : "",
+		     strcmp(name, "default") ? name : "");
+		sbuf_release(&marker);
+		die("profile '%s' not configured", name);
 	}
 
-	/*
-	 * Disable IDF's Python-based component manager globally.  Setting
-	 * it only during `ice init` is not enough: ninja later spawns
-	 * sub-cmakes (bootloader, ULP, ...) that re-read project.cmake
-	 * and will bring the manager back in if the env var is missing.
-	 * Putting it in load_profile() ensures every ice command that
-	 * touches cmake -- build, flash, menuconfig, init -- exports it
-	 * before any child inherits the environment.  A native
-	 * replacement is out of scope for the PoC.
-	 */
-	putenv((char *)"IDF_COMPONENT_MANAGER=0");
-}
-
-void project_load(const char *name)
-{
-	load_profile(name);
-	require_project_initialized();
-
-	const char *build_dir = config_get("project.build-dir");
-	if (!build_dir || !*build_dir)
-		build_dir = "build";
+	populate_flash_info(build_dir);
+	config_add(&config, "_project.configured", "1", CONFIG_SCOPE_PROJECT);
 
 	/*
-	 * config_load_profile() (called by load_profile()) clears the entire
-	 * PROJECT scope before re-populating it, so any project.chip /
-	 * project.flash-file entries from a previous call are gone.  We add
-	 * ours after it returns, so there is no need to unset them here.
-	 *
-	 * Best-effort: if the build directory has no flasher_args.json yet
-	 * (project initialised but not built), silently skip and leave the
-	 * keys absent.  The caller can check config_has("project.chip") etc.
+	 * PROJECT_BUILT: stat `<build>/.ice/built`.  A future
+	 * `core.build_always = true` branch will auto-run ninja here
+	 * instead of dying; for now the decoupled default stands.
 	 */
-	struct sbuf path = SBUF_INIT;
-	struct sbuf buf = SBUF_INIT;
-	sbuf_addf(&path, "%s/flasher_args.json", build_dir);
-
-	if (sbuf_read_file(&buf, path.buf) >= 0) {
-		struct json_value *root = json_parse(buf.buf, buf.len);
-		if (root) {
-			/* project.chip */
-			const char *chip = json_as_string(json_get(
-			    json_get(root, "extra_esptool_args"), "chip"));
-			if (chip && *chip)
-				config_set(&config, "project.chip", chip,
-					   CONFIG_SCOPE_PROJECT);
-
-			/* project.flash-file: "offset=full_path" per image */
-			struct json_value *files =
-			    json_get(root, "flash_files");
-			if (files && files->type == JSON_OBJECT) {
-				for (int i = 0; i < files->u.object.nr; i++) {
-					const char *offset =
-					    files->u.object.members[i].key;
-					const char *rel = json_as_string(
-					    files->u.object.members[i].value);
-					if (!offset || !rel)
-						continue;
-					struct sbuf entry = SBUF_INIT;
-					sbuf_addf(&entry, "%s=%s/%s", offset,
-						  build_dir, rel);
-					config_add(
-					    &config, "project.flash-file",
-					    entry.buf, CONFIG_SCOPE_PROJECT);
-					sbuf_release(&entry);
-				}
-			}
-			json_free(root);
+	if (needs >= PROJECT_BUILT) {
+		sbuf_reset(&marker);
+		sbuf_addf(&marker, "%s/.ice/built", build_dir);
+		if (access(marker.buf, F_OK) != 0) {
+			hint("run @b{ice build} first");
+			sbuf_release(&marker);
+			die("project not built");
 		}
+		config_add(&config, "_project.built", "1",
+			   CONFIG_SCOPE_PROJECT);
 	}
 
-	sbuf_release(&buf);
-	sbuf_release(&path);
-}
+	/*
+	 * Runtime-only state keys consumed by @c process_run_progress
+	 * (log-dir) and @c ice log (log-dir).  Written at PROJECT scope
+	 * -- the same scope config_load_profile() just cleared -- so
+	 * config_add() yields single-value semantics.
+	 */
+	{
+		struct sbuf log_dir = SBUF_INIT;
 
-void require_project_initialized(void)
-{
-	const char *build_dir = config_get("project.build-dir");
-	struct sbuf cache = SBUF_INIT;
-	int ok;
+		sbuf_addf(&log_dir, "%s/.ice/logs", build_dir);
+		config_add(&config, "_project.log-dir", log_dir.buf,
+			   CONFIG_SCOPE_PROJECT);
+		sbuf_release(&log_dir);
+	}
 
-	if (!build_dir || !*build_dir)
-		goto notinit;
-
-	sbuf_addf(&cache, "%s/CMakeCache.txt", build_dir);
-	ok = (access(cache.buf, F_OK) == 0);
-	sbuf_release(&cache);
-
-	if (ok)
-		return;
-
-notinit:
-	hint("run @b{ice init <chip> <idf>} first");
-	die("project not initialised");
+	sbuf_release(&marker);
 }
