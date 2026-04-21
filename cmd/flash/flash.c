@@ -113,24 +113,23 @@ int cmd_flash(int argc, const char **argv)
 	}
 
 	/* ---- resolve serial port ---- */
-	target_chip_t required_chip = esf_chip_from_name(chip_str);
+	enum ice_chip required_chip = ice_chip_from_idf_name(chip_str);
 	const char *port_path = opt_port;
 	char *autoport = NULL;
 
 	if (!port_path) {
-		if (required_chip != ESP_UNKNOWN_CHIP)
+		if (required_chip != ICE_CHIP_UNKNOWN)
 			printf("Scanning for %s...\n",
-			       esf_chip_name(required_chip));
+			       ice_chip_name(required_chip));
 		else
 			printf("Scanning for ESP device...\n");
 		fflush(stdout);
 
 		autoport = esf_find_esp_port(required_chip);
 		if (!autoport) {
-			fprintf(stderr,
-				"ice flash: no matching device found.\n"
-				"  Use --port to specify a port "
-				"explicitly.\n");
+			fprintf(stderr, "ice flash: no matching device found.\n"
+					"  Use --port to specify a port "
+					"explicitly.\n");
 			free(flash_files);
 			return 1;
 		}

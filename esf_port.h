@@ -11,6 +11,7 @@
 #ifndef ESF_PORT_H
 #define ESF_PORT_H
 
+#include "chip.h"
 #include "esp_loader.h"
 #include "esp_loader_io.h"
 #include <stdint.h>
@@ -56,28 +57,28 @@ typedef struct {
 extern const esp_loader_port_ops_t esf_port_ops;
 
 /**
- * @brief Human-readable name for a chip, e.g. "ESP32-S3".
- * Returns "unknown" for unrecognised values.
+ * @brief Translate a target_chip_t (ESP-serial-flasher) to enum ice_chip.
+ * Returns ICE_CHIP_UNKNOWN for ESP_UNKNOWN_CHIP or unrecognised values.
  */
-const char *esf_chip_name(target_chip_t chip);
+enum ice_chip ice_chip_from_esf(target_chip_t chip);
 
 /**
- * @brief Parse an IDF chip string (e.g. "esp32s3") into a target_chip_t.
- * Returns ESP_UNKNOWN_CHIP for NULL, empty, or unrecognised strings.
+ * @brief Translate an enum ice_chip to target_chip_t (ESP-serial-flasher).
+ * Returns ESP_UNKNOWN_CHIP for ICE_CHIP_UNKNOWN or unrecognised values.
  */
-target_chip_t esf_chip_from_name(const char *name);
+target_chip_t ice_chip_to_esf(enum ice_chip chip);
 
 /**
  * @brief Probe available serial ports and return the path of the first
  * one that responds as an ESP device matching @p required.
  *
- * Pass @c ESP_UNKNOWN_CHIP to accept any ESP chip.  The device is reset
+ * Pass @c ICE_CHIP_UNKNOWN to accept any ESP chip.  The device is reset
  * back to normal run mode before this function returns.
  *
  * Status lines are written to stderr.  Returns a heap-allocated string
  * the caller must free(), or NULL if nothing was found.
  */
-char *esf_find_esp_port(target_chip_t required);
+char *esf_find_esp_port(enum ice_chip required);
 
 #ifdef __cplusplus
 }

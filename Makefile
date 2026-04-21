@@ -133,7 +133,7 @@ LIB_SRCS := \
 	cmd/idf/ldgen/ldgen.c \
 	cmd/idf/ldgen/lf.c \
 	cmd/idf/partition-table/partition-table.c \
-	cmd/idf/size/chip.c \
+	cmd/idf/size/mem.c \
 	cmd/idf/size/size.c \
 	cmd/image/image.c \
 	cmd/image/create/create.c \
@@ -184,6 +184,7 @@ LIB_SRCS := \
 	tar.c \
 	toolenv.c \
 	vendor/sha256/sha256.c \
+	chip.c \
 	esf_port.c
 
 # MAIN_SRCS provide the program entry point.  Excluded from libice.a

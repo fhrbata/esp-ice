@@ -76,10 +76,10 @@ static const struct cmd_manual target_flash_manual = {
 int cmd_target_flash(int argc, const char **argv);
 
 const struct cmd_desc cmd_target_flash_desc = {
-	.name = "flash",
-	.fn = cmd_target_flash,
-	.opts = cmd_target_flash_opts,
-	.manual = &target_flash_manual,
+    .name = "flash",
+    .fn = cmd_target_flash,
+    .opts = cmd_target_flash_opts,
+    .manual = &target_flash_manual,
 };
 
 #define FLASH_BLOCK_SIZE 4096u
@@ -92,8 +92,8 @@ const struct cmd_desc cmd_target_flash_desc = {
  * line; done=1 appends \n to commit it.  On plain output (pipe, CI):
  * prints a single line only when done=1.
  */
-static void print_progress(const char *label, uint32_t offset,
-			   uint32_t written, uint32_t total, int done)
+static void print_progress(const char *label, uint32_t offset, uint32_t written,
+			   uint32_t total, int done)
 {
 	int pct = total ? (int)(written * 100u / total) : 100;
 	int filled = BAR_WIDTH * pct / 100;
@@ -106,8 +106,8 @@ static void print_progress(const char *label, uint32_t offset,
 	if (use_color_for(stdout)) {
 		printf("\r  %-24s  @c{0x%05" PRIx32 "}  %6.1f KB"
 		       "  [@g{%.*s}%s]  %3d%%",
-		       label, offset, total / 1024.0, filled, bar,
-		       bar + filled, pct);
+		       label, offset, total / 1024.0, filled, bar, bar + filled,
+		       pct);
 		if (done)
 			printf("  @G{done}\n");
 		fflush(stdout);
@@ -168,7 +168,9 @@ static int flash_one(esp_loader_t *loader, const char *path, uint32_t offset)
 		    remaining < FLASH_BLOCK_SIZE ? remaining : FLASH_BLOCK_SIZE;
 
 		uint8_t block[FLASH_BLOCK_SIZE];
-		uint32_t real = (uint32_t)(data.len - (size_t)(p - (const uint8_t *)data.buf));
+		uint32_t real =
+		    (uint32_t)(data.len -
+			       (size_t)(p - (const uint8_t *)data.buf));
 		if (real > chunk)
 			real = chunk;
 		memcpy(block, p, real);
@@ -178,8 +180,8 @@ static int flash_one(esp_loader_t *loader, const char *path, uint32_t offset)
 		err = esp_loader_flash_write(loader, &cfg, block, chunk);
 		if (err != ESP_LOADER_SUCCESS) {
 			progress_abort();
-			fprintf(stderr,
-				"ice target flash: write failed (%d)\n", err);
+			fprintf(stderr, "ice target flash: write failed (%d)\n",
+				err);
 			goto out;
 		}
 
@@ -226,13 +228,14 @@ int cmd_target_flash(int argc, const char **argv)
 	for (int i = 0; i < argc; i++) {
 		const char *eq = strchr(argv[i], '=');
 		if (!eq)
-			die("invalid argument '%s': expected addr=file", argv[i]);
+			die("invalid argument '%s': expected addr=file",
+			    argv[i]);
 		offsets[i] = (uint32_t)strtoul(argv[i], NULL, 16);
 		paths[i] = eq + 1;
 	}
 
 	/* ---- resolve optional chip filter ---- */
-	target_chip_t required_chip = esf_chip_from_name(opt_chip);
+	enum ice_chip required_chip = ice_chip_from_idf_name(opt_chip);
 
 	/* ---- open port and connect ---- */
 	unsigned baud = (unsigned)opt_baud;
@@ -269,20 +272,20 @@ int cmd_target_flash(int argc, const char **argv)
 		return 1;
 	}
 
-	target_chip_t chip = esp_loader_get_target(&loader);
+	enum ice_chip chip = ice_chip_from_esf(esp_loader_get_target(&loader));
 
-	if (required_chip != ESP_UNKNOWN_CHIP && chip != required_chip) {
+	if (required_chip != ICE_CHIP_UNKNOWN && chip != required_chip) {
 		fprintf(stderr,
 			"ice target flash: chip mismatch — connected to "
 			"@b{%s}, expected @b{%s}\n",
-			esf_chip_name(chip), esf_chip_name(required_chip));
+			ice_chip_name(chip), ice_chip_name(required_chip));
 		esp_loader_deinit(&loader);
 		free(offsets);
 		free(paths);
 		return 1;
 	}
 
-	printf("Connected  @G{%s}", esf_chip_name(chip));
+	printf("Connected  @G{%s}", ice_chip_name(chip));
 
 	if (baud != 115200) {
 		err = esp_loader_change_transmission_rate(&loader, baud);

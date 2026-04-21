@@ -13,6 +13,7 @@
  * the platform serial layer, so this file contains no #ifdef guards.
  */
 #include "esf_port.h"
+#include "chip.h"
 #include "esp_loader.h"	   /* RETURN_ON_ERROR, ESP_LOADER_* */
 #include "esp_loader_io.h" /* container_of, esp_loader_port_t */
 #include "json.h"
@@ -265,64 +266,65 @@ static void ice_enter_bootloader(esp_loader_port_t *port)
 }
 
 /* ------------------------------------------------------------------ */
-/*  Public utilities                                                   */
+/*  ESF ↔ ice_chip boundary translation                               */
 
-const char *esf_chip_name(target_chip_t chip)
+enum ice_chip ice_chip_from_esf(target_chip_t chip)
 {
 	switch (chip) {
 	case ESP8266_CHIP:
-		return "ESP8266";
+		return ICE_CHIP_ESP8266;
 	case ESP32_CHIP:
-		return "ESP32";
+		return ICE_CHIP_ESP32;
 	case ESP32S2_CHIP:
-		return "ESP32-S2";
+		return ICE_CHIP_ESP32S2;
 	case ESP32C3_CHIP:
-		return "ESP32-C3";
+		return ICE_CHIP_ESP32C3;
 	case ESP32S3_CHIP:
-		return "ESP32-S3";
+		return ICE_CHIP_ESP32S3;
 	case ESP32C2_CHIP:
-		return "ESP32-C2";
+		return ICE_CHIP_ESP32C2;
 	case ESP32C5_CHIP:
-		return "ESP32-C5";
+		return ICE_CHIP_ESP32C5;
 	case ESP32H2_CHIP:
-		return "ESP32-H2";
+		return ICE_CHIP_ESP32H2;
 	case ESP32C6_CHIP:
-		return "ESP32-C6";
+		return ICE_CHIP_ESP32C6;
 	case ESP32P4_CHIP:
-		return "ESP32-P4";
+		return ICE_CHIP_ESP32P4;
 	default:
-		return "unknown";
+		return ICE_CHIP_UNKNOWN;
 	}
 }
 
-target_chip_t esf_chip_from_name(const char *name)
+target_chip_t ice_chip_to_esf(enum ice_chip chip)
 {
-	if (!name || !*name)
-		return ESP_UNKNOWN_CHIP;
-	if (!strcmp(name, "esp8266"))
+	switch (chip) {
+	case ICE_CHIP_ESP8266:
 		return ESP8266_CHIP;
-	if (!strcmp(name, "esp32"))
+	case ICE_CHIP_ESP32:
 		return ESP32_CHIP;
-	if (!strcmp(name, "esp32s2"))
+	case ICE_CHIP_ESP32S2:
 		return ESP32S2_CHIP;
-	if (!strcmp(name, "esp32c3"))
+	case ICE_CHIP_ESP32C3:
 		return ESP32C3_CHIP;
-	if (!strcmp(name, "esp32s3"))
+	case ICE_CHIP_ESP32S3:
 		return ESP32S3_CHIP;
-	if (!strcmp(name, "esp32c2"))
+	case ICE_CHIP_ESP32C2:
 		return ESP32C2_CHIP;
-	if (!strcmp(name, "esp32c5"))
+	case ICE_CHIP_ESP32C5:
 		return ESP32C5_CHIP;
-	if (!strcmp(name, "esp32h2"))
+	case ICE_CHIP_ESP32H2:
 		return ESP32H2_CHIP;
-	if (!strcmp(name, "esp32c6"))
+	case ICE_CHIP_ESP32C6:
 		return ESP32C6_CHIP;
-	if (!strcmp(name, "esp32p4"))
+	case ICE_CHIP_ESP32P4:
 		return ESP32P4_CHIP;
-	return ESP_UNKNOWN_CHIP;
+	default:
+		return ESP_UNKNOWN_CHIP;
+	}
 }
 
-char *esf_find_esp_port(target_chip_t required)
+char *esf_find_esp_port(enum ice_chip required)
 {
 	char **ports;
 	int n = serial_list_ports(&ports);
@@ -350,9 +352,10 @@ char *esf_find_esp_port(target_chip_t required)
 
 		esp_loader_connect_args_t ca = ESP_LOADER_CONNECT_DEFAULT();
 		if (esp_loader_connect(&probe, &ca) == ESP_LOADER_SUCCESS) {
-			target_chip_t chip = esp_loader_get_target(&probe);
-			if (required == ESP_UNKNOWN_CHIP || chip == required) {
-				fprintf(stderr, "%s\n", esf_chip_name(chip));
+			target_chip_t esf_chip = esp_loader_get_target(&probe);
+			enum ice_chip chip = ice_chip_from_esf(esf_chip);
+			if (required == ICE_CHIP_UNKNOWN || chip == required) {
+				fprintf(stderr, "%s\n", ice_chip_name(chip));
 				esp_loader_reset_target(&probe);
 				size_t len = strlen(ports[i]);
 				found = malloc(len + 1);
@@ -360,8 +363,8 @@ char *esf_find_esp_port(target_chip_t required)
 					memcpy(found, ports[i], len + 1);
 			} else {
 				fprintf(stderr, "%s (want %s)\n",
-					esf_chip_name(chip),
-					esf_chip_name(required));
+					ice_chip_name(chip),
+					ice_chip_name(required));
 			}
 		} else {
 			fprintf(stderr, "no response\n");
