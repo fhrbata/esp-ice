@@ -186,14 +186,16 @@ static void ice_reset_target(esp_loader_port_t *port)
 	esf_port_t *p = container_of(port, esf_port_t, port);
 
 	/*
-	 * Deassert DTR (BOOT high) BEFORE pulsing RESET so the chip boots
-	 * into the application, not the bootloader.  For USB JTAG Serial
-	 * devices the port re-enumerates after reset; wait for it to reappear.
+	 * Hard reset: pulse RESET with BOOT deasserted so the chip boots
+	 * into the application, not the bootloader.  Both lines are
+	 * driven together via serial_set_dtr_rts() so the USB-UART bridge
+	 * sees a clean edge instead of an intermediate state.  For USB
+	 * JTAG Serial devices the port re-enumerates after reset; wait
+	 * for it to reappear.
 	 */
-	serial_set_dtr(p->_serial, 0);
-	serial_set_rts(p->_serial, 1);
+	serial_set_dtr_rts(p->_serial, 0, 1); /* BOOT high, RESET low */
 	delay_ms(SERIAL_FLASHER_RESET_HOLD_TIME_MS);
-	serial_set_rts(p->_serial, 0);
+	serial_set_dtr_rts(p->_serial, 0, 0); /* BOOT high, RESET high */
 
 	if (p->_is_usb_jtag)
 		esf_wait_port_reopen(p, 3000);
@@ -207,32 +209,24 @@ static void ice_enter_bootloader(esp_loader_port_t *port)
 		/*
 		 * USBJTAGSerialReset — required for chips connected via their
 		 * built-in USB JTAG Serial peripheral (ESP32-S3, C3, C6, H2,
-		 * P4).
-		 *
-		 * BOOT must be asserted before RESET goes low.  Transition
-		 * from (DTR=1,RTS=1) → (DTR=0,RTS=1) passes through (1,1)
-		 * to avoid the (0,0) glitch.  After RESET is released the
-		 * device re-enumerates; wait for the port to reappear.
+		 * P4).  Same atomic-edge rationale as UnixTightReset below:
+		 * drive both lines together so the bridge emits a single
+		 * edge per step.
 		 *
 		 * Step 1: DTR=0 RTS=0 — idle
 		 * Step 2: DTR=1 RTS=0 — assert BOOT (GPIO0 low)
 		 * Step 3: DTR=1 RTS=1 — assert RESET (chip in reset with BOOT
-		 * low) Step 4: DTR=0 RTS=1 — release BOOT via (1,1) state Step
-		 * 5: DTR=0 RTS=0 — release RESET → boots into bootloader
+		 * low) Step 4: DTR=0 RTS=1 — release BOOT via (1,1) → (0,1)
+		 * Step 5: DTR=0 RTS=0 — release RESET → boots into bootloader
 		 */
-		serial_set_dtr(p->_serial, 0);
-		serial_set_rts(p->_serial, 0); /* idle */
+		serial_set_dtr_rts(p->_serial, 0, 0); /* idle */
 		delay_ms(SERIAL_FLASHER_RESET_HOLD_TIME_MS);
-		serial_set_dtr(p->_serial, 1);
-		serial_set_rts(p->_serial, 0); /* assert BOOT */
+		serial_set_dtr_rts(p->_serial, 1, 0); /* assert BOOT */
 		delay_ms(SERIAL_FLASHER_RESET_HOLD_TIME_MS);
-		serial_set_dtr(p->_serial, 1);
-		serial_set_rts(p->_serial, 1); /* assert RESET */
-		serial_set_dtr(p->_serial, 0);
-		serial_set_rts(p->_serial, 1); /* release BOOT (through 1,1) */
+		serial_set_dtr_rts(p->_serial, 1, 1); /* assert RESET */
+		serial_set_dtr_rts(p->_serial, 0, 1); /* release BOOT */
 		delay_ms(SERIAL_FLASHER_RESET_HOLD_TIME_MS);
-		serial_set_dtr(p->_serial, 0);
-		serial_set_rts(p->_serial, 0); /* release RESET → bootloader */
+		serial_set_dtr_rts(p->_serial, 0, 0); /* release RESET */
 		esf_wait_port_reopen(p, 3000);
 	} else {
 		/*
@@ -240,7 +234,13 @@ static void ice_enter_bootloader(esp_loader_port_t *port)
 		 * (vendor/esp-serial-flasher/src/port/linux_port.c) for
 		 * CP2102/CH340/FT232 boards with the standard inverting
 		 * auto-reset circuit.  Convention: DTR asserted (1) drives
-		 * BOOT low; RTS asserted (1) drives RESET low.
+		 * BOOT low; RTS asserted (1) drives RESET low.  Each step
+		 * drives both lines together via serial_set_dtr_rts() so the
+		 * USB-UART bridge sees a clean edge instead of the
+		 * intermediate (half-set) state two separate ioctls would
+		 * expose -- the chip's ROM latches BOOT at reset release, so
+		 * even a short glitch in that window will land us in the app
+		 * instead of the bootloader.
 		 *
 		 * Step 1: DTR=0 RTS=0 — idle (known state)
 		 * Step 2: DTR=1 RTS=1 — through (1,1) to avoid (0,0)→(0,1)
@@ -252,22 +252,14 @@ static void ice_enter_bootloader(esp_loader_port_t *port)
 		 * Step 5: DTR=0 RTS=0 — release BOOT and RESET, chip runs in
 		 *                       bootloader
 		 */
-		serial_set_dtr(p->_serial, 0);
-		serial_set_rts(p->_serial, 0); /* idle */
-
-		serial_set_dtr(p->_serial, 1);
-		serial_set_rts(p->_serial, 1); /* through (1,1) */
-
-		serial_set_dtr(p->_serial, 0);
-		serial_set_rts(p->_serial, 1); /* BOOT high, RESET low */
+		serial_set_dtr_rts(p->_serial, 0, 0); /* idle */
+		serial_set_dtr_rts(p->_serial, 1, 1); /* through (1,1) */
+		serial_set_dtr_rts(p->_serial, 0, 1); /* BOOT high, RESET low */
 		delay_ms(SERIAL_FLASHER_RESET_HOLD_TIME_MS);
-
-		serial_set_dtr(p->_serial, 1);
-		serial_set_rts(p->_serial, 0); /* BOOT low, RESET high */
+		serial_set_dtr_rts(p->_serial, 1, 0); /* BOOT low, RESET high */
 		delay_ms(SERIAL_FLASHER_BOOT_HOLD_TIME_MS);
-
-		serial_set_dtr(p->_serial, 0);
-		serial_set_rts(p->_serial, 0); /* release BOOT and RESET */
+		serial_set_dtr_rts(p->_serial, 0,
+				   0); /* release BOOT and RESET */
 
 		serial_flush_input(p->_serial); /* discard ROM boot noise */
 	}

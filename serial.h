@@ -80,6 +80,21 @@ int serial_set_dtr(struct serial *s, int on);
 int serial_set_rts(struct serial *s, int on);
 
 /**
+ * @brief Set DTR and RTS atomically in a single ioctl / driver call.
+ *
+ * Changing the two lines in two separate calls leaves an intermediate
+ * state visible on the wire between them.  On some USB-UART bridges
+ * (CP2102/CH340/FT232) each TIOCMBIS / TIOCMBIC turns into a separate
+ * USB control transfer, so the glitch window is large enough for the
+ * ESP chip to sample BOOT incorrectly at reset release.  Use this
+ * function in timing-sensitive sequences (bootloader entry, hard
+ * reset) where both lines must change together.
+ *
+ * @return 0 on success, -errno on failure.
+ */
+int serial_set_dtr_rts(struct serial *s, int dtr, int rts);
+
+/**
  * @brief Discard any bytes currently buffered on the input side.
  * @return 0 on success, -errno on failure.
  */
