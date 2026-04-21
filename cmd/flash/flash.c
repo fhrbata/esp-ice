@@ -9,9 +9,12 @@
  * @brief The "ice flash" subcommand -- porcelain wrapper around
  * `ice target flash`.
  *
- * Calls project_load() to resolve port, chip, baud rate, and flash
- * file list from the active profile, then delegates to
- * cmd_target_flash() which carries out the actual connection and write.
+ * Split into a user-facing porcelain (@c cmd_flash) that spawns
+ * @c ice @c __flash under process_run_progress so the full flasher
+ * output is captured in a log, and a hidden plumbing command
+ * (@c cmd___flash) that does the actual port resolution, chip
+ * handshake, and bit-banging.  @c ice @c target @c flash remains the
+ * low-level entry for scripted / externally-driven flashing.
  */
 #include "cmake.h"
 #include "esf_port.h"
@@ -83,6 +86,9 @@ static const struct cmd_manual manual = {
 };
 /* clang-format on */
 
+int cmd_flash(int argc, const char **argv);
+int cmd___flash(int argc, const char **argv);
+
 const struct cmd_desc cmd_flash_desc = {
     .name = "flash",
     .fn = cmd_flash,
@@ -91,9 +97,58 @@ const struct cmd_desc cmd_flash_desc = {
     .needs = PROJECT_BUILT,
 };
 
+/* Hidden plumbing: does the actual work.  The porcelain cmd_flash
+ * above invokes this via process_run_progress so the combined output
+ * lands in a single log under <build>/.ice/logs/. */
+const struct cmd_desc cmd___flash_desc = {
+    .name = "__flash",
+    .fn = cmd___flash,
+    .opts = cmd_flash_opts,
+    .manual = &manual,
+    .needs = PROJECT_BUILT,
+};
+
+/* Porcelain wrapper -- forwards to __flash with progress display. */
 int cmd_flash(int argc, const char **argv)
 {
-	argc = parse_options(argc, argv, &cmd_flash_desc);
+	struct svec cmd = SVEC_INIT;
+	struct process proc = PROCESS_INIT;
+	const char *exe = process_exe();
+	const char *env_items[2] = {NULL, NULL};
+	struct sbuf env_profile = SBUF_INIT;
+	int rc;
+
+	/* Capture argv BEFORE parse_options runs -- it compacts argv in
+	 * place and we need the original option tokens to forward. */
+	svec_push(&cmd, exe ? exe : "ice");
+	svec_push(&cmd, "__flash");
+	for (int i = 1; i < argc; i++)
+		svec_push(&cmd, argv[i]);
+
+	/* Parse for --help / -h / --ice-complete handling and for early
+	 * rejection of bad flags, but discard the mutated argv. */
+	parse_options(argc, argv, &cmd_flash_desc);
+
+	/* Propagate --profile to the child via ICE_PROFILE; plain env
+	 * inheritance already covers the ICE_PROFILE / config / default
+	 * cases, so only the CLI-set value needs an explicit push. */
+	if (global_profile && *global_profile) {
+		sbuf_addf(&env_profile, "ICE_PROFILE=%s", global_profile);
+		env_items[0] = env_profile.buf;
+		proc.env = env_items;
+	}
+
+	proc.argv = cmd.v;
+	rc = process_run_progress(&proc, "Flashing", "flash", NULL);
+
+	sbuf_release(&env_profile);
+	svec_clear(&cmd);
+	return rc;
+}
+
+int cmd___flash(int argc, const char **argv)
+{
+	argc = parse_options(argc, argv, &cmd___flash_desc);
 	if (argc > 0)
 		die("too many arguments");
 

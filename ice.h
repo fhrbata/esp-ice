@@ -173,6 +173,7 @@ extern const struct cmd_desc cmd_status_desc;
 extern const struct cmd_desc cmd_target_desc;
 extern const struct cmd_desc cmd_tools_desc;
 extern const struct cmd_desc cmd___complete_desc;
+extern const struct cmd_desc cmd___flash_desc;
 
 /** Top-level option table and manual for `ice`. */
 extern const struct option ice_global_opts[];

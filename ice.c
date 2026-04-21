@@ -228,7 +228,9 @@ static const struct cmd_desc *const ice_subs[] = {
     &cmd_status_desc,
     &cmd_target_desc,
     &cmd_tools_desc,
-    &cmd___complete_desc, /* hidden; name starts with underscore */
+    /* Hidden plumbing (names start with '_'); help/completion skip. */
+    &cmd___complete_desc,
+    &cmd___flash_desc,
     NULL,
 };
 
