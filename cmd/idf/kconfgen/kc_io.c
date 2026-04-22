@@ -1193,12 +1193,14 @@ static void json_menu_write_node(struct sbuf *out, const struct kmenu *m,
 /*
  * True when @p m (or any descendant) produces a JSON entry.  Menus
  * with no emittable content are skipped entirely so the output stays
- * dense.
+ * dense.  Unlike @c should_emit, this filter keeps @c option env=...
+ * symbols -- python's kconfig_menus.json includes them (menuconfig
+ * still displays them) even though they never reach sdkconfig.h.
  */
 static int json_menu_includes(const struct kmenu *m)
 {
 	if ((m->kind == KM_SYM || m->kind == KM_CHOICE) && m->sym &&
-	    !is_pseudo_sym(m->sym) && !sym_has_env(m->sym))
+	    !is_pseudo_sym(m->sym))
 		return 1;
 	if (m->kind == KM_MENU || m->kind == KM_COMMENT ||
 	    m->kind == KM_CHOICE || m->kind == KM_IF || m->kind == KM_ROOT) {
@@ -1373,17 +1375,16 @@ static void json_menu_write_node(struct sbuf *out, const struct kmenu *m,
 	 * ctx_dep for menus.  Python emits the expression as a string. */
 	json_indent(out, level + 1);
 	sbuf_addstr(out, "\"depends_on\": ");
-	if (is_sym_entry && m->sym->choice_parent) {
-		/* Choice member: python uses the literal "<choice>"
-		 * sentinel rather than propagating the choice's
-		 * condition -- menuconfig treats it specially. */
-		sbuf_addstr(out, "\"<choice>\"");
-	} else {
+	{
 		/*
 		 * Walk the parent menu chain to collect every enclosing
 		 * KM_IF condition, then AND in the symbol's own
 		 * KP_DEPENDS props.  Python emits this combined
-		 * expression as a single string like "A && B".
+		 * expression as a single string like "A && B".  Choice
+		 * members get a literal `<choice NAME>` sentinel appended
+		 * last -- menuconfig uses it to look up the enclosing
+		 * choice group without relying on the choice's own
+		 * condition expression.
 		 */
 		struct sbuf acc = SBUF_INIT;
 		int first = 1;
@@ -1420,6 +1421,24 @@ static void json_menu_write_node(struct sbuf *out, const struct kmenu *m,
 					sbuf_add(&acc, tmp.buf, tmp.len);
 				sbuf_release(&tmp);
 			}
+		}
+		if (is_sym_entry && m->sym->choice_parent) {
+			if (!first)
+				sbuf_addstr(&acc, " && ");
+			first = 0;
+			/*
+			 * The choice symbol is interned under
+			 * `__choice:<NAME>` to avoid colliding with a
+			 * same-named `config` (e.g. both a choice and a
+			 * config symbol called BOOTLOADER_LOG_VERSION
+			 * exist).  Strip the prefix here so the sentinel
+			 * ends up as `<choice NAME>` exactly as python emits.
+			 */
+			const char *pn = m->sym->choice_parent->name;
+			const char *colon = strchr(pn, ':');
+			if (colon && !strncmp(pn, "__choice", 8))
+				pn = colon + 1;
+			sbuf_addf(&acc, "<choice %s>", pn);
 		}
 		if (acc.len)
 			json_emit_string(out, acc.buf);
@@ -1493,48 +1512,127 @@ static void json_menu_write_node(struct sbuf *out, const struct kmenu *m,
 		sbuf_addstr(out, ",\n");
 	} else {
 		/*
-		 * Menu / comment / choice: python synthesises the id
-		 * from the title and source location, with slashes in
-		 * the path replaced by '-'.  Matches python's
-		 * _node_id() in esp_kconfiglib: "<lower-title>-<path-
-		 * with-slashes-as-dashes>-<line>".
+		 * Menu / comment / choice: python synthesises the id by
+		 * walking the parent chain from root to this node, slug-
+		 * ifying each prompt (`\W+` -> `-`, lowercased), joining
+		 * with `-`, and appending the filename (slashes replaced
+		 * by `-`) and the line number.  Matches esp_kconfiglib's
+		 * @c MenuNode.id property.
 		 *
-		 * Choices also get explicit @c help / @c name / @c range
-		 * fields (all null) -- menu / comment entries omit them.
+		 * Choices also carry an explicit @c help text and their
+		 * own @c name; menus / comments leave both null.
 		 */
 		if (m->kind == KM_CHOICE) {
 			json_indent(out, level + 1);
-			sbuf_addstr(out, "\"help\": null,\n");
+			sbuf_addstr(out, "\"help\": ");
+			char *help = NULL;
+			if (m->sym) {
+				for (const struct kprop *p = m->sym->props; p;
+				     p = p->next)
+					if (p->kind == KP_HELP && p->text) {
+						help = help_rtrimmed(p->text);
+						break;
+					}
+			}
+			if (help)
+				json_emit_string(out, help);
+			else
+				sbuf_addstr(out, "null");
+			free(help);
+			sbuf_addstr(out, ",\n");
 		}
 		json_indent(out, level + 1);
 		sbuf_addstr(out, "\"id\": ");
 		struct sbuf id = SBUF_INIT;
-		const char *title = json_menu_title(m);
-		if (title) {
-			for (const char *p = title; *p; p++) {
-				if (*p == ' ')
-					sbuf_addch(&id, '-');
-				else if (*p >= 'A' && *p <= 'Z')
-					sbuf_addch(&id, *p + 32);
-				else
-					sbuf_addch(&id, *p);
+		/*
+		 * Collect ancestor prompts (root-first) by walking up, so
+		 * the slug chain reads as `<outer>-<inner>-<self>`.  Stop
+		 * at the KM_ROOT node: python's MenuNode.id walk terminates
+		 * at @c node.parent == None, so the mainmenu title (e.g.
+		 * "Espressif IoT Development Framework Configuration") is
+		 * not included in the slug.
+		 */
+		const struct kmenu *chain[64];
+		int nchain = 0;
+		for (const struct kmenu *p = m; p && nchain < 64;
+		     p = p->parent) {
+			if (p->kind == KM_ROOT)
+				break;
+			const char *t = json_menu_title(p);
+			if (!t || !*t)
+				continue;
+			chain[nchain++] = p;
+		}
+		for (int i = nchain - 1; i >= 0; i--) {
+			const char *t = json_menu_title(chain[i]);
+			int in_dash = 1; /* collapse leading non-word */
+			if (id.len) {
+				sbuf_addch(&id, '-');
+				in_dash = 1;
 			}
+			for (const char *p = t; *p; p++) {
+				unsigned char c = (unsigned char)*p;
+				int word = (c >= 'a' && c <= 'z') ||
+					   (c >= 'A' && c <= 'Z') ||
+					   (c >= '0' && c <= '9') || c == '_';
+				if (word) {
+					if (c >= 'A' && c <= 'Z')
+						c = (unsigned char)(c + 32);
+					sbuf_addch(&id, (char)c);
+					in_dash = 0;
+				} else if (!in_dash) {
+					sbuf_addch(&id, '-');
+					in_dash = 1;
+				}
+			}
+			/*
+			 * Trim a trailing dash from this slug before the next
+			 * separator appends its own; python's `\W+ -> -` then
+			 * join-with-`-` leaves at most one dash between
+			 * segments.
+			 */
+			while (id.len && id.buf[id.len - 1] == '-')
+				id.len--;
 		}
 		const char *file = m->src_file ? m->src_file : "";
-		if (id.len)
-			sbuf_addch(&id, '-');
-		/* Full path, with '/' -> '-' and a trimmed leading slash. */
+		/*
+		 * Trim a single leading '/' from the path, then replace
+		 * remaining '/' with '-'.  python inserts exactly one '-'
+		 * between the slug chain and the path when the path
+		 * doesn't already start with a dash.
+		 */
 		if (*file == '/')
 			file++;
+		if (id.len)
+			sbuf_addch(&id, '-');
 		for (const char *p = file; *p; p++)
 			sbuf_addch(&id, *p == '/' ? '-' : *p);
 		sbuf_addf(&id, "-%d", m->src_line);
-		json_emit_string(out, id.buf);
+		if (id.buf)
+			id.buf[id.len] = '\0';
+		json_emit_string(out, id.buf ? id.buf : "");
 		sbuf_release(&id);
 		sbuf_addstr(out, ",\n");
 		if (m->kind == KM_CHOICE) {
 			json_indent(out, level + 1);
-			sbuf_addstr(out, "\"name\": null,\n");
+			sbuf_addstr(out, "\"name\": ");
+			if (m->sym && m->sym->name) {
+				/*
+				 * Emit the choice's user-visible name (strip
+				 * the `__choice:` interning prefix we added
+				 * in the parser to avoid collisions with
+				 * same-named configs like
+				 * BOOTLOADER_LOG_VERSION).
+				 */
+				const char *n = m->sym->name;
+				const char *colon = strchr(n, ':');
+				if (colon && !strncmp(n, "__choice", 8))
+					n = colon + 1;
+				json_emit_string(out, n);
+			} else {
+				sbuf_addstr(out, "null");
+			}
+			sbuf_addstr(out, ",\n");
 		}
 	}
 
