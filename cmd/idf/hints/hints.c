@@ -268,7 +268,14 @@ static void pcre_search(const char *pattern, const char *subject,
 /*  Rule handling                                                     */
 /* ------------------------------------------------------------------ */
 
-static void emit_hint(const char *msg) { printf("HINT: %s\n", msg); }
+/*
+ * Colored to match ESP-IDF's own yellow_print("HINT: ...") convention.
+ * Color tokens live in the format string, not in @p msg, so a stray
+ * '}' in the hint text cannot unbalance the color block.  When stdout
+ * is piped (grep, redirection) use_color_for() strips the tokens and
+ * the tests see the plain "HINT: ..." line.
+ */
+static void emit_hint(const char *msg) { printf("@y{HINT: %s}\n", msg); }
 
 /*
  * Execute a single rule against the normalized log buffer.  @p hints_path
