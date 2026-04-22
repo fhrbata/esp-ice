@@ -114,6 +114,10 @@ void kc_ctx_init(struct kc_ctx *ctx)
 	smap_init(&ctx->symtab);
 	svec_init(&ctx->symlist);
 	svec_init(&ctx->file_names);
+	ctx->renames = NULL;
+	ctx->n_renames = 0;
+	ctx->alloc_renames = 0;
+	ctx->no_deprecated = 0;
 }
 
 const char *kc_ctx_intern_file(struct kc_ctx *ctx, const char *path)
@@ -183,6 +187,15 @@ void kc_ctx_release(struct kc_ctx *ctx)
 	smap_release(&ctx->symtab);
 	svec_clear(&ctx->symlist);
 	svec_clear(&ctx->file_names);
+
+	for (size_t i = 0; i < ctx->n_renames; i++) {
+		free(ctx->renames[i].old_name);
+		free(ctx->renames[i].new_name);
+	}
+	free(ctx->renames);
+	ctx->renames = NULL;
+	ctx->n_renames = 0;
+	ctx->alloc_renames = 0;
 }
 
 /* ================================================================== */

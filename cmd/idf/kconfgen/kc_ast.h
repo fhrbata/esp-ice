@@ -155,6 +155,20 @@ struct kmenu {
 /* ------------------------------------------------------------------ */
 
 /**
+ * @brief One deprecated->current symbol rename entry.
+ *
+ * Populated by kc_load_rename().  @c old_name and @c new_name are
+ * stored WITHOUT the @c CONFIG_ prefix to match what ksym->name
+ * carries.  When @c invert is set, a bool value is flipped on
+ * translation: @c old=y -> @c new=n and vice versa.
+ */
+struct kc_rename {
+	char *old_name;
+	char *new_name;
+	int invert;
+};
+
+/**
  * @brief Global parse context -- shared by lexer, parser, evaluator.
  *
  * The context owns the AST (via @p root) and the symbol table.  Input
@@ -167,6 +181,12 @@ struct kc_ctx {
 	struct smap symtab;	/**< name -> struct ksym * (interned). */
 	struct svec symlist;	/**< First-sight order for stable iteration. */
 	struct svec file_names; /**< Owned source-file path strings. */
+
+	/* ---- sdkconfig.rename state (populated by kc_load_rename) ---- */
+	struct kc_rename *renames;
+	size_t n_renames;
+	size_t alloc_renames;
+	int no_deprecated; /**< Set by --dont-write-deprecated. */
 };
 
 /** Initialize an empty context (equivalent to zero-init + root creation). */

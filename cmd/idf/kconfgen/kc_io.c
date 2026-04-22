@@ -17,6 +17,91 @@
 #define CONFIG_PREFIX_LEN (sizeof(CONFIG_PREFIX) - 1)
 
 /* ================================================================== */
+/*  Rename table                                                      */
+/* ================================================================== */
+
+/*
+ * Look up @p name in the context's rename table and, if found,
+ * translate @p *name_inout (which holds the name without CONFIG_
+ * prefix) and flip @p *val_inout when the entry has invert=1.
+ * Returns 1 on a hit (caller frees / replaces the strings), 0 if
+ * @p name wasn't renamed.
+ */
+static int rename_translate(const struct kc_ctx *ctx, char **name_inout,
+			    char **val_inout)
+{
+	for (size_t i = 0; i < ctx->n_renames; i++) {
+		const struct kc_rename *r = &ctx->renames[i];
+		if (strcmp(r->old_name, *name_inout) != 0)
+			continue;
+		free(*name_inout);
+		*name_inout = sbuf_strdup(r->new_name);
+		if (r->invert && val_inout && *val_inout) {
+			const char *flipped = NULL;
+			if (!strcmp(*val_inout, "y"))
+				flipped = "n";
+			else if (!strcmp(*val_inout, "n"))
+				flipped = "y";
+			if (flipped) {
+				free(*val_inout);
+				*val_inout = sbuf_strdup(flipped);
+			}
+		}
+		return 1;
+	}
+	return 0;
+}
+
+void kc_load_rename(struct kc_ctx *ctx, const char *path)
+{
+	struct sbuf sb = SBUF_INIT;
+	if (sbuf_read_file(&sb, path) < 0)
+		die_errno("cannot read rename '%s'", path);
+
+	size_t pos = 0;
+	char *line;
+	while ((line = sbuf_getline(sb.buf, sb.len, &pos)) != NULL) {
+		while (*line == ' ' || *line == '\t')
+			line++;
+		if (!*line || *line == '#')
+			continue;
+
+		/* Expect: CONFIG_OLD CONFIG_NEW   or   CONFIG_OLD !CONFIG_NEW
+		 */
+		char *old_start = line;
+		char *space = old_start;
+		while (*space && *space != ' ' && *space != '\t')
+			space++;
+		if (!*space)
+			continue;
+		*space = '\0';
+		char *new_start = space + 1;
+		while (*new_start == ' ' || *new_start == '\t')
+			new_start++;
+		if (!*new_start)
+			continue;
+
+		int invert = 0;
+		if (*new_start == '!') {
+			invert = 1;
+			new_start++;
+		}
+
+		if (strncmp(old_start, CONFIG_PREFIX, CONFIG_PREFIX_LEN) ||
+		    strncmp(new_start, CONFIG_PREFIX, CONFIG_PREFIX_LEN))
+			continue; /* not a CONFIG_* rename; skip silently */
+
+		ALLOC_GROW(ctx->renames, ctx->n_renames + 1,
+			   ctx->alloc_renames);
+		struct kc_rename *r = &ctx->renames[ctx->n_renames++];
+		r->old_name = sbuf_strdup(old_start + CONFIG_PREFIX_LEN);
+		r->new_name = sbuf_strdup(new_start + CONFIG_PREFIX_LEN);
+		r->invert = invert;
+	}
+	sbuf_release(&sb);
+}
+
+/* ================================================================== */
 /*  Loader                                                            */
 /* ================================================================== */
 
@@ -91,8 +176,11 @@ static void process_config_line(struct kc_ctx *ctx, char *line)
 		if (strcmp(tail, "is not set") != 0)
 			return;
 		char *name_copy = sbuf_strndup(name, (size_t)(end - name));
-		kc_sym_set_user(ctx, name_copy, "n");
+		char *val = sbuf_strdup("n");
+		rename_translate(ctx, &name_copy, &val);
+		kc_sym_set_user(ctx, name_copy, val);
 		free(name_copy);
+		free(val);
 		return;
 	}
 
@@ -116,6 +204,7 @@ static void process_config_line(struct kc_ctx *ctx, char *line)
 	else
 		val = sbuf_strdup(rhs);
 
+	rename_translate(ctx, &name, &val);
 	kc_sym_set_user(ctx, name, val);
 	free(name);
 	free(val);
@@ -258,6 +347,97 @@ static void cb_config(struct sbuf *out, const struct ksym *s, void *ud)
 	emit_symbol(out, s);
 }
 
+/*
+ * Emit the `# Deprecated options for backward compatibility` block
+ * that python kconfgen appends after the main body.  Each rename
+ * entry echoes the OLD symbol's "effective" value -- i.e. the
+ * current value of the NEW symbol, flipped if the rename has `!`.
+ * Only bool symbols produce `y` / `# ... is not set`; non-bool NEW
+ * types fall through to an `=<value>` alias.
+ */
+static void emit_deprecated_config(struct sbuf *out, const struct kc_ctx *ctx)
+{
+	if (ctx->no_deprecated || !ctx->n_renames)
+		return;
+
+	sbuf_addstr(out, "\n"
+			 "# Deprecated options for backward compatibility\n");
+
+	for (size_t i = 0; i < ctx->n_renames; i++) {
+		const struct kc_rename *r = &ctx->renames[i];
+		struct ksym *new_sym = smap_get(&ctx->symtab, r->new_name);
+		if (!new_sym)
+			continue;
+		const char *val = new_sym->cur_val ? new_sym->cur_val : "";
+
+		if (new_sym->type == KS_BOOL) {
+			int y = !strcmp(val, "y");
+			if (r->invert)
+				y = !y;
+			if (y)
+				sbuf_addf(out, "%s%s=y\n", CONFIG_PREFIX,
+					  r->old_name);
+			else
+				sbuf_addf(out, "# %s%s is not set\n",
+					  CONFIG_PREFIX, r->old_name);
+			continue;
+		}
+		if (new_sym->type == KS_STRING) {
+			sbuf_addf(out, "%s%s=", CONFIG_PREFIX, r->old_name);
+			emit_quoted(out, val);
+			sbuf_addch(out, '\n');
+			continue;
+		}
+		sbuf_addf(out, "%s%s=%s\n", CONFIG_PREFIX, r->old_name, val);
+	}
+	sbuf_addstr(out, "# End of deprecated options\n");
+}
+
+/*
+ * Emit the deprecated-aliases block in a C header form:
+ *
+ *   /\* List of deprecated options *\/
+ *   #define CONFIG_OLD CONFIG_NEW
+ *
+ * Only non-inverting renames produce an alias -- inversion can't be
+ * expressed as a simple #define.
+ */
+/*
+ * The C header only gets an alias line for a deprecated symbol if
+ * the NEW symbol would itself emit a @c #define -- i.e. bool-y, or
+ * any non-bool type with a non-empty value.  bool-n NEW symbols are
+ * absent from the header; emitting `#define CONFIG_OLD CONFIG_NEW`
+ * against an undefined CONFIG_NEW would expand to an empty token
+ * list and poison client code.
+ */
+static int header_defines_sym(const struct ksym *s)
+{
+	if (!s)
+		return 0;
+	const char *val = s->cur_val ? s->cur_val : "";
+	if (s->type == KS_BOOL)
+		return !strcmp(val, "y");
+	return 1; /* int / hex / float / string / unknown */
+}
+
+static void emit_deprecated_header(struct sbuf *out, const struct kc_ctx *ctx)
+{
+	if (ctx->no_deprecated || !ctx->n_renames)
+		return;
+
+	sbuf_addstr(out, "\n/* List of deprecated options */\n");
+	for (size_t i = 0; i < ctx->n_renames; i++) {
+		const struct kc_rename *r = &ctx->renames[i];
+		if (r->invert)
+			continue; /* can't express inversion as #define */
+		struct ksym *new_sym = smap_get(&ctx->symtab, r->new_name);
+		if (!header_defines_sym(new_sym))
+			continue;
+		sbuf_addf(out, "#define %s%s %s%s\n", CONFIG_PREFIX,
+			  r->old_name, CONFIG_PREFIX, r->new_name);
+	}
+}
+
 void kc_write_config(const struct kc_ctx *ctx, const char *path)
 {
 	struct sbuf out = SBUF_INIT;
@@ -274,6 +454,7 @@ void kc_write_config(const struct kc_ctx *ctx, const char *path)
 			  "#\n");
 
 	walk_syms(ctx->root, &out, cb_config, NULL);
+	emit_deprecated_config(&out, ctx);
 
 	if (write_file_atomic(path, out.buf, out.len) < 0)
 		die_errno("cannot write '%s'", path);
@@ -329,6 +510,7 @@ void kc_write_header(const struct kc_ctx *ctx, const char *path)
 			  "#pragma once\n");
 
 	walk_syms(ctx->root, &out, cb_header, NULL);
+	emit_deprecated_header(&out, ctx);
 
 	if (write_file_atomic(path, out.buf, out.len) < 0)
 		die_errno("cannot write '%s'", path);

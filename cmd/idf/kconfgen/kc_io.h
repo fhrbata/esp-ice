@@ -32,6 +32,20 @@
 struct kc_ctx;
 
 /**
+ * @brief Load a sdkconfig.rename mapping file.
+ *
+ * Lines:
+ *   CONFIG_OLD CONFIG_NEW          old name -> new name
+ *   CONFIG_OLD !CONFIG_NEW         same, plus bool inversion on load
+ *
+ * Blank / @c # comment lines are ignored.  Multiple calls accumulate.
+ * After loading, kc_load_config() automatically translates any CONFIG_OLD
+ * line it sees into a CONFIG_NEW assignment (with value inversion where
+ * applicable).
+ */
+void kc_load_rename(struct kc_ctx *ctx, const char *path);
+
+/**
  * @brief Load a Makefile-style sdkconfig / defaults file.
  *
  * Recognised line shapes:

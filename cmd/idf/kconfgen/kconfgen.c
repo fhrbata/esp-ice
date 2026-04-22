@@ -51,8 +51,10 @@ static const char *opt_kconfig;
 static const char *opt_config;
 static struct svec opt_defaults = SVEC_INIT;
 static struct svec opt_output = SVEC_INIT;
+static struct svec opt_renames = SVEC_INIT;
 static int opt_dump_ast;
 static int opt_dump_symbols;
+static int opt_no_deprecated;
 
 static const struct option cmd_idf_kconfgen_opts[] = {
     OPT_STRING('k', "kconfig", &opt_kconfig, "path",
@@ -64,6 +66,11 @@ static const struct option cmd_idf_kconfgen_opts[] = {
     OPT_STRING_LIST('o', "output", &opt_output, "fmt:path",
 		    "emit fmt (config|header|cmake) to path (repeatable)",
 		    NULL),
+    OPT_STRING_LIST(0, "sdkconfig-rename", &opt_renames, "path",
+		    "deprecated->current symbol name mappings (repeatable)",
+		    NULL),
+    OPT_BOOL(0, "dont-write-deprecated", &opt_no_deprecated,
+	     "skip the deprecated-aliases block in config / header outputs"),
     OPT_BOOL(0, "dump-ast", &opt_dump_ast, "parse and dump the AST to stdout"),
     OPT_BOOL(0, "dump-symbols", &opt_dump_symbols,
 	     "evaluate and dump resolved symbol values to stdout"),
@@ -119,6 +126,12 @@ int cmd_idf_kconfgen(int argc, const char **argv)
 	if (opt_dump_ast)
 		kc_ast_dump(&ctx);
 
+	/* Rename tables must be loaded before defaults / config so the
+	 * loader can translate legacy CONFIG_* keys on the fly. */
+	for (size_t i = 0; i < opt_renames.nr; i++)
+		kc_load_rename(&ctx, opt_renames.v[i]);
+	ctx.no_deprecated = opt_no_deprecated;
+
 	/* Load user-provided values in the python-compatible layering
 	 * order: --defaults in CLI order (later wins), then --config. */
 	for (size_t i = 0; i < opt_defaults.nr; i++)
@@ -151,5 +164,6 @@ int cmd_idf_kconfgen(int argc, const char **argv)
 	kc_ctx_release(&ctx);
 	svec_clear(&opt_defaults);
 	svec_clear(&opt_output);
+	svec_clear(&opt_renames);
 	return 0;
 }
