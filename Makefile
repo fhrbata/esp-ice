@@ -130,8 +130,11 @@ LIB_SRCS := \
 	cmd/help/help.c \
 	cmd/idf/idf.c \
 	cmd/idf/configdep/configdep.c \
+	cmd/idf/ldgen/gen.c \
 	cmd/idf/ldgen/ldgen.c \
 	cmd/idf/ldgen/lf.c \
+	cmd/idf/ldgen/sdkconfig.c \
+	cmd/idf/ldgen/sinfo.c \
 	cmd/idf/partition-table/partition-table.c \
 	cmd/idf/size/mem.c \
 	cmd/idf/size/size.c \
