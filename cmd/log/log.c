@@ -111,6 +111,7 @@ static int display_log(const char *path)
 {
 	struct sbuf content = SBUF_INIT;
 	struct sbuf colored = SBUF_INIT;
+	struct sbuf expanded = SBUF_INIT;
 
 	if (sbuf_read_file(&content, path) < 0)
 		die_errno("cannot read '%s'", path);
@@ -120,11 +121,13 @@ static int display_log(const char *path)
 	if (use_color_for(stdout)) {
 		color_text(&colored, content.buf, content.len,
 			   ice_default_color_rules);
-		fwrite(colored.buf, 1, colored.len, stdout);
+		expand_colors(&expanded, colored.buf, 1);
+		fwrite(expanded.buf, 1, expanded.len, stdout);
 	} else {
 		fwrite(content.buf, 1, content.len, stdout);
 	}
 
+	sbuf_release(&expanded);
 	sbuf_release(&colored);
 	sbuf_release(&content);
 	return 0;
