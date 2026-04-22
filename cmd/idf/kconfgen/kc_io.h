@@ -93,4 +93,24 @@ void kc_write_header(const struct kc_ctx *ctx, const char *path);
  */
 void kc_write_cmake(const struct kc_ctx *ctx, const char *path);
 
+/**
+ * @brief Write the resolved symbols as a flat JSON object.
+ *
+ *   { "FOO": true, "BAR": 7, "BAZ": 255, "NAME": "world", ... }
+ *
+ * Alphabetically sorted keys, 4-space indent, one key per line --
+ * matches the output of @c python -m kconfgen @c --output @c json.
+ */
+void kc_write_json(const struct kc_ctx *ctx, const char *path);
+
+/**
+ * @brief Write the menu structure as a JSON array.
+ *
+ * Each entry carries @c id / @c name / @c type / @c title / @c range
+ * / @c depends_on / @c help / @c children.  @c menu / @c choice nodes
+ * nest their members inside @c children; plain @c config entries have
+ * an empty @c children array.  Used by @c idf.py menuconfig.
+ */
+void kc_write_json_menus(const struct kc_ctx *ctx, const char *path);
+
 #endif /* KC_IO_H */

@@ -539,9 +539,19 @@ static void emit_cmake_symbol(struct sbuf *out, const struct ksym *s)
 }
 
 struct cmake_walk {
+	const struct kc_ctx *ctx;
 	struct sbuf *list;
 	int first;
 };
+
+/* Append @p name to the CONFIGS_LIST buffer with the proper separator. */
+static void list_append(struct cmake_walk *w, const char *name)
+{
+	if (!w->first)
+		sbuf_addch(w->list, ';');
+	w->first = 0;
+	sbuf_addf(w->list, "%s%s", CONFIG_PREFIX, name);
+}
 
 static void cb_cmake(struct sbuf *out, const struct ksym *s, void *ud)
 {
@@ -549,11 +559,640 @@ static void cb_cmake(struct sbuf *out, const struct ksym *s, void *ud)
 	if (is_pseudo_sym(s) || sym_has_env(s))
 		return;
 	emit_cmake_symbol(out, s);
-	if (!w->first)
-		sbuf_addch(w->list, ';');
-	sbuf_addf(w->list, "%s%s", CONFIG_PREFIX, s->name);
-	w->first = 0;
+	list_append(w, s->name);
+
+	/*
+	 * Any OLD names that rename to this sym also appear right after
+	 * it in CONFIGS_LIST (matches python kconfgen).  We do not emit
+	 * a set() line for them in the main block -- those land in the
+	 * trailing "deprecated" block instead.
+	 */
+	if (!w->ctx->no_deprecated) {
+		for (size_t i = 0; i < w->ctx->n_renames; i++) {
+			const struct kc_rename *r = &w->ctx->renames[i];
+			if (!strcmp(r->new_name, s->name))
+				list_append(w, r->old_name);
+		}
+	}
 }
+
+/*
+ * Emit the deprecated-aliases block after CONFIGS_LIST:
+ *
+ *   # List of deprecated options for backward compatibility
+ *   set(CONFIG_OLD_FOO "y")
+ *   set(CONFIG_OLD_BAR "y")
+ *
+ * Values are derived from the NEW symbol's current value, flipped
+ * when the rename has the `!` inversion flag.  Matches python
+ * kconfgen's output byte-for-byte.
+ */
+static void emit_deprecated_cmake(struct sbuf *out, const struct kc_ctx *ctx)
+{
+	if (ctx->no_deprecated || !ctx->n_renames)
+		return;
+
+	sbuf_addstr(
+	    out, "\n# List of deprecated options for backward compatibility\n");
+
+	for (size_t i = 0; i < ctx->n_renames; i++) {
+		const struct kc_rename *r = &ctx->renames[i];
+		struct ksym *new_sym = smap_get(&ctx->symtab, r->new_name);
+		if (!new_sym)
+			continue;
+		const char *val = new_sym->cur_val ? new_sym->cur_val : "";
+		const char *effective = val;
+		if (new_sym->type == KS_BOOL) {
+			int y = !strcmp(val, "y");
+			if (r->invert)
+				y = !y;
+			effective = y ? "y" : "";
+		}
+		sbuf_addf(out, "set(%s%s ", CONFIG_PREFIX, r->old_name);
+		emit_quoted(out, effective);
+		sbuf_addstr(out, ")\n");
+	}
+}
+
+/* ================================================================== */
+/*  JSON helpers                                                      */
+/* ================================================================== */
+
+/*
+ * Append a JSON-escaped string, with surrounding quotes.  Handles the
+ * usual backslash escapes and emits \\uXXXX for control characters --
+ * matches what python's json.dumps produces.
+ */
+static void json_emit_string(struct sbuf *out, const char *s)
+{
+	sbuf_addch(out, '"');
+	for (const unsigned char *p = (const unsigned char *)s; *p; p++) {
+		switch (*p) {
+		case '"':
+			sbuf_addstr(out, "\\\"");
+			break;
+		case '\\':
+			sbuf_addstr(out, "\\\\");
+			break;
+		case '\n':
+			sbuf_addstr(out, "\\n");
+			break;
+		case '\t':
+			sbuf_addstr(out, "\\t");
+			break;
+		case '\r':
+			sbuf_addstr(out, "\\r");
+			break;
+		case '\b':
+			sbuf_addstr(out, "\\b");
+			break;
+		case '\f':
+			sbuf_addstr(out, "\\f");
+			break;
+		default:
+			if (*p < 0x20)
+				sbuf_addf(out, "\\u%04x", *p);
+			else
+				sbuf_addch(out, (char)*p);
+			break;
+		}
+	}
+	sbuf_addch(out, '"');
+}
+
+static void json_indent(struct sbuf *out, int level)
+{
+	for (int i = 0; i < level; i++)
+		sbuf_addstr(out, "    ");
+}
+
+/* ================================================================== */
+/*  JSON writer (flat name -> value)                                  */
+/* ================================================================== */
+
+struct json_kv {
+	const char *name;
+	enum ksym_type type;
+	const char *val;
+};
+
+static int json_kv_cmp(const void *a, const void *b)
+{
+	const struct json_kv *x = a, *y = b;
+	return strcmp(x->name, y->name);
+}
+
+static void emit_json_value(struct sbuf *out, const struct json_kv *kv)
+{
+	switch (kv->type) {
+	case KS_BOOL:
+		sbuf_addstr(out, !strcmp(kv->val, "y") ? "true" : "false");
+		return;
+	case KS_INT:
+	case KS_HEX: {
+		/* JSON has no hex literal; decode and emit as decimal. */
+		char *e;
+		long long v = strtoll(kv->val, &e, 0);
+		if (e == kv->val || *e) {
+			json_emit_string(out, kv->val);
+			return;
+		}
+		sbuf_addf(out, "%lld", v);
+		return;
+	}
+	case KS_FLOAT:
+		sbuf_addf(out, "%s", *kv->val ? kv->val : "0.0");
+		return;
+	case KS_STRING:
+	case KS_UNKNOWN:
+		json_emit_string(out, kv->val);
+		return;
+	}
+}
+
+struct json_collect {
+	struct json_kv *entries;
+	size_t nr;
+	size_t alloc;
+};
+
+static void cb_json_collect(struct sbuf *out, const struct ksym *s, void *ud)
+{
+	(void)out;
+	struct json_collect *c = ud;
+	if (is_pseudo_sym(s) || sym_has_env(s))
+		return;
+	ALLOC_GROW(c->entries, c->nr + 1, c->alloc);
+	c->entries[c->nr].name = s->name;
+	c->entries[c->nr].type = s->type;
+	c->entries[c->nr].val = s->cur_val ? s->cur_val : "";
+	c->nr++;
+}
+
+void kc_write_json(const struct kc_ctx *ctx, const char *path)
+{
+	struct json_collect c = {0};
+	walk_syms(ctx->root, NULL, cb_json_collect, &c);
+	qsort(c.entries, c.nr, sizeof(*c.entries), json_kv_cmp);
+
+	struct sbuf out = SBUF_INIT;
+	sbuf_addstr(&out, "{");
+	for (size_t i = 0; i < c.nr; i++) {
+		sbuf_addstr(&out, i ? ",\n    " : "\n    ");
+		json_emit_string(&out, c.entries[i].name);
+		sbuf_addstr(&out, ": ");
+		emit_json_value(&out, &c.entries[i]);
+	}
+	sbuf_addstr(&out, c.nr ? "\n}" : "}");
+
+	if (write_file_atomic(path, out.buf, out.len) < 0)
+		die_errno("cannot write '%s'", path);
+	free(c.entries);
+	sbuf_release(&out);
+}
+
+/* ================================================================== */
+/*  json_menus writer (menu-tree array)                               */
+/* ================================================================== */
+
+/* Return the "type" token for a JSON menu entry matching python's
+ * kconfgen vocabulary. */
+static const char *json_menu_type(const struct kmenu *m)
+{
+	if (m->kind == KM_MENU)
+		return "menu";
+	if (m->kind == KM_COMMENT)
+		return "comment";
+	if (m->kind == KM_CHOICE)
+		return "choice";
+	if (m->sym) {
+		switch (m->sym->type) {
+		case KS_BOOL:
+			return "bool";
+		case KS_INT:
+			return "int";
+		case KS_HEX:
+			return "hex";
+		case KS_STRING:
+			return "string";
+		case KS_FLOAT:
+			return "float";
+		case KS_UNKNOWN:
+			break;
+		}
+	}
+	return "unknown";
+}
+
+static const char *json_menu_title(const struct kmenu *m)
+{
+	if (m->prompt && *m->prompt)
+		return m->prompt;
+	if (m->sym) {
+		for (const struct kprop *p = m->sym->props; p; p = p->next) {
+			if (p->kind == KP_PROMPT && p->text)
+				return p->text;
+		}
+	}
+	return NULL;
+}
+
+static int json_menu_includes(const struct kmenu *m);
+
+static void json_menu_write_node(struct sbuf *out, const struct kmenu *m,
+				 int level);
+
+/*
+ * True when @p m (or any descendant) produces a JSON entry.  Menus
+ * with no emittable content are skipped entirely so the output stays
+ * dense.
+ */
+static int json_menu_includes(const struct kmenu *m)
+{
+	if ((m->kind == KM_SYM || m->kind == KM_CHOICE) && m->sym &&
+	    !is_pseudo_sym(m->sym) && !sym_has_env(m->sym))
+		return 1;
+	if (m->kind == KM_MENU || m->kind == KM_COMMENT ||
+	    m->kind == KM_CHOICE || m->kind == KM_IF || m->kind == KM_ROOT) {
+		for (const struct kmenu *c = m->children; c; c = c->next)
+			if (json_menu_includes(c))
+				return 1;
+	}
+	return 0;
+}
+
+/* Emit the children array contents (between '[' and ']'), recursing
+ * into nested menus and transparent if-blocks. */
+static void json_menu_write_children(struct sbuf *out, const struct kmenu *m,
+				     int level)
+{
+	int first = 1;
+	for (const struct kmenu *c = m->children; c; c = c->next) {
+		if (!json_menu_includes(c))
+			continue;
+		if (c->kind == KM_IF) {
+			/* Transparent: its children become part of the
+			 * parent's children array. */
+			/* Recurse with `m = c` to walk c's children. */
+			for (const struct kmenu *gc = c->children; gc;
+			     gc = gc->next) {
+				if (!json_menu_includes(gc))
+					continue;
+				if (!first)
+					sbuf_addstr(out, ",\n");
+				first = 0;
+				json_menu_write_node(out, gc, level);
+			}
+			continue;
+		}
+		if (!first)
+			sbuf_addstr(out, ",\n");
+		first = 0;
+		json_menu_write_node(out, c, level);
+	}
+}
+
+/*
+ * Write the single-line string form of a dependency expression, as
+ * python's kconfgen produces for the @c depends_on field.  Only
+ * serializes symref / comparisons / boolean ops that commonly appear;
+ * anything weird falls back to a compact dump.
+ */
+static void json_emit_dep(struct sbuf *out, const struct kexpr *e)
+{
+	if (!e) {
+		sbuf_addstr(out, "null");
+		return;
+	}
+	struct sbuf s = SBUF_INIT;
+	switch (e->op) {
+	case KE_SYMREF:
+		if (e->sym)
+			sbuf_addstr(&s, e->sym->name);
+		break;
+	case KE_LITERAL:
+		if (e->str)
+			sbuf_addstr(&s, e->str);
+		break;
+	case KE_NOT:
+		sbuf_addch(&s, '!');
+		if (e->l && e->l->op == KE_SYMREF && e->l->sym)
+			sbuf_addstr(&s, e->l->sym->name);
+		break;
+	case KE_AND:
+	case KE_OR:
+	case KE_EQ:
+	case KE_NE:
+	case KE_LT:
+	case KE_LE:
+	case KE_GT:
+	case KE_GE: {
+		const char *op;
+		switch (e->op) {
+		case KE_AND:
+			op = " && ";
+			break;
+		case KE_OR:
+			op = " || ";
+			break;
+		case KE_EQ:
+			op = " = ";
+			break;
+		case KE_NE:
+			op = " != ";
+			break;
+		case KE_LT:
+			op = " < ";
+			break;
+		case KE_LE:
+			op = " <= ";
+			break;
+		case KE_GT:
+			op = " > ";
+			break;
+		case KE_GE:
+			op = " >= ";
+			break;
+		default:
+			op = " ? ";
+			break;
+		}
+		if (e->l && e->l->op == KE_SYMREF && e->l->sym)
+			sbuf_addstr(&s, e->l->sym->name);
+		else if (e->l && e->l->op == KE_LITERAL && e->l->str)
+			sbuf_addstr(&s, e->l->str);
+		sbuf_addstr(&s, op);
+		if (e->r && e->r->op == KE_SYMREF && e->r->sym)
+			sbuf_addstr(&s, e->r->sym->name);
+		else if (e->r && e->r->op == KE_LITERAL && e->r->str)
+			sbuf_addstr(&s, e->r->str);
+		break;
+	}
+	}
+	if (!s.len) {
+		sbuf_addstr(out, "null");
+	} else {
+		json_emit_string(out, s.buf);
+	}
+	sbuf_release(&s);
+}
+
+/* Duplicate and rtrim a help string for JSON output (python strips
+ * trailing whitespace on the serialized help body). */
+static char *help_rtrimmed(const char *s)
+{
+	if (!s)
+		return NULL;
+	size_t n = strlen(s);
+	while (n && (s[n - 1] == '\n' || s[n - 1] == '\t' || s[n - 1] == ' ' ||
+		     s[n - 1] == '\r'))
+		n--;
+	return sbuf_strndup(s, n);
+}
+
+static void json_menu_write_node(struct sbuf *out, const struct kmenu *m,
+				 int level)
+{
+	/*
+	 * Python emits plain @c config entries with a "sym-like" shape
+	 * (help / name / range fields present).  Menus, comments, and
+	 * choices all use a "menu-like" shape: a synthesised id, a null
+	 * name, and help / range omitted.
+	 */
+	int is_sym_entry = m->kind == KM_SYM && m->sym;
+
+	json_indent(out, level);
+	sbuf_addstr(out, "{\n");
+
+	/* children: */
+	json_indent(out, level + 1);
+	sbuf_addstr(out, "\"children\": [");
+	int has_children = (m->kind == KM_MENU || m->kind == KM_COMMENT ||
+			    m->kind == KM_CHOICE);
+	struct sbuf children = SBUF_INIT;
+	if (has_children)
+		json_menu_write_children(&children, m, level + 2);
+	if (children.len) {
+		sbuf_addstr(out, "\n");
+		sbuf_add(out, children.buf, children.len);
+		sbuf_addstr(out, "\n");
+		json_indent(out, level + 1);
+	}
+	sbuf_release(&children);
+	sbuf_addstr(out, "],\n");
+
+	/* depends_on: symbol's effective_dep for sym entries, menu's
+	 * ctx_dep for menus.  Python emits the expression as a string. */
+	json_indent(out, level + 1);
+	sbuf_addstr(out, "\"depends_on\": ");
+	if (is_sym_entry && m->sym->choice_parent) {
+		/* Choice member: python uses the literal "<choice>"
+		 * sentinel rather than propagating the choice's
+		 * condition -- menuconfig treats it specially. */
+		sbuf_addstr(out, "\"<choice>\"");
+	} else {
+		/*
+		 * Walk the parent menu chain to collect every enclosing
+		 * KM_IF condition, then AND in the symbol's own
+		 * KP_DEPENDS props.  Python emits this combined
+		 * expression as a single string like "A && B".
+		 */
+		struct sbuf acc = SBUF_INIT;
+		int first = 1;
+		/* Parent chain (nearest-out first, so we build
+		 * innermost-first which reads more naturally). */
+		for (const struct kmenu *p = m->parent; p; p = p->parent) {
+			if (p->kind != KM_IF || !p->dep)
+				continue;
+			if (!first)
+				sbuf_addstr(&acc, " && ");
+			first = 0;
+			struct sbuf tmp = SBUF_INIT;
+			json_emit_dep(&tmp, p->dep);
+			if (tmp.len >= 2 && tmp.buf[0] == '"')
+				sbuf_add(&acc, tmp.buf + 1, tmp.len - 2);
+			else
+				sbuf_add(&acc, tmp.buf, tmp.len);
+			sbuf_release(&tmp);
+		}
+		if (is_sym_entry) {
+			for (const struct kprop *p = m->sym->props; p;
+			     p = p->next) {
+				if (p->kind != KP_DEPENDS || !p->expr)
+					continue;
+				if (!first)
+					sbuf_addstr(&acc, " && ");
+				first = 0;
+				struct sbuf tmp = SBUF_INIT;
+				json_emit_dep(&tmp, p->expr);
+				if (tmp.len >= 2 && tmp.buf[0] == '"')
+					sbuf_add(&acc, tmp.buf + 1,
+						 tmp.len - 2);
+				else
+					sbuf_add(&acc, tmp.buf, tmp.len);
+				sbuf_release(&tmp);
+			}
+		}
+		if (acc.len)
+			json_emit_string(out, acc.buf);
+		else
+			sbuf_addstr(out, "null");
+		sbuf_release(&acc);
+	}
+	sbuf_addstr(out, ",\n");
+
+	/* Sym entries get help / name / range; menus / comments omit them. */
+	if (is_sym_entry) {
+		json_indent(out, level + 1);
+		sbuf_addstr(out, "\"help\": ");
+		char *help = NULL;
+		for (const struct kprop *p = m->sym->props; p; p = p->next)
+			if (p->kind == KP_HELP && p->text) {
+				help = help_rtrimmed(p->text);
+				break;
+			}
+		if (help)
+			json_emit_string(out, help);
+		else
+			sbuf_addstr(out, "null");
+		free(help);
+		sbuf_addstr(out, ",\n");
+
+		json_indent(out, level + 1);
+		sbuf_addstr(out, "\"id\": ");
+		json_emit_string(out, m->sym->name);
+		sbuf_addstr(out, ",\n");
+
+		json_indent(out, level + 1);
+		sbuf_addstr(out, "\"name\": ");
+		json_emit_string(out, m->sym->name);
+		sbuf_addstr(out, ",\n");
+
+		json_indent(out, level + 1);
+		sbuf_addstr(out, "\"range\": ");
+		const struct kprop *rng = NULL;
+		for (const struct kprop *p = m->sym->props; p; p = p->next)
+			if (p->kind == KP_RANGE && p->expr && p->expr2) {
+				rng = p;
+				break;
+			}
+		if (rng) {
+			const char *los =
+			    rng->expr->op == KE_LITERAL ? rng->expr->str
+			    : rng->expr->op == KE_SYMREF && rng->expr->sym
+				? rng->expr->sym->name
+				: NULL;
+			const char *his =
+			    rng->expr2->op == KE_LITERAL ? rng->expr2->str
+			    : rng->expr2->op == KE_SYMREF && rng->expr2->sym
+				? rng->expr2->sym->name
+				: NULL;
+			char *e;
+			long long lv = los ? strtoll(los, &e, 0) : 0;
+			int lo_num = los && e != los && !*e;
+			long long hv = his ? strtoll(his, &e, 0) : 0;
+			int hi_num = his && e != his && !*e;
+			if (lo_num && hi_num)
+				sbuf_addf(out, "[\n%*s%lld,\n%*s%lld\n%*s]",
+					  (level + 2) * 4, "", lv,
+					  (level + 2) * 4, "", hv,
+					  (level + 1) * 4, "");
+			else
+				sbuf_addstr(out, "null");
+		} else {
+			sbuf_addstr(out, "null");
+		}
+		sbuf_addstr(out, ",\n");
+	} else {
+		/*
+		 * Menu / comment / choice: python synthesises the id
+		 * from the title and source location, with slashes in
+		 * the path replaced by '-'.  Matches python's
+		 * _node_id() in esp_kconfiglib: "<lower-title>-<path-
+		 * with-slashes-as-dashes>-<line>".
+		 *
+		 * Choices also get explicit @c help / @c name / @c range
+		 * fields (all null) -- menu / comment entries omit them.
+		 */
+		if (m->kind == KM_CHOICE) {
+			json_indent(out, level + 1);
+			sbuf_addstr(out, "\"help\": null,\n");
+		}
+		json_indent(out, level + 1);
+		sbuf_addstr(out, "\"id\": ");
+		struct sbuf id = SBUF_INIT;
+		const char *title = json_menu_title(m);
+		if (title) {
+			for (const char *p = title; *p; p++) {
+				if (*p == ' ')
+					sbuf_addch(&id, '-');
+				else if (*p >= 'A' && *p <= 'Z')
+					sbuf_addch(&id, *p + 32);
+				else
+					sbuf_addch(&id, *p);
+			}
+		}
+		const char *file = m->src_file ? m->src_file : "";
+		if (id.len)
+			sbuf_addch(&id, '-');
+		/* Full path, with '/' -> '-' and a trimmed leading slash. */
+		if (*file == '/')
+			file++;
+		for (const char *p = file; *p; p++)
+			sbuf_addch(&id, *p == '/' ? '-' : *p);
+		sbuf_addf(&id, "-%d", m->src_line);
+		json_emit_string(out, id.buf);
+		sbuf_release(&id);
+		sbuf_addstr(out, ",\n");
+		if (m->kind == KM_CHOICE) {
+			json_indent(out, level + 1);
+			sbuf_addstr(out, "\"name\": null,\n");
+		}
+	}
+
+	/* title. */
+	json_indent(out, level + 1);
+	sbuf_addstr(out, "\"title\": ");
+	const char *title = json_menu_title(m);
+	if (title)
+		json_emit_string(out, title);
+	else
+		sbuf_addstr(out, "null");
+	sbuf_addstr(out, ",\n");
+
+	/* type. */
+	json_indent(out, level + 1);
+	sbuf_addstr(out, "\"type\": ");
+	json_emit_string(out, json_menu_type(m));
+	sbuf_addstr(out, "\n");
+
+	json_indent(out, level);
+	sbuf_addstr(out, "}");
+}
+
+void kc_write_json_menus(const struct kc_ctx *ctx, const char *path)
+{
+	struct sbuf out = SBUF_INIT;
+	sbuf_addstr(&out, "[");
+
+	struct sbuf body = SBUF_INIT;
+	json_menu_write_children(&body, ctx->root, 1);
+	if (body.len) {
+		sbuf_addstr(&out, "\n");
+		sbuf_add(&out, body.buf, body.len);
+		sbuf_addstr(&out, "\n");
+	}
+	sbuf_release(&body);
+	sbuf_addstr(&out, "]");
+
+	if (write_file_atomic(path, out.buf, out.len) < 0)
+		die_errno("cannot write '%s'", path);
+	sbuf_release(&out);
+}
+
+/* ================================================================== */
+/*  Existing CMake writer                                             */
+/* ================================================================== */
 
 void kc_write_cmake(const struct kc_ctx *ctx, const char *path)
 {
@@ -569,15 +1208,17 @@ void kc_write_cmake(const struct kc_ctx *ctx, const char *path)
 			  "#\n");
 
 	struct sbuf list = SBUF_INIT;
-	struct cmake_walk w = {.list = &list, .first = 1};
+	struct cmake_walk w = {.ctx = ctx, .list = &list, .first = 1};
 	walk_syms(ctx->root, &out, cb_cmake, &w);
 
-	/* Trailing enumeration, unquoted, semicolon-separated.  Python
-	 * kconfgen does NOT emit a newline after this final line, so we
-	 * don't either -- any diff-based test would otherwise trip on a
-	 * one-byte difference. */
-	sbuf_addf(&out, "set(CONFIGS_LIST %s)", list.buf);
+	/* Trailing enumeration, unquoted, semicolon-separated.  When
+	 * there are no deprecated aliases to follow, python kconfgen
+	 * does NOT emit a newline after this final line -- emit NL only
+	 * when a deprecated block follows. */
+	int has_dep = !ctx->no_deprecated && ctx->n_renames > 0;
+	sbuf_addf(&out, "set(CONFIGS_LIST %s)%s", list.buf, has_dep ? "" : "");
 	sbuf_release(&list);
+	emit_deprecated_cmake(&out, ctx);
 
 	if (write_file_atomic(path, out.buf, out.len) < 0)
 		die_errno("cannot write '%s'", path);

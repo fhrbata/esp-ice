@@ -189,10 +189,14 @@ int cmd_idf_kconfgen(int argc, const char **argv)
 				kc_write_header(&ctx, path);
 			else if (!strcmp(fmt, "cmake"))
 				kc_write_cmake(&ctx, path);
+			else if (!strcmp(fmt, "json"))
+				kc_write_json(&ctx, path);
+			else if (!strcmp(fmt, "json_menus"))
+				kc_write_json_menus(&ctx, path);
 			else
 				die("--output: unsupported format '%s' "
-				    "(expected "
-				    "config, header, or cmake)",
+				    "(expected config, header, cmake, json, "
+				    "or json_menus)",
 				    fmt);
 		}
 	}
