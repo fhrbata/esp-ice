@@ -274,6 +274,82 @@ static int is_pseudo_sym(const struct ksym *s)
 }
 
 /*
+ * True when @p s has at least one KP_PROMPT property.  Python kconfgen
+ * emits only user-facing symbols (those with a prompt) -- "hidden"
+ * internal bool/int flags that track derived state but have no prompt
+ * are not written to any of the generated artefacts.
+ */
+static int has_prompt(const struct ksym *s)
+{
+	for (const struct kprop *p = s->props; p; p = p->next)
+		if (p->kind == KP_PROMPT)
+			return 1;
+	return 0;
+}
+
+/* True when a symbol's current value is "non-trivial" -- i.e. the
+ * evaluator resolved it to something other than the type's zero
+ * value.  Used as a secondary emit-filter for hidden symbols:
+ * python kconfgen emits a no-prompt bool when its computed value is
+ * "y" (but not "n"), and a no-prompt int/hex/string only when its
+ * value is non-empty and non-zero.  Matching this keeps derived
+ * flags like CONFIG_ESP_CONSOLE_UART in the output while filtering
+ * out a forest of hidden zero-value defaults. */
+static int has_nontrivial_value(const struct ksym *s)
+{
+	const char *v = s->cur_val ? s->cur_val : "";
+	if (!*v)
+		return 0;
+	if (s->type == KS_BOOL)
+		return !strcmp(v, "y");
+	if (s->type == KS_INT || s->type == KS_HEX) {
+		char *e;
+		long long n = strtoll(v, &e, 0);
+		return e != v && *e == '\0' ? n != 0 : 1;
+	}
+	return 1;
+}
+
+/*
+ * Final per-symbol filter applied by every writer.
+ *
+ * Python kconfgen emits a symbol when ANY of these hold:
+ *
+ *   (a) it's visible (has a prompt whose full depends-on chain
+ *       evaluates true);
+ *   (b) the user explicitly set it via @c --config / @c --defaults
+ *       (so round-tripping never drops user-typed entries);
+ *   (c) it's a derived / internal flag with a non-trivial computed
+ *       value -- a no-prompt bool that evaluates to "y", or a no-
+ *       prompt int/hex/string with a non-zero non-empty value.
+ *
+ * Choice parents, the lexer-interned barewords, and @c option env
+ * symbols are always skipped.
+ */
+static int should_emit(const struct ksym *s)
+{
+	if (is_pseudo_sym(s))
+		return 0;
+	if (sym_has_env(s))
+		return 0;
+	/*
+	 * Python kconfgen does NOT treat `user_set` as an emit
+	 * override: a line like `# CONFIG_X is not set` in the input
+	 * sdkconfig marks X as user-set to "n", but "n" is the bool
+	 * zero default, so the symbol is effectively unchanged and
+	 * python drops it unless it would also be emitted by visibility
+	 * / prompt-less-with-value.  Mirror that rule so full-sdkconfig
+	 * round-trips don't accumulate hidden `is not set` lines.
+	 */
+	int has_p = has_prompt(s);
+	if (has_p && s->visible)
+		return 1;
+	if (!has_p && has_nontrivial_value(s))
+		return 1;
+	return 0;
+}
+
+/*
  * Walk the menu tree pre-order and invoke @p cb on every symbol that
  * backs a KM_SYM / KM_CHOICE menu node -- i.e. the declaration order
  * python kconfgen uses for its output files.  Filtering out
@@ -342,7 +418,7 @@ static void emit_symbol(struct sbuf *out, const struct ksym *s)
 static void cb_config(struct sbuf *out, const struct ksym *s, void *ud)
 {
 	(void)ud;
-	if (is_pseudo_sym(s) || sym_has_env(s))
+	if (!should_emit(s))
 		return;
 	emit_symbol(out, s);
 }
@@ -367,6 +443,12 @@ static void emit_deprecated_config(struct sbuf *out, const struct kc_ctx *ctx)
 		const struct kc_rename *r = &ctx->renames[i];
 		struct ksym *new_sym = smap_get(&ctx->symtab, r->new_name);
 		if (!new_sym)
+			continue;
+		/* Emit an OLD alias only when the NEW sym is itself
+		 * emitted -- otherwise the OLD entry would reference
+		 * a CONFIG python also skipped and break diff-based
+		 * tooling.  Matches python kconfgen's filter. */
+		if (!should_emit(new_sym))
 			continue;
 		const char *val = new_sym->cur_val ? new_sym->cur_val : "";
 
@@ -431,6 +513,8 @@ static void emit_deprecated_header(struct sbuf *out, const struct kc_ctx *ctx)
 		if (r->invert)
 			continue; /* can't express inversion as #define */
 		struct ksym *new_sym = smap_get(&ctx->symtab, r->new_name);
+		if (!new_sym || !should_emit(new_sym))
+			continue;
 		if (!header_defines_sym(new_sym))
 			continue;
 		sbuf_addf(out, "#define %s%s %s%s\n", CONFIG_PREFIX,
@@ -493,7 +577,7 @@ static void emit_header_symbol(struct sbuf *out, const struct ksym *s)
 static void cb_header(struct sbuf *out, const struct ksym *s, void *ud)
 {
 	(void)ud;
-	if (is_pseudo_sym(s) || sym_has_env(s))
+	if (!should_emit(s))
 		return;
 	emit_header_symbol(out, s);
 }
@@ -556,7 +640,7 @@ static void list_append(struct cmake_walk *w, const char *name)
 static void cb_cmake(struct sbuf *out, const struct ksym *s, void *ud)
 {
 	struct cmake_walk *w = ud;
-	if (is_pseudo_sym(s) || sym_has_env(s))
+	if (!should_emit(s))
 		return;
 	emit_cmake_symbol(out, s);
 	list_append(w, s->name);
@@ -570,7 +654,11 @@ static void cb_cmake(struct sbuf *out, const struct ksym *s, void *ud)
 	if (!w->ctx->no_deprecated) {
 		for (size_t i = 0; i < w->ctx->n_renames; i++) {
 			const struct kc_rename *r = &w->ctx->renames[i];
-			if (!strcmp(r->new_name, s->name))
+			if (strcmp(r->new_name, s->name) != 0)
+				continue;
+			/* Only list the OLD name when the NEW sym is
+			 * itself emitted; mirrors python's filter. */
+			if (should_emit(s))
 				list_append(w, r->old_name);
 		}
 	}
@@ -598,7 +686,7 @@ static void emit_deprecated_cmake(struct sbuf *out, const struct kc_ctx *ctx)
 	for (size_t i = 0; i < ctx->n_renames; i++) {
 		const struct kc_rename *r = &ctx->renames[i];
 		struct ksym *new_sym = smap_get(&ctx->symtab, r->new_name);
-		if (!new_sym)
+		if (!new_sym || !should_emit(new_sym))
 			continue;
 		const char *val = new_sym->cur_val ? new_sym->cur_val : "";
 		const char *effective = val;
@@ -720,7 +808,7 @@ static void cb_json_collect(struct sbuf *out, const struct ksym *s, void *ud)
 {
 	(void)out;
 	struct json_collect *c = ud;
-	if (is_pseudo_sym(s) || sym_has_env(s))
+	if (!should_emit(s))
 		return;
 	ALLOC_GROW(c->entries, c->nr + 1, c->alloc);
 	c->entries[c->nr].name = s->name;

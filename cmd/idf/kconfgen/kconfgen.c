@@ -251,6 +251,34 @@ int cmd_idf_kconfgen(int argc, const char **argv)
 	 * loader can translate legacy CONFIG_* keys on the fly. */
 	for (size_t i = 0; i < opt_renames.nr; i++)
 		kc_load_rename(&ctx, opt_renames.v[i]);
+
+	/*
+	 * ESP-IDF passes per-component rename files via the
+	 * @c COMPONENT_SDKCONFIG_RENAMES env var (semicolon-separated
+	 * list) rather than as repeated @c --sdkconfig-rename flags.
+	 * Python kconfgen reads that env var directly; we do the same
+	 * here so the build-time rename coverage matches without
+	 * requiring a cmake wrapper change.
+	 */
+	for (size_t i = 0; i < opt_env.nr; i++) {
+		const char *entry = opt_env.v[i];
+		const char prefix[] = "COMPONENT_SDKCONFIG_RENAMES=";
+		if (strncmp(entry, prefix, sizeof(prefix) - 1) != 0)
+			continue;
+		const char *list = entry + sizeof(prefix) - 1;
+		while (*list) {
+			const char *sep = list;
+			while (*sep && *sep != ';')
+				sep++;
+			if (sep > list) {
+				char *path = sbuf_strndup(list, sep - list);
+				kc_load_rename(&ctx, path);
+				free(path);
+			}
+			list = *sep ? sep + 1 : sep;
+		}
+	}
+
 	ctx.no_deprecated = opt_no_deprecated;
 
 	/* Load user-provided values in the python-compatible layering
