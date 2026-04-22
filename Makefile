@@ -130,6 +130,9 @@ LIB_SRCS := \
 	cmd/help/help.c \
 	cmd/idf/idf.c \
 	cmd/idf/configdep/configdep.c \
+	cmd/idf/kconfgen/kc_lex.c \
+	cmd/idf/kconfgen/kc_parse.c \
+	cmd/idf/kconfgen/kconfgen.c \
 	cmd/idf/ldgen/gen.c \
 	cmd/idf/ldgen/ldgen.c \
 	cmd/idf/ldgen/lf.c \

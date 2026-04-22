@@ -22,6 +22,7 @@
 #include "ice.h"
 
 extern const struct cmd_desc cmd_idf_configdep_desc;
+extern const struct cmd_desc cmd_idf_kconfgen_desc;
 extern const struct cmd_desc cmd_idf_ldgen_desc;
 extern const struct cmd_desc cmd_idf_partition_table_desc;
 extern const struct cmd_desc cmd_idf_size_desc;
@@ -54,11 +55,8 @@ static const struct cmd_manual idf_manual = {
 static const struct option cmd_idf_opts[] = {OPT_END()};
 
 static const struct cmd_desc *const idf_subs[] = {
-    &cmd_idf_configdep_desc,
-    &cmd_idf_ldgen_desc,
-    &cmd_idf_partition_table_desc,
-    &cmd_idf_size_desc,
-    NULL,
+    &cmd_idf_configdep_desc,	   &cmd_idf_kconfgen_desc, &cmd_idf_ldgen_desc,
+    &cmd_idf_partition_table_desc, &cmd_idf_size_desc,	   NULL,
 };
 
 const struct cmd_desc cmd_idf_desc = {
