@@ -373,15 +373,23 @@ static int cmake_configure(void)
 /* ------------------------------------------------------------------ */
 /* build.ninja patching -- post-configure fixups                       */
 /*   gen_esp32part.py   -> ice idf partition-table                     */
+/*   ldgen.py           -> ice idf ldgen                               */
 /*   esptool elf2image  -> ice image create                            */
 /*                                                                     */
 /* IDF's cmake files wire these scripts into build.ninja COMMAND       */
 /* lines.  We rewrite them to call the native ice equivalents so no    */
-/* Python is needed at build time.  This is a temporary hack that      */
-/* lives here (rather than being replayed on every build) because      */
-/* cmake configure is the only thing that regenerates build.ninja, so  */
-/* doing the patch once after init is sufficient.  Re-running ice init */
-/* re-applies it.                                                      */
+/* Python is needed at build time.                                     */
+/*                                                                     */
+/* The patchers share a single-pass driver (@p patch_ninja_apply):     */
+/* each rule is a tuple of (needle, optional second needle, line       */
+/* rewriter).  Adding a new tool replacement is one array entry in     */
+/* patch_ninja() plus a line-rewriter function; the file I/O and line  */
+/* walk are shared.                                                    */
+/*                                                                     */
+/* This is a temporary hack that lives here (rather than being         */
+/* replayed on every build) because cmake configure is the only thing  */
+/* that regenerates build.ninja, so doing the patch once after init is */
+/* sufficient.  Re-running ice init re-applies it.                     */
 /* ------------------------------------------------------------------ */
 
 static const char *mem_find(const char *p, const char *end, const char *needle,
@@ -439,10 +447,37 @@ static void patch_command_line(struct sbuf *out, const char *line, size_t len)
 	}
 }
 
-static void patch_ninja_partition(const char *build_dir)
+/*
+ * Per-target rewrite rule: if a COMMAND line contains @c needle (and,
+ * optionally, @c needle2), @c patch is called to write the replacement
+ * to @c out.  Otherwise the line is passed through untouched.
+ */
+struct ninja_rule {
+	const char *needle;  /**< primary substring the line must contain */
+	const char *needle2; /**< optional second substring (or NULL) */
+	void (*patch)(struct sbuf *out, const char *line, size_t len);
+};
+
+/* Returns 1 if @p rule matches @p line. */
+static int rule_matches(const struct ninja_rule *rule, const char *line,
+			const char *end)
 {
-	static const char needle[] = "gen_esp32part.py";
-	static const size_t nlen = sizeof(needle) - 1;
+	if (!mem_find(line, end, rule->needle, strlen(rule->needle)))
+		return 0;
+	if (rule->needle2 &&
+	    !mem_find(line, end, rule->needle2, strlen(rule->needle2)))
+		return 0;
+	return 1;
+}
+
+/*
+ * Walk @b{build.ninja} once, applying the first matching rule to each
+ * COMMAND line.  Lines not matching any rule pass through unchanged.
+ * Atomically writes back only if any line was rewritten.
+ */
+static void patch_ninja_apply(const char *build_dir,
+			      const struct ninja_rule *rules, size_t nrules)
+{
 	struct sbuf ninja_path = SBUF_INIT;
 	struct sbuf content = SBUF_INIT;
 	struct sbuf out = SBUF_INIT;
@@ -463,10 +498,19 @@ static void patch_ninja_partition(const char *build_dir)
 			nl = end;
 
 		size_t line_len = (size_t)(nl - p);
+		const struct ninja_rule *hit = NULL;
 
-		if (line_len > 11 && !memcmp(p, "  COMMAND =", 11) &&
-		    mem_find(p, nl, needle, nlen)) {
-			patch_command_line(&out, p, line_len);
+		if (line_len > 11 && !memcmp(p, "  COMMAND =", 11)) {
+			for (size_t i = 0; i < nrules; i++) {
+				if (rule_matches(&rules[i], p, nl)) {
+					hit = &rules[i];
+					break;
+				}
+			}
+		}
+
+		if (hit) {
+			hit->patch(&out, p, line_len);
 			modified = 1;
 		} else {
 			sbuf_add(&out, p, line_len);
@@ -581,55 +625,71 @@ passthrough:
 	sbuf_add(out, line, len);
 }
 
-static void patch_ninja_elf2image(const char *build_dir)
+/*
+ * Replace a Python ldgen invocation with the native `ice idf ldgen`.
+ * IDF's COMMAND line looks like:
+ *
+ *   cd <dir> && <python> <...>/tools/ldgen/ldgen.py --config ... \
+ *        --fragments-list "..." --input ... --output ...           \
+ *        --kconfig ... --env-file ... --libraries-file ...         \
+ *        --objdump ...
+ *
+ * We rewrite everything from the python invocation up to and including
+ * `ldgen.py` into `<ice> idf ldgen`.  The trailing flags are preserved
+ * as-is: our CLI accepts --kconfig / --env-file / --objdump as ignored
+ * compatibility shims.
+ */
+static void patch_ldgen_line(struct sbuf *out, const char *line, size_t len)
 {
-	static const char esptool_needle[] = "esptool";
-	static const char e2i_needle[] = "elf2image";
-	static const size_t elen = sizeof(esptool_needle) - 1;
-	static const size_t e2ilen = sizeof(e2i_needle) - 1;
+	static const char needle[] = "ldgen.py";
+	static const size_t nlen = sizeof(needle) - 1;
+	const char *end = line + len;
 
-	struct sbuf ninja_path = SBUF_INIT;
-	struct sbuf content = SBUF_INIT;
-	struct sbuf out = SBUF_INIT;
-	const char *p, *end, *nl;
-	int modified = 0;
-
-	sbuf_addf(&ninja_path, "%s/build.ninja", build_dir);
-
-	if (sbuf_read_file(&content, ninja_path.buf) < 0)
-		goto done;
-
-	p = content.buf;
-	end = content.buf + content.len;
-
-	while (p < end) {
-		nl = memchr(p, '\n', end - p);
-		if (!nl)
-			nl = end;
-
-		size_t line_len = (size_t)(nl - p);
-
-		if (line_len > 11 && !memcmp(p, "  COMMAND =", 11) &&
-		    mem_find(p, nl, esptool_needle, elen) &&
-		    mem_find(p, nl, e2i_needle, e2ilen)) {
-			patch_elf2image_line(&out, p, line_len);
-			modified = 1;
-		} else {
-			sbuf_add(&out, p, line_len);
-		}
-
-		if (nl < end)
-			sbuf_addch(&out, '\n');
-		p = nl + (nl < end ? 1 : 0);
+	const char *found = mem_find(line, end, needle, nlen);
+	if (!found) {
+		sbuf_add(out, line, len);
+		return;
 	}
 
-	if (modified)
-		write_file_atomic(ninja_path.buf, out.buf, out.len);
+	/* Walk left from "ldgen.py" to the start of its path token, then
+	 * one more token back to land on the python invocation. */
+	const char *script_start = found;
+	while (script_start > line && script_start[-1] != ' ')
+		script_start--;
 
-done:
-	sbuf_release(&ninja_path);
-	sbuf_release(&content);
-	sbuf_release(&out);
+	const char *python_start = script_start;
+	if (python_start > line)
+		python_start--;
+	while (python_start > line && python_start[-1] != ' ')
+		python_start--;
+
+	sbuf_add(out, line, python_start - line);
+
+	{
+		const char *exe = process_exe();
+
+		sbuf_addstr(out, exe ? exe : "ice");
+	}
+	sbuf_addstr(out, " idf ldgen");
+
+	sbuf_add(out, found + nlen, end - (found + nlen));
+}
+
+/*
+ * Apply every ninja rewrite rule in a single pass over build.ninja.
+ * Rules are tried per line in declaration order; the first match wins.
+ * Order matters only to disambiguate when two rules could claim the
+ * same line -- none of the current rules overlap, but keep the more
+ * specific needles first to stay robust.
+ */
+static void patch_ninja(const char *build_dir)
+{
+	static const struct ninja_rule rules[] = {
+	    {"gen_esp32part.py", NULL, patch_command_line},
+	    {"ldgen.py", NULL, patch_ldgen_line},
+	    {"esptool", "elf2image", patch_elf2image_line},
+	};
+	patch_ninja_apply(build_dir, rules, sizeof(rules) / sizeof(rules[0]));
 }
 
 /*
@@ -925,8 +985,7 @@ int cmd_init(int argc, const char **argv)
 	sbuf_addf(&marker, "%s/.ice/built", build_dir);
 	unlink(marker.buf);
 
-	patch_ninja_partition(build_dir);
-	patch_ninja_elf2image(build_dir);
+	patch_ninja(build_dir);
 
 out:
 	free(idf_path);
