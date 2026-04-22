@@ -468,7 +468,23 @@ top:
 	}
 
 	if (!*l->pos) {
-		/* End of active buffer: pop included frame if any, else EOF. */
+		/*
+		 * End of active buffer.  Before popping (or signalling
+		 * real EOF), synthesise a trailing KT_NL for the file
+		 * whose buffer just ended -- otherwise a last
+		 * statement missing a final newline (common in the
+		 * CMake-generated `source "...` include manifests)
+		 * would leak its post-pop token into the parent
+		 * statement still expecting its closing NL.  The flag
+		 * resets on every token emit other than this
+		 * synthetic NL and on every frame push, so each
+		 * frame's tail gets exactly one virtual NL.
+		 */
+		if (!l->eol_pending) {
+			l->eol_pending = 1;
+			return l->tok = KT_NL;
+		}
+		l->eol_pending = 0;
 		if (kc_lex_pop_frame(l))
 			goto top;
 		l->eof = 1;

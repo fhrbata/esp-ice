@@ -156,6 +156,7 @@ struct kc_lexer {
 	char *active_buf;
 
 	int eof;	      /**< Set after first KT_EOF. */
+	int eol_pending;      /**< Next EOF must emit a virtual KT_NL. */
 	int warned_undef_env; /**< One-shot warning throttle. */
 };
 

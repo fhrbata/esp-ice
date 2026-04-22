@@ -121,29 +121,114 @@ static void split_output_spec(const char *spec, const char **fmt_out,
 }
 
 /*
- * Load NAME=VAL lines from an env-file into @p env.  Blank / comment
- * lines are skipped.  Whatever the caller already has in @p env from
- * --env flags is preserved; the file is additive.
+ * Preprocess argv so the single-arg `--output fmt:path` form the option
+ * parser expects can accept python kconfgen's two-arg `--output FMT
+ * PATH` form that ESP-IDF's tools/cmake/kconfig.cmake hands us.  For
+ * every @c --output / @c -o whose next argv slot has no ':', we
+ * combine the pair into a single colon-joined string.  Operates
+ * in-place on the (argc, argv) slice the caller passes to
+ * parse_options; the stitched strings are stored in a small static
+ * rewrite table so they outlive this function.
+ */
+static void rewrite_output_pairs(int *argc_inout, const char **argv)
+{
+	static char *stitched[32];
+	static int n_stitched;
+
+	int argc = *argc_inout;
+	int dst = 0;
+	for (int src = 0; src < argc; src++) {
+		const char *a = argv[src];
+		int is_output = !strcmp(a, "--output") || !strcmp(a, "-o");
+		if (is_output && src + 2 < argc &&
+		    !strchr(argv[src + 1], ':')) {
+			/* Two-arg form: combine. */
+			if (n_stitched >= 32)
+				die("too many --output options");
+			struct sbuf sb = SBUF_INIT;
+			sbuf_addf(&sb, "%s:%s", argv[src + 1], argv[src + 2]);
+			stitched[n_stitched] = sbuf_detach(&sb);
+			argv[dst++] = a;
+			argv[dst++] = stitched[n_stitched++];
+			src += 2;
+			continue;
+		}
+		argv[dst++] = a;
+	}
+	*argc_inout = dst;
+}
+
+/*
+ * Load environment variables from @p path into @p env.
+ *
+ * Two file formats are accepted -- ESP-IDF's build passes a JSON
+ * object (`{"NAME": "value", ...}`), while standalone usage from the
+ * command line is typically plain NAME=VAL lines.  The first
+ * non-whitespace byte disambiguates: '{' -> JSON parse, anything else
+ * -> line-based parse.  Whatever @p env already holds from --env
+ * flags is preserved; the file is additive.
  */
 static void load_env_file(struct svec *env, const char *path)
 {
 	struct sbuf sb = SBUF_INIT;
 	if (sbuf_read_file(&sb, path) < 0)
 		die_errno("cannot read env-file '%s'", path);
-	size_t pos = 0;
-	char *line;
-	while ((line = sbuf_getline(sb.buf, sb.len, &pos)) != NULL) {
-		while (*line == ' ' || *line == '\t')
-			line++;
-		if (!*line || *line == '#')
-			continue;
-		svec_push(env, line);
+
+	const char *p = sb.buf;
+	while (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r')
+		p++;
+
+	if (*p == '{') {
+		struct json_value *root = json_parse(sb.buf, sb.len);
+		if (!root || json_type(root) != JSON_OBJECT)
+			die("env-file '%s' is not a JSON object", path);
+		for (int i = 0; i < root->u.object.nr; i++) {
+			const struct json_member *m =
+			    &root->u.object.members[i];
+			const char *val;
+			struct sbuf tmp = SBUF_INIT;
+			switch (json_type(m->value)) {
+			case JSON_STRING:
+				val = json_as_string(m->value);
+				sbuf_addf(&tmp, "%s=%s", m->key,
+					  val ? val : "");
+				break;
+			case JSON_BOOL:
+				sbuf_addf(&tmp, "%s=%s", m->key,
+					  json_as_bool(m->value) ? "y" : "n");
+				break;
+			case JSON_NUMBER:
+				sbuf_addf(&tmp, "%s=%lld", m->key,
+					  (long long)json_as_number(m->value));
+				break;
+			case JSON_NULL:
+				sbuf_addf(&tmp, "%s=", m->key);
+				break;
+			default:
+				sbuf_release(&tmp);
+				continue; /* arrays / objects -- skip */
+			}
+			svec_push(env, tmp.buf);
+			sbuf_release(&tmp);
+		}
+		json_free(root);
+	} else {
+		size_t pos = 0;
+		char *line;
+		while ((line = sbuf_getline(sb.buf, sb.len, &pos)) != NULL) {
+			while (*line == ' ' || *line == '\t')
+				line++;
+			if (!*line || *line == '#')
+				continue;
+			svec_push(env, line);
+		}
 	}
 	sbuf_release(&sb);
 }
 
 int cmd_idf_kconfgen(int argc, const char **argv)
 {
+	rewrite_output_pairs(&argc, argv);
 	argc = parse_options(argc, argv, &cmd_idf_kconfgen_desc);
 	(void)argv;
 
