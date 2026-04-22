@@ -151,6 +151,7 @@ static void menu_free(struct kmenu *m)
 	}
 	expr_free(m->dep);
 	expr_free(m->visible_if);
+	expr_free(m->ctx_dep);
 	free(m->prompt);
 	free(m);
 }
@@ -160,7 +161,7 @@ void kc_ctx_release(struct kc_ctx *ctx)
 	menu_free(ctx->root);
 	ctx->root = NULL;
 
-	/* Free every symbol held in the symtab (props + name). */
+	/* Free every symbol held in the symtab. */
 	const char *key;
 	void *val;
 	size_t it = 0;
@@ -172,6 +173,10 @@ void kc_ctx_release(struct kc_ctx *ctx)
 			prop_free(p);
 			p = next;
 		}
+		expr_free(s->effective_dep);
+		expr_free(s->rev_dep);
+		expr_free(s->weak_rev_dep);
+		free(s->cur_val);
 		free(s->name);
 		free(s);
 	}

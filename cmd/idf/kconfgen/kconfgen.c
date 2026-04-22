@@ -17,6 +17,7 @@
  */
 #include "ice.h"
 #include "kc_ast.h"
+#include "kc_eval.h"
 #include "kc_lex.h"
 
 /* From kc_parse.c -- not exposed in kc_ast.h because the entry point
@@ -49,12 +50,15 @@ static const struct cmd_manual idf_kconfgen_manual = {
 
 static const char *opt_kconfig;
 static int opt_dump_ast;
+static int opt_dump_symbols;
 
 static const struct option cmd_idf_kconfgen_opts[] = {
     OPT_STRING('k', "kconfig", &opt_kconfig, "path",
 	       "root Kconfig file (required)", NULL),
     OPT_BOOL('d', "dump-ast", &opt_dump_ast,
 	     "parse and dump the AST to stdout"),
+    OPT_BOOL('s', "dump-symbols", &opt_dump_symbols,
+	     "evaluate and dump resolved symbol values"),
     OPT_END(),
 };
 
@@ -82,6 +86,11 @@ int cmd_idf_kconfgen(int argc, const char **argv)
 
 	if (opt_dump_ast)
 		kc_ast_dump(&ctx);
+
+	if (opt_dump_symbols) {
+		kc_eval(&ctx);
+		kc_symbols_dump(&ctx);
+	}
 
 	kc_ctx_release(&ctx);
 	return 0;

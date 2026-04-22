@@ -102,6 +102,20 @@ struct ksym {
 	struct kprop *props_tail;   /**< O(1) append helper. */
 	int is_choice;		    /**< This symbol is a choice group. */
 	struct ksym *choice_parent; /**< For choice members; NULL otherwise. */
+
+	/* ---- Evaluation state (populated by kc_eval) ---- */
+	struct kexpr *effective_dep; /**< Ancestor menu dep AND
+				      *   every KP_DEPENDS on this sym. */
+	struct kexpr *rev_dep;	     /**< OR of (sel && if) for every
+				      *   `select SYM if ...' targeting
+				      *   this sym. */
+	struct kexpr *weak_rev_dep;  /**< Same but for `imply`. */
+	char *cur_val;		     /**< Owned resolved value: "y"/"n"/
+				      *   int/hex/float/string body. */
+	int visible;		     /**< Computed visibility (bool). */
+	int user_set;		     /**< Value came from --config or
+				      *   --defaults (not a built-in
+				      *   default). */
 };
 
 /* ------------------------------------------------------------------ */
@@ -131,6 +145,9 @@ struct kmenu {
 	struct kmenu *next;	/**< Next sibling. */
 	const char *src_file;
 	int src_line;
+
+	/* ---- Evaluation state (populated by kc_eval) ---- */
+	struct kexpr *ctx_dep; /**< Parent ctx_dep AND own dep. */
 };
 
 /* ------------------------------------------------------------------ */
