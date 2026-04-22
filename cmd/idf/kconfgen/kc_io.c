@@ -312,7 +312,13 @@ static int emit_worthy_no_prompt(const struct ksym *s)
 {
 	if (s->type == KS_BOOL)
 		return s->cur_val && !strcmp(s->cur_val, "y");
-	return has_defaults(s);
+	/*
+	 * int / hex / string / float without a prompt: emit only when
+	 * the symbol is visible AND declares at least one @c default.
+	 * A hidden no-prompt int falls back to the zero default and
+	 * python drops it from every output, so mirror that.
+	 */
+	return s->visible && has_defaults(s);
 }
 
 /*

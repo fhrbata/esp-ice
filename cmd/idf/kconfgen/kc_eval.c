@@ -254,19 +254,26 @@ static void pass_sym_dep(struct kc_ctx *ctx)
 
 	/* Pass 2b: walk menu tree; for each menu that owns a symbol,
 	 * seed effective_dep from the FIRST encountered ctx_dep, then
-	 * skip on subsequent encounters. */
-	struct kmenu *stack[256];
-	int sp = 0;
+	 * skip on subsequent encounters.  The walk stack grows
+	 * dynamically via ALLOC_GROW -- ESP-IDF's menu tree has a few
+	 * thousand nodes and a fixed 256-slot stack silently lost
+	 * nodes past the cap, leaving their symbols' effective_dep
+	 * NULL and thus eval_bool(NULL)=1 falsely marking them visible. */
+	struct kmenu **stack = NULL;
+	size_t sp = 0, salloc = 0;
+	ALLOC_GROW(stack, sp + 1, salloc);
 	stack[sp++] = ctx->root;
 	while (sp) {
 		struct kmenu *m = stack[--sp];
 		if (m->sym && !m->sym->effective_dep && m->ctx_dep &&
 		    (m->kind == KM_SYM || m->kind == KM_CHOICE))
 			m->sym->effective_dep = expr_clone(m->ctx_dep);
-		for (struct kmenu *c = m->children; c; c = c->next)
-			if (sp < 256)
-				stack[sp++] = c;
+		for (struct kmenu *c = m->children; c; c = c->next) {
+			ALLOC_GROW(stack, sp + 1, salloc);
+			stack[sp++] = c;
+		}
 	}
+	free(stack);
 
 	/* Pass 2c: AND in each symbol's own KP_DEPENDS properties
 	 * exactly once, iterating symbol-by-symbol. */
@@ -413,17 +420,20 @@ static void link_choice_members(struct kmenu *m, struct ksym *choice_sym)
 
 static void pass_link_choices(struct kc_ctx *ctx)
 {
-	struct kmenu *stack[256];
-	int sp = 0;
+	struct kmenu **stack = NULL;
+	size_t sp = 0, salloc = 0;
+	ALLOC_GROW(stack, sp + 1, salloc);
 	stack[sp++] = ctx->root;
 	while (sp) {
 		struct kmenu *m = stack[--sp];
 		if (m->kind == KM_CHOICE && m->sym)
 			link_choice_members(m, m->sym);
-		for (struct kmenu *c = m->children; c; c = c->next)
-			if (sp < 256)
-				stack[sp++] = c;
+		for (struct kmenu *c = m->children; c; c = c->next) {
+			ALLOC_GROW(stack, sp + 1, salloc);
+			stack[sp++] = c;
+		}
 	}
+	free(stack);
 }
 
 /* ================================================================== */
@@ -454,6 +464,27 @@ static int enforce_choice(struct kc_ctx *ctx, struct ksym *choice_sym)
 	}
 	if (!n_members)
 		return 0;
+
+	/*
+	 * When the choice group itself is hidden (its depends-on chain
+	 * is false), every member is "n" -- no winner is selected, no
+	 * default applies.  Python kconfgen then omits the members
+	 * entirely from writable output.  Skipping the member loop
+	 * below also means they stay at whatever zero value the per-
+	 * symbol pass left them with, which is what we want.
+	 */
+	if (!choice_sym->visible) {
+		int changed = 0;
+		for (int i = 0; i < n_members; i++) {
+			if (!members[i]->cur_val ||
+			    strcmp(members[i]->cur_val, "n")) {
+				free(members[i]->cur_val);
+				members[i]->cur_val = sbuf_strdup("n");
+				changed = 1;
+			}
+		}
+		return changed;
+	}
 
 	/* Rule 1: last user-set "y" wins. */
 	for (int i = n_members - 1; i >= 0; i--) {
@@ -538,7 +569,17 @@ static int fixpoint_step(struct kc_ctx *ctx)
 		 * reference members still read a sane value.
 		 */
 		if (s->choice_parent) {
-			int new_visible = eval_bool(s->effective_dep);
+			/*
+			 * A choice member inherits the choice's visibility:
+			 * if the choice group is hidden (its `depends on`
+			 * chain is false), none of its members should be
+			 * visible either.  Ice's menu tree doesn't
+			 * automatically propagate the choice's KP_DEPENDS
+			 * into the member's own effective_dep, so gate it
+			 * here explicitly.
+			 */
+			int new_visible = eval_bool(s->effective_dep) &&
+					  s->choice_parent->visible;
 			if (s->visible != new_visible) {
 				s->visible = new_visible;
 				changed = 1;
@@ -551,7 +592,17 @@ static int fixpoint_step(struct kc_ctx *ctx)
 		char *new_val = NULL;
 		if (s->user_set && new_visible) {
 			new_val = sbuf_strdup(s->cur_val ? s->cur_val : "");
-		} else {
+		} else if (new_visible) {
+			/*
+			 * Defaults only apply when the symbol is visible.
+			 * Python kconfgen's semantics: a symbol whose
+			 * depends-on chain is false is forced to the type's
+			 * zero value regardless of what @c default lines say.
+			 * Skipping this gate would turn bool symbols like
+			 * CONFIG_SECURE_SIGNED_APPS (`default y` + a `depends
+			 * on` that's currently false) into "y", when they
+			 * should be "n" and thus not emitted at all.
+			 */
 			for (struct kprop *p = s->props; p; p = p->next) {
 				if (p->kind != KP_DEFAULT)
 					continue;
@@ -560,27 +611,27 @@ static int fixpoint_step(struct kc_ctx *ctx)
 				new_val = default_value(p->expr, s->type);
 				break;
 			}
-			if (!new_val) {
-				const char *zero;
-				switch (s->type) {
-				case KS_BOOL:
-					zero = "n";
-					break;
-				case KS_INT:
-					zero = "0";
-					break;
-				case KS_HEX:
-					zero = "0x0";
-					break;
-				case KS_FLOAT:
-					zero = "0.0";
-					break;
-				default:
-					zero = "";
-					break;
-				}
-				new_val = sbuf_strdup(zero);
+		}
+		if (!new_val) {
+			const char *zero;
+			switch (s->type) {
+			case KS_BOOL:
+				zero = "n";
+				break;
+			case KS_INT:
+				zero = "0";
+				break;
+			case KS_HEX:
+				zero = "0x0";
+				break;
+			case KS_FLOAT:
+				zero = "0.0";
+				break;
+			default:
+				zero = "";
+				break;
 			}
+			new_val = sbuf_strdup(zero);
 		}
 
 		/*
