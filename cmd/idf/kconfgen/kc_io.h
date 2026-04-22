@@ -59,4 +59,24 @@ void kc_load_config(struct kc_ctx *ctx, const char *path);
  */
 void kc_write_config(const struct kc_ctx *ctx, const char *path);
 
+/**
+ * @brief Write the resolved symbol table as a C header (sdkconfig.h).
+ *
+ *   bool  = y    -> #define CONFIG_X 1
+ *   bool  = n    -> (omitted; matches python kconfgen)
+ *   int / hex    -> #define CONFIG_X value
+ *   string       -> #define CONFIG_X "value"  (escaped)
+ *   option env=  -> (skipped)
+ */
+void kc_write_header(const struct kc_ctx *ctx, const char *path);
+
+/**
+ * @brief Write the resolved symbol table as a cmake include file.
+ *
+ *   set(CONFIG_X "value") for every non-env symbol (including bool-y
+ *     as "y" and bool-n as ""), followed by a
+ *   set(CONFIGS_LIST CONFIG_A;CONFIG_B;...) line enumerating them.
+ */
+void kc_write_cmake(const struct kc_ctx *ctx, const char *path);
+
 #endif /* KC_IO_H */

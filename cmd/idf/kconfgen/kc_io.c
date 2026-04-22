@@ -261,3 +261,124 @@ void kc_write_config(const struct kc_ctx *ctx, const char *path)
 
 	sbuf_release(&out);
 }
+
+/* ================================================================== */
+/*  Header writer (sdkconfig.h)                                       */
+/* ================================================================== */
+
+/* Emit a #define line for the symbol in C-header form.  bool-n is
+ * deliberately omitted (matching python kconfgen) rather than
+ * #undef'd: absence of a define lets user code test with
+ * `#if defined(CONFIG_X)`. */
+static void emit_header_symbol(struct sbuf *out, const struct ksym *s)
+{
+	const char *val = s->cur_val ? s->cur_val : "";
+
+	if (s->type == KS_BOOL) {
+		if (!strcmp(val, "y"))
+			sbuf_addf(out, "#define %s%s 1\n", CONFIG_PREFIX,
+				  s->name);
+		return;
+	}
+	if (s->type == KS_STRING) {
+		sbuf_addf(out, "#define %s%s ", CONFIG_PREFIX, s->name);
+		emit_quoted(out, val);
+		sbuf_addch(out, '\n');
+		return;
+	}
+	/* int / hex / float / unknown: emit raw. */
+	sbuf_addf(out, "#define %s%s %s\n", CONFIG_PREFIX, s->name, val);
+}
+
+void kc_write_header(const struct kc_ctx *ctx, const char *path)
+{
+	struct sbuf out = SBUF_INIT;
+
+	sbuf_addstr(&out, "/*\n"
+			  " * Automatically generated file. DO NOT EDIT.\n"
+			  " * Espressif IoT Development Framework (ESP-IDF)  "
+			  "Configuration Header\n"
+			  " */\n"
+			  "#pragma once\n");
+
+	for (size_t i = 0; i < ctx->symlist.nr; i++) {
+		struct ksym *s = smap_get(&ctx->symtab, ctx->symlist.v[i]);
+		if (!s)
+			continue;
+		if (is_pseudo_sym(s))
+			continue;
+		if (sym_has_env(s))
+			continue;
+		emit_header_symbol(&out, s);
+	}
+
+	if (write_file_atomic(path, out.buf, out.len) < 0)
+		die_errno("cannot write '%s'", path);
+
+	sbuf_release(&out);
+}
+
+/* ================================================================== */
+/*  CMake writer (sdkconfig.cmake)                                    */
+/* ================================================================== */
+
+/* In cmake values are ALL quoted strings -- bool-y -> "y", bool-n ->
+ * "" (empty), int/hex -> quoted numeric string.  Matches python
+ * kconfgen's actual output. */
+static void emit_cmake_symbol(struct sbuf *out, const struct ksym *s)
+{
+	const char *val = s->cur_val ? s->cur_val : "";
+	const char *effective = val;
+
+	if (s->type == KS_BOOL && strcmp(val, "y") != 0)
+		effective = ""; /* bool-n renders as empty string */
+
+	sbuf_addf(out, "set(%s%s ", CONFIG_PREFIX, s->name);
+	emit_quoted(out, effective);
+	sbuf_addstr(out, ")\n");
+}
+
+void kc_write_cmake(const struct kc_ctx *ctx, const char *path)
+{
+	struct sbuf out = SBUF_INIT;
+
+	/* Note the SINGLE space before "Configuration" here -- that's
+	 * how python kconfgen renders the cmake banner, unlike the
+	 * config / header banners which use a double space. */
+	sbuf_addstr(&out, "#\n"
+			  "# Automatically generated file. DO NOT EDIT.\n"
+			  "# Espressif IoT Development Framework (ESP-IDF) "
+			  "Configuration cmake include file\n"
+			  "#\n");
+
+	struct sbuf list = SBUF_INIT;
+	int first = 1;
+
+	for (size_t i = 0; i < ctx->symlist.nr; i++) {
+		struct ksym *s = smap_get(&ctx->symtab, ctx->symlist.v[i]);
+		if (!s)
+			continue;
+		if (is_pseudo_sym(s))
+			continue;
+		if (sym_has_env(s))
+			continue;
+		emit_cmake_symbol(&out, s);
+
+		if (!first)
+			sbuf_addch(&list, ';');
+		sbuf_addf(&list, "%s%s", CONFIG_PREFIX, s->name);
+		first = 0;
+	}
+
+	/* Trailing enumeration, unquoted, semicolon-separated.  Python
+	 * kconfgen does NOT emit a newline after this final line, so we
+	 * don't either -- any diff-based test would otherwise trip on a
+	 * one-byte difference. */
+	sbuf_addf(&out, "set(CONFIGS_LIST %s)", list.buf);
+	sbuf_release(&list);
+
+	if (write_file_atomic(path, out.buf, out.len) < 0)
+		die_errno("cannot write '%s'", path);
+
+	sbuf_release(&out);
+}

@@ -62,7 +62,8 @@ static const struct option cmd_idf_kconfgen_opts[] = {
     OPT_STRING_LIST(0, "defaults", &opt_defaults, "path",
 		    "defaults file (repeatable; later wins)", NULL),
     OPT_STRING_LIST('o', "output", &opt_output, "fmt:path",
-		    "emit fmt (config) to path (repeatable)", NULL),
+		    "emit fmt (config|header|cmake) to path (repeatable)",
+		    NULL),
     OPT_BOOL(0, "dump-ast", &opt_dump_ast, "parse and dump the AST to stdout"),
     OPT_BOOL(0, "dump-symbols", &opt_dump_symbols,
 	     "evaluate and dump resolved symbol values to stdout"),
@@ -133,13 +134,17 @@ int cmd_idf_kconfgen(int argc, const char **argv)
 			const char *fmt;
 			const char *path;
 			split_output_spec(opt_output.v[i], &fmt, &path);
-			if (!strcmp(fmt, "config")) {
+			if (!strcmp(fmt, "config"))
 				kc_write_config(&ctx, path);
-			} else {
-				die("--output: unsupported format '%s' (only "
-				    "'config' is implemented in this phase)",
+			else if (!strcmp(fmt, "header"))
+				kc_write_header(&ctx, path);
+			else if (!strcmp(fmt, "cmake"))
+				kc_write_cmake(&ctx, path);
+			else
+				die("--output: unsupported format '%s' "
+				    "(expected "
+				    "config, header, or cmake)",
 				    fmt);
-			}
 		}
 	}
 
