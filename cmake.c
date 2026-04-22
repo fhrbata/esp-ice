@@ -212,27 +212,13 @@ void setup_project(enum project_need needs)
 	config_add(&config, "_project.configured", "1", CONFIG_SCOPE_PROJECT);
 
 	/*
-	 * PROJECT_BUILT: stat `<build>/.ice/built`.  A future
-	 * `core.build_always = true` branch will auto-run ninja here
-	 * instead of dying; for now the decoupled default stands.
-	 */
-	if (needs >= PROJECT_BUILT) {
-		sbuf_reset(&marker);
-		sbuf_addf(&marker, "%s/.ice/built", build_dir);
-		if (access(marker.buf, F_OK) != 0) {
-			hint("run @b{ice build} first");
-			sbuf_release(&marker);
-			die("project not built");
-		}
-		config_add(&config, "_project.built", "1",
-			   CONFIG_SCOPE_PROJECT);
-	}
-
-	/*
 	 * Runtime-only state keys consumed by @c process_run_progress
 	 * (log-dir) and @c ice log (log-dir).  Written at PROJECT scope
 	 * -- the same scope config_load_profile() just cleared -- so
-	 * config_add() yields single-value semantics.
+	 * config_add() yields single-value semantics.  Set before the
+	 * PROJECT_BUILT branch so @c project_build() (the
+	 * @c core.build-always path) logs into the profile's log-dir,
+	 * not the @c ~/.ice/logs fallback.
 	 */
 	{
 		struct sbuf log_dir = SBUF_INIT;
@@ -241,6 +227,40 @@ void setup_project(enum project_need needs)
 		config_add(&config, "_project.log-dir", log_dir.buf,
 			   CONFIG_SCOPE_PROJECT);
 		sbuf_release(&log_dir);
+	}
+
+	/*
+	 * PROJECT_BUILT: @c core.build-always = true opts into the
+	 * idf.py-style coupled flow -- always run ninja, regardless of
+	 * the @c .ice/built marker.  Ninja's own up-to-date check keeps
+	 * no-op rebuilds cheap, and the marker reflects a fresh build
+	 * rather than whatever stale state was on disk.  Default-false
+	 * keeps the decoupled shape where @b{ice flash} / @b{ice size}
+	 * / ... refuse to act on an unbuilt project.
+	 */
+	if (needs >= PROJECT_BUILT) {
+		int build_always = 0;
+
+		config_get_bool("core.build-always", &build_always);
+		if (build_always) {
+			int rc = project_build();
+
+			if (rc != 0) {
+				sbuf_release(&marker);
+				exit(rc);
+			}
+		} else {
+			sbuf_reset(&marker);
+			sbuf_addf(&marker, "%s/.ice/built", build_dir);
+			if (access(marker.buf, F_OK) != 0) {
+				hint("run @b{ice build} first, or set "
+				     "@b{core.build-always = true}");
+				sbuf_release(&marker);
+				die("project not built");
+			}
+		}
+		config_add(&config, "_project.built", "1",
+			   CONFIG_SCOPE_PROJECT);
 	}
 
 	sbuf_release(&marker);
