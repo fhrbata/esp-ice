@@ -100,20 +100,14 @@ static void build_fail_filter(struct sbuf *out, const char *log, size_t len)
 		sbuf_add(out, log, len);
 }
 
-int cmd_build(int argc, const char **argv)
+int project_build(void)
 {
-	const char *build_dir;
+	const char *build_dir = config_get("_project.build-dir");
 	struct process proc = PROCESS_INIT;
 	const char *cmake_argv[6];
 	struct sbuf lock_path = SBUF_INIT;
 	struct sbuf marker = SBUF_INIT;
 	int rc;
-
-	argc = parse_options(argc, argv, &cmd_build_desc);
-	if (argc > 0)
-		die("too many arguments");
-
-	build_dir = config_get("_project.build-dir");
 
 	/*
 	 * `<build>/.ice/lock` serialises any writer that mutates the
@@ -153,4 +147,13 @@ int cmd_build(int argc, const char **argv)
 	sbuf_release(&lock_path);
 	sbuf_release(&marker);
 	return rc;
+}
+
+int cmd_build(int argc, const char **argv)
+{
+	argc = parse_options(argc, argv, &cmd_build_desc);
+	if (argc > 0)
+		die("too many arguments");
+
+	return project_build();
 }

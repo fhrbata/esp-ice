@@ -155,6 +155,20 @@ extern const struct cmd_desc ice_root_desc;
  */
 void setup_project(enum project_need needs);
 
+/**
+ * @brief Run the default build target for the active profile.
+ *
+ * Acquires @c <build>/.ice/lock, invokes @c cmake --build via
+ * @c process_run_progress, and on success touches @c <build>/.ice/built.
+ * Returns the child's exit code (or -1 on spawn / I-O failure).
+ *
+ * Shared by @c cmd_build and the @c core.build-always branch of
+ * @c setup_project.  Assumes the caller already brought the process to
+ * @c PROJECT_CONFIGURED (so @c _project.build-dir and
+ * @c _project.log-dir are populated).
+ */
+int project_build(void);
+
 /** Top-level command descriptors, indexed by ice_subs[] in ice.c. */
 extern const struct cmd_desc cmd_build_desc;
 extern const struct cmd_desc cmd_clean_desc;
