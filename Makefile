@@ -151,6 +151,7 @@ LIB_SRCS := \
 	cmd/repo/list/list.c \
 	cmd/repo/checkout/checkout.c \
 	cmd/repo/info/info.c \
+	cmd/size/size.c \
 	cmd/status/status.c \
 	cmd/target/target.c \
 	cmd/monitor/monitor.c \
