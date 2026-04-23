@@ -1272,16 +1272,15 @@ static char *resolve_rsource_path(const char *cur_path, const char *raw)
 {
 	if (raw[0] == '/' || raw[0] == '~')
 		return sbuf_strdup(raw);
-#ifdef _WIN32
-	if (raw[0] && raw[1] == ':') /* drive-letter absolute */
+	/* Drive-letter absolute path (Windows); harmless check on POSIX
+	 * where "<letter>:..." is virtually nonexistent. */
+	if (isalpha((unsigned char)raw[0]) && raw[1] == ':')
 		return sbuf_strdup(raw);
-#endif
+
 	const char *slash = strrchr(cur_path, '/');
-#ifdef _WIN32
 	const char *bslash = strrchr(cur_path, '\\');
 	if (bslash && (!slash || bslash > slash))
 		slash = bslash;
-#endif
 	if (!slash)
 		return sbuf_strdup(raw);
 

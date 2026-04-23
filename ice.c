@@ -42,8 +42,13 @@ static int try_expand_alias(int *argcp, const char ***argvp)
 		return 0;
 
 	if (value[0] == '!') {
-		int rc = run_shell(value + 1);
+		const char *argv[] = {value + 1, NULL};
+		struct process proc = PROCESS_INIT;
+		int rc;
 
+		proc.argv = argv;
+		proc.use_shell = 1;
+		rc = process_run(&proc);
 		exit(rc < 0 ? EXIT_FAILURE : rc);
 	}
 

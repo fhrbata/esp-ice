@@ -110,8 +110,15 @@ int process_start(struct process *proc)
 			_exit(EXIT_FAILURE);
 		}
 
-		execvp(proc->argv[0], (char *const *)proc->argv);
-		err_errno("execvp: '%s'", proc->argv[0]);
+		if (proc->use_shell) {
+			const char *sh_argv[] = {"/bin/sh", "-c", proc->argv[0],
+						 NULL};
+			execvp(sh_argv[0], (char *const *)sh_argv);
+			err_errno("execvp: '%s'", sh_argv[0]);
+		} else {
+			execvp(proc->argv[0], (char *const *)proc->argv);
+			err_errno("execvp: '%s'", proc->argv[0]);
+		}
 		_exit(127);
 	}
 
@@ -234,13 +241,4 @@ void delay_ms(uint32_t ms)
 	ts.tv_sec = (time_t)(ms / 1000u);
 	ts.tv_nsec = (long)((ms % 1000u) * 1000000u);
 	nanosleep(&ts, NULL);
-}
-
-int run_shell(const char *cmd)
-{
-	const char *argv[] = {"/bin/sh", "-c", cmd, NULL};
-	struct process proc = PROCESS_INIT;
-
-	proc.argv = argv;
-	return process_run(&proc);
 }

@@ -123,7 +123,12 @@ int process_start(struct process *proc)
 	STARTUPINFOW si;
 	PROCESS_INFORMATION pi;
 
-	wcmdl = build_cmdline(proc->argv);
+	if (proc->use_shell) {
+		const char *sh_argv[] = {"cmd.exe", "/c", proc->argv[0], NULL};
+		wcmdl = build_cmdline(sh_argv);
+	} else {
+		wcmdl = build_cmdline(proc->argv);
+	}
 	if (!wcmdl)
 		return -1;
 
@@ -298,15 +303,6 @@ unsigned long long mono_ms(void)
 }
 
 void delay_ms(uint32_t ms) { Sleep((DWORD)ms); }
-
-int run_shell(const char *cmd)
-{
-	const char *argv[] = {"cmd.exe", "/c", cmd, NULL};
-	struct process proc = PROCESS_INIT;
-
-	proc.argv = argv;
-	return process_run(&proc);
-}
 
 const char *process_exe(void)
 {

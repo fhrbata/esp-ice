@@ -340,12 +340,42 @@ out:
 
 /**
  * @brief UTF-8-aware access() replacement for Windows.
+ *
+ * The CRT's _waccess does not implement X_OK; we approximate it by
+ * checking whether the file exists either at @p fn or with one of the
+ * common PATHEXT extensions appended (@c .exe, @c .cmd, @c .bat).
+ * That covers everything users put in @c core.pager or @c ice-<name>
+ * in practice.  Other mode bits are forwarded unchanged.
  */
 int access_w(const char *fn, int mode)
 {
-	wchar_t *wfn = mbs_to_wcs(fn);
+	wchar_t *wfn;
 	int rv;
 
+	if (mode & X_OK) {
+		static const char *const exts[] = {"", ".exe", ".cmd", ".bat",
+						   NULL};
+		struct sbuf sb = SBUF_INIT;
+		int found = 0;
+
+		for (int i = 0; exts[i]; i++) {
+			sbuf_reset(&sb);
+			sbuf_addstr(&sb, fn);
+			sbuf_addstr(&sb, exts[i]);
+			wfn = mbs_to_wcs(sb.buf);
+			if (!wfn)
+				continue;
+			if (_waccess(wfn, F_OK) == 0)
+				found = 1;
+			free(wfn);
+			if (found)
+				break;
+		}
+		sbuf_release(&sb);
+		return found ? 0 : -1;
+	}
+
+	wfn = mbs_to_wcs(fn);
 	if (!wfn) {
 		errno = ENOMEM;
 		return -1;
@@ -428,6 +458,77 @@ int open_w(const char *path, int flags, int mode)
 	rv = _wopen(wpath, flags, mode);
 	free(wpath);
 	return rv;
+}
+
+/**
+ * @brief UTF-8-aware chdir() replacement for Windows.
+ */
+int chdir_w(const char *path)
+{
+	wchar_t *wpath = mbs_to_wcs(path);
+	int rv;
+
+	if (!wpath) {
+		errno = ENOMEM;
+		return -1;
+	}
+
+	rv = _wchdir(wpath);
+	free(wpath);
+	return rv;
+}
+
+/**
+ * @brief chmod() no-op for Windows.
+ *
+ * The Win32 CRT's _chmod only honours read/write bits and does not
+ * know about POSIX execute permissions at all.  Callers of chmod()
+ * in tar extraction and similar are preserving POSIX mode bits that
+ * have no meaningful Win32 equivalent, so the shim is intentionally
+ * a no-op returning success -- matching the same "graceful decay"
+ * policy as symlink_w().
+ */
+int chmod_w(const char *path, int mode)
+{
+	(void)path;
+	(void)mode;
+	return 0;
+}
+
+/**
+ * @brief UTF-8-aware getcwd() replacement for Windows.
+ *
+ * The CRT's _getcwd encodes the result in the system ANSI code page;
+ * we need UTF-8 to match the rest of the codebase.  Call _wgetcwd and
+ * convert to UTF-8 via wcs_to_mbs.  Supports the POSIX-conventional
+ * caller-provided buffer form (the NULL-buf allocating extension is
+ * not needed by any ice call site).
+ */
+char *getcwd_w(char *buf, size_t size)
+{
+	wchar_t wbuf[4096];
+	char *utf8;
+	size_t len;
+
+	if (!_wgetcwd(wbuf, (int)(sizeof(wbuf) / sizeof(wbuf[0]))))
+		return NULL;
+
+	utf8 = wcs_to_mbs(wbuf);
+	if (!utf8) {
+		errno = ENOMEM;
+		return NULL;
+	}
+
+	len = strlen(utf8);
+	if (len + 1 > size) {
+		free(utf8);
+		errno = ERANGE;
+		return NULL;
+	}
+
+	memcpy(buf, utf8, len + 1);
+	free(utf8);
+	return buf;
 }
 
 /*

@@ -25,8 +25,6 @@
  * No partial / incremental modes; for a soft rebuild use @b{ice clean}
  * + @b{ice build}, which keeps the cmake configuration intact.
  */
-#include <dirent.h>
-
 #include "ice.h"
 
 /* ------------------------------------------------------------------ */
@@ -233,6 +231,23 @@ static char *resolve_idf_arg(const char *arg)
 	return sbuf_detach(&p);
 }
 
+struct wipe_ctx {
+	const char *build_dir;
+	int n_entries;
+};
+
+static int wipe_check_entry(const char *name, void *ud)
+{
+	struct wipe_ctx *ctx = ud;
+
+	ctx->n_entries++;
+	if (!strcmp(name, "CMakeLists.txt") || !strcmp(name, ".git") ||
+	    !strcmp(name, ".svn"))
+		die("refusing to clean '%s': contains '%s'", ctx->build_dir,
+		    name);
+	return 0;
+}
+
 /**
  * Wipe the contents of @p build_dir.
  *
@@ -242,32 +257,15 @@ static char *resolve_idf_arg(const char *arg)
  */
 static int wipe_build_dir(const char *build_dir)
 {
-	DIR *dir;
-	struct dirent *de;
-	int n_entries = 0;
+	struct wipe_ctx ctx = {.build_dir = build_dir};
 
 	if (access(build_dir, F_OK) != 0)
 		return 0;
 
-	dir = opendir(build_dir);
-	if (!dir)
+	if (dir_foreach(build_dir, wipe_check_entry, &ctx) < 0)
 		die_errno("cannot open '%s'", build_dir);
 
-	while ((de = readdir(dir)) != NULL) {
-		if (!strcmp(de->d_name, ".") || !strcmp(de->d_name, ".."))
-			continue;
-		n_entries++;
-		if (!strcmp(de->d_name, "CMakeLists.txt") ||
-		    !strcmp(de->d_name, ".git") ||
-		    !strcmp(de->d_name, ".svn")) {
-			closedir(dir);
-			die("refusing to clean '%s': contains '%s'", build_dir,
-			    de->d_name);
-		}
-	}
-	closedir(dir);
-
-	if (n_entries == 0)
+	if (ctx.n_entries == 0)
 		return 0;
 
 	return rmtree(build_dir, global_verbose) < 0 ? -1 : 0;

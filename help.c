@@ -10,10 +10,6 @@
  */
 #include "ice.h"
 
-#ifndef _WIN32
-#include <fcntl.h>
-#endif
-
 #define INDENT "    "
 #define MIN_WIDTH 40
 
@@ -38,14 +34,17 @@ static int detect_width(void)
 		if (isatty(fds[i]))
 			return term_width(fds[i]);
 
-#ifndef _WIN32
-	int fd = open("/dev/tty", O_RDONLY);
-	if (fd >= 0) {
-		int w = term_width(fd);
-		close(fd);
+	/*
+	 * All std* fds are redirected.  Try the controlling terminal
+	 * directly -- /dev/tty on POSIX, which fopen returns -1/NULL for
+	 * on Windows (no such path), so the call is a safe no-op there.
+	 */
+	FILE *tty = fopen("/dev/tty", "r");
+	if (tty) {
+		int w = term_width(fileno(tty));
+		fclose(tty);
 		return w;
 	}
-#endif
 
 	cols = getenv("COLUMNS");
 	if (cols) {

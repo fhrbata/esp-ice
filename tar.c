@@ -210,10 +210,11 @@ static int is_safe_name(const char *name)
 		return 0;
 	if (name[0] == '/' || name[0] == '\\')
 		return 0;
-#ifdef _WIN32
+	/* Reject drive-letter absolute paths ("C:foo") on all platforms:
+	 * they'd escape dest on Windows, and no POSIX user has a tar
+	 * entry legitimately starting with "<letter>:". */
 	if (isalpha((unsigned char)name[0]) && name[1] == ':')
 		return 0;
-#endif
 
 	const char *p = name;
 	while (*p) {
@@ -294,7 +295,7 @@ static int extract_symlink(const char *dest, const char *name,
 
 	sbuf_addf(&path, "%s/%s", dest, name);
 	mkdirp_for_file(path.buf);
-	remove(path.buf); /* so re-extraction isn't blocked by EEXIST */
+	unlink(path.buf); /* so re-extraction isn't blocked by EEXIST */
 	rc = symlink(target, path.buf);
 	sbuf_release(&path);
 	return rc;
@@ -309,7 +310,7 @@ static int extract_hardlink(const char *dest, const char *name,
 	sbuf_addf(&src, "%s/%s", dest, target);
 	sbuf_addf(&dst, "%s/%s", dest, name);
 	mkdirp_for_file(dst.buf);
-	remove(dst.buf);
+	unlink(dst.buf);
 	rc = link(src.buf, dst.buf);
 	sbuf_release(&src);
 	sbuf_release(&dst);

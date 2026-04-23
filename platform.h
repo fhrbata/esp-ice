@@ -80,6 +80,7 @@ typedef ptrdiff_t ssize_t;
  * open macros -- because MSYS2's headers declare their own versions
  * and the macros would conflict with those prototypes.
  */
+#include <direct.h>
 #include <fcntl.h>
 #include <io.h>
 
@@ -91,6 +92,9 @@ int unlink_w(const char *);
 int rmdir_w(const char *);
 int rename_w(const char *oldp, const char *newp);
 int open_w(const char *path, int flags, int mode);
+int chdir_w(const char *path);
+int chmod_w(const char *path, int mode);
+char *getcwd_w(char *buf, size_t size);
 
 /*
  * POSIX symlink(2) / link(2) shims.  symlink_w is a no-op that
@@ -103,7 +107,14 @@ int open_w(const char *path, int flags, int mode);
 int symlink_w(const char *target, const char *linkpath);
 int link_w(const char *target, const char *linkpath);
 
+/*
+ * X_OK is not a meaningful mode for the Win32 _access() CRT call, but
+ * it is the semantic POSIX callers want ("can I spawn this?").  We
+ * define the POSIX bit here and let access_w() interpret it by trying
+ * the bare path plus a small set of PATHEXT extensions.
+ */
 #define F_OK 0
+#define X_OK 1
 #define access access_w
 #define fopen fopen_w
 #define mkdir mkdir_w
@@ -113,8 +124,14 @@ int link_w(const char *target, const char *linkpath);
 #define symlink symlink_w
 #define link link_w
 #define open open_w
+#define chdir chdir_w
+#define chmod chmod_w
 #define isatty _isatty
 #define putenv _putenv
+#define fileno _fileno
+#define dup _dup
+#define dup2 _dup2
+#define getcwd getcwd_w
 #define STDIN_FILENO 0
 #define STDOUT_FILENO 1
 #define STDERR_FILENO 2
@@ -128,6 +145,15 @@ int link_w(const char *target, const char *linkpath);
 /** PATH entry separator (';' on Windows, ':' on POSIX). */
 #define PATH_SEP_CHAR ';'
 
+/**
+ * Default state of @c use_vt (ANSI escape-sequence rendering).
+ * Windows consoles may or may not have VT processing enabled at
+ * startup; leave the flag off and let the console bootstrap code
+ * turn it on after it succeeds in enabling the mode.  POSIX
+ * terminals always render ANSI, so default on there.
+ */
+#define PLATFORM_ANSI_VT_DEFAULT 0
+
 #else /* POSIX */
 
 /** End-of-line sequence (LF on POSIX). */
@@ -139,10 +165,17 @@ int link_w(const char *target, const char *linkpath);
 /** PATH entry separator (';' on Windows, ':' on POSIX). */
 #define PATH_SEP_CHAR ':'
 
+/** POSIX terminals always render ANSI escape sequences. */
+#define PLATFORM_ANSI_VT_DEFAULT 1
+
 #include <unistd.h>
 
 /* putenv exists in libc but is not declared in C99 <stdlib.h>. */
 int putenv(char *);
+
+/* fileno exists in libc but is hidden from C99 <stdio.h> without
+ * _POSIX_C_SOURCE; platform.h maps it to _fileno on Windows. */
+int fileno(FILE *stream);
 
 #endif /* _WIN32 */
 
@@ -153,16 +186,6 @@ int putenv(char *);
  * Implementation lives next to mono_ms() in platform/{posix,win}/process.c.
  */
 void delay_ms(uint32_t ms);
-
-/**
- * @brief Run @p cmd through the platform shell and return its exit code.
- *
- * POSIX: @c /bin/sh -c <cmd>.  Windows: @c cmd.exe /c <cmd>.  Absorbs
- * the #ifdef so callers (shell aliases, pager piping, ...) stay
- * platform-agnostic.  Returns the child's exit code, or a negative
- * value on spawn failure (same convention as process_run()).
- */
-int run_shell(const char *cmd);
 
 /**
  * @brief Get terminal width for a given file descriptor.
@@ -291,6 +314,14 @@ struct process {
 	unsigned pipe_out : 1;	/**< Create pipe for stdout. */
 	unsigned pipe_err : 1;	/**< Create pipe for stderr. */
 	unsigned merge_err : 1; /**< Redirect stderr to stdout. */
+	/**
+	 * If set, argv[0] is a shell command line executed via the
+	 * platform shell (@c /bin/sh @c -c on POSIX, @c cmd.exe @c /c on
+	 * Windows); other argv entries are ignored.  Use this for
+	 * spawning user-configurable commands (pagers, aliases, editors)
+	 * without hand-splitting the command string.
+	 */
+	unsigned use_shell : 1;
 };
 
 /** Static initializer for struct process. */

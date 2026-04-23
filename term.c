@@ -13,23 +13,13 @@
  */
 #include "ice.h"
 
-/* fileno() is POSIX, not ISO C99, so not declared by <stdio.h> under
- * -std=c99 -pedantic.  Declare it explicitly (it's always present in
- * libc).  Same pattern as putenv() in platform.h. */
-#ifndef _WIN32
-int fileno(FILE *stream);
-#endif
-
 int use_color;
 int use_vt;
 
 void color_init(int fd)
 {
 	use_color = isatty(fd);
-#ifndef _WIN32
-	/* POSIX terminals always support ANSI escape codes. */
-	use_vt = 1;
-#endif
+	use_vt = PLATFORM_ANSI_VT_DEFAULT;
 }
 
 int use_color_for(FILE *stream)
