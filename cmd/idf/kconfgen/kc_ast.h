@@ -123,6 +123,16 @@ struct ksym {
 				     * two  differ when the choice body forward-
 				     *   references members via
 				     *   `default SYM if COND`. */
+	struct kmenu *decl_menu;    /**< First @c KM_SYM / @c KM_CHOICE menu
+				     *   node that declares this sym.  Used to
+				     *   walk the ancestor chain for the
+				     *   @c `visible if` guards python folds into
+				     *   prompt visibility -- an `X` declared
+				     *   inside `menu ... visible if 0` behaves
+				     *   like a promptless symbol (no
+				     *   `is not set` line in sdkconfig for
+				     *   default-zero bools).  Populated by
+				     *   @c pass_link_choices. */
 
 	/*
 	 * Diagnostic-only location of the first @c config / @c menuconfig

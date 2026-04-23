@@ -471,6 +471,9 @@ static void pass_link_choices(struct kc_ctx *ctx)
 			m->sym->choice_menu = m;
 			link_choice_members(m, m->sym);
 		}
+		if ((m->kind == KM_SYM || m->kind == KM_CHOICE) && m->sym &&
+		    !m->sym->decl_menu)
+			m->sym->decl_menu = m;
 		for (struct kmenu *c = m->children; c; c = c->next) {
 			ALLOC_GROW(stack, sp + 1, salloc);
 			stack[sp++] = c;

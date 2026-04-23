@@ -462,8 +462,32 @@ static void emit_hex_for_cmake(struct sbuf *out, const char *val)
  * symbol behaves like a promptless bool and we should apply the
  * no-prompt emit rules (bool: emit only when "y").
  */
+/*
+ * Walk @p m's ancestor chain and return 0 if any enclosing menu's
+ * @c `visible if` expression currently evaluates false.  Python folds
+ * a parent menu's @c visible_if into the prompts of every child
+ * symbol/choice, so a `config X` declared inside
+ * `menu ... visible if 0` becomes prompt-invisible and stops emitting
+ * `# CONFIG_X is not set` lines.  Ice keeps @c visible_if on the
+ * menu node and replays that gate here at emit time.
+ */
+static int menu_visible_if_chain_ok(const struct kmenu *m)
+{
+	for (; m; m = m->parent) {
+		if (m->visible_if && !kc_expr_bool(m->visible_if))
+			return 0;
+	}
+	return 1;
+}
+
 static int has_prompt(const struct ksym *s)
 {
+	/* An unconditional prompt still counts as hidden when the
+	 * enclosing menu chain has a `visible if 0` gate.  Check it once
+	 * up front -- a given sym has a single declaration menu, so the
+	 * chain doesn't vary across its KP_PROMPT props. */
+	if (!menu_visible_if_chain_ok(s->decl_menu))
+		return 0;
 	for (const struct kprop *p = s->props; p; p = p->next) {
 		if (p->kind != KP_PROMPT)
 			continue;
@@ -733,12 +757,74 @@ static void walk_config(const struct kmenu *m, struct sbuf *out)
 }
 
 /*
+ * Emit one deprecated-alias line for rename @p r whose NEW target is
+ * @p new_sym.  Bool renames expand to `CONFIG_OLD=y` or
+ * `# CONFIG_OLD is not set` (flipped when the rename is inverted);
+ * string renames preserve quoting; int / hex / float fall through to
+ * `CONFIG_OLD=<value>`.
+ */
+static void emit_deprecated_alias(struct sbuf *out, const struct kc_rename *r,
+				  const struct ksym *new_sym)
+{
+	const char *val = new_sym->cur_val ? new_sym->cur_val : "";
+
+	if (new_sym->type == KS_BOOL) {
+		int y = !strcmp(val, "y");
+		if (r->invert)
+			y = !y;
+		if (y)
+			sbuf_addf(out, "%s%s=y\n", CONFIG_PREFIX, r->old_name);
+		else
+			sbuf_addf(out, "# %s%s is not set\n", CONFIG_PREFIX,
+				  r->old_name);
+		return;
+	}
+	if (new_sym->type == KS_STRING) {
+		sbuf_addf(out, "%s%s=", CONFIG_PREFIX, r->old_name);
+		emit_quoted(out, val);
+		sbuf_addch(out, '\n');
+		return;
+	}
+	sbuf_addf(out, "%s%s=%s\n", CONFIG_PREFIX, r->old_name, val);
+}
+
+struct dep_emit_ctx {
+	const struct kc_ctx *ctx;
+};
+
+static void emit_deprecated_for_sym(struct sbuf *out, const struct ksym *s,
+				    void *ud)
+{
+	const struct dep_emit_ctx *dctx = ud;
+	/* Emit an OLD alias only when the NEW sym is itself emitted --
+	 * otherwise the OLD entry would reference a CONFIG python also
+	 * skipped and break diff-based tooling.  Matches python kconfgen's
+	 * filter. */
+	if (!should_emit(s))
+		return;
+	/* No dedup across menu nodes: a symbol declared twice via
+	 * `# ignore: multiple-definition` (e.g. ESP_WIFI_STATIC_RX_BUFFER_NUM
+	 * in esp_wifi/Kconfig and esp_wifi/remote/Kconfig.wifi_is_remote.in)
+	 * shows up in @c config.node_iter() twice and python emits each
+	 * node's deprecated aliases separately.  Mirror that. */
+	for (size_t i = 0; i < dctx->ctx->n_renames; i++) {
+		const struct kc_rename *r = &dctx->ctx->renames[i];
+		if (strcmp(r->new_name, s->name))
+			continue;
+		emit_deprecated_alias(out, r, s);
+	}
+}
+
+/*
  * Emit the `# Deprecated options for backward compatibility` block
- * that python kconfgen appends after the main body.  Each rename
- * entry echoes the OLD symbol's "effective" value -- i.e. the
- * current value of the NEW symbol, flipped if the rename has `!`.
- * Only bool symbols produce `y` / `# ... is not set`; non-bool NEW
- * types fall through to an `=<value>` alias.
+ * that python kconfgen appends after the main body.  Python's
+ * @c deprecated_config_contents iterates the node tree in declaration
+ * order and, for each symbol that has one or more rename aliases,
+ * emits all of its aliases in rename-file registration order.  The
+ * ordering differs from a naive rename-list walk because the @em new
+ * symbols live scattered across components whose Kconfig files appear
+ * at varying tree positions; ESP-IDF relies on that menu-tree order
+ * for stable sdkconfig diffs across release branches.
  */
 static void emit_deprecated_config(struct sbuf *out, const struct kc_ctx *ctx)
 {
@@ -748,39 +834,10 @@ static void emit_deprecated_config(struct sbuf *out, const struct kc_ctx *ctx)
 	sbuf_addstr(out, "\n"
 			 "# Deprecated options for backward compatibility\n");
 
-	for (size_t i = 0; i < ctx->n_renames; i++) {
-		const struct kc_rename *r = &ctx->renames[i];
-		struct ksym *new_sym = smap_get(&ctx->symtab, r->new_name);
-		if (!new_sym)
-			continue;
-		/* Emit an OLD alias only when the NEW sym is itself
-		 * emitted -- otherwise the OLD entry would reference
-		 * a CONFIG python also skipped and break diff-based
-		 * tooling.  Matches python kconfgen's filter. */
-		if (!should_emit(new_sym))
-			continue;
-		const char *val = new_sym->cur_val ? new_sym->cur_val : "";
+	reset_emit_seen(ctx);
+	struct dep_emit_ctx dctx = {.ctx = ctx};
+	walk_syms(ctx->root, out, emit_deprecated_for_sym, &dctx);
 
-		if (new_sym->type == KS_BOOL) {
-			int y = !strcmp(val, "y");
-			if (r->invert)
-				y = !y;
-			if (y)
-				sbuf_addf(out, "%s%s=y\n", CONFIG_PREFIX,
-					  r->old_name);
-			else
-				sbuf_addf(out, "# %s%s is not set\n",
-					  CONFIG_PREFIX, r->old_name);
-			continue;
-		}
-		if (new_sym->type == KS_STRING) {
-			sbuf_addf(out, "%s%s=", CONFIG_PREFIX, r->old_name);
-			emit_quoted(out, val);
-			sbuf_addch(out, '\n');
-			continue;
-		}
-		sbuf_addf(out, "%s%s=%s\n", CONFIG_PREFIX, r->old_name, val);
-	}
 	sbuf_addstr(out, "# End of deprecated options\n");
 }
 
@@ -1250,6 +1307,40 @@ static void cb_cmake(struct sbuf *out, const struct ksym *s, void *ud)
  * when the rename has the `!` inversion flag.  Matches python
  * kconfgen's output byte-for-byte.
  */
+static void emit_deprecated_cmake_for_sym(struct sbuf *out,
+					  const struct ksym *s, void *ud)
+{
+	const struct dep_emit_ctx *dctx = ud;
+	if (!should_emit(s))
+		return;
+	const char *val = s->cur_val ? s->cur_val : "";
+	for (size_t i = 0; i < dctx->ctx->n_renames; i++) {
+		const struct kc_rename *r = &dctx->ctx->renames[i];
+		if (strcmp(r->new_name, s->name))
+			continue;
+		const char *effective = val;
+		if (s->type == KS_BOOL) {
+			int y = !strcmp(val, "y");
+			if (r->invert)
+				y = !y;
+			effective = y ? "y" : "";
+		}
+		sbuf_addf(out, "set(%s%s ", CONFIG_PREFIX, r->old_name);
+		/* HEX emits through the cmake-specific formatter so the
+		 * digits match python's `%x` rendering (lowercase, no
+		 * zero-pad), otherwise the stored mixed-case literal leaks
+		 * through emit_quoted. */
+		if (s->type == KS_HEX) {
+			sbuf_addch(out, '"');
+			emit_hex_for_cmake(out, effective);
+			sbuf_addch(out, '"');
+		} else {
+			emit_quoted(out, effective);
+		}
+		sbuf_addstr(out, ")\n");
+	}
+}
+
 static void emit_deprecated_cmake(struct sbuf *out, const struct kc_ctx *ctx)
 {
 	if (ctx->no_deprecated || !ctx->n_renames)
@@ -1258,23 +1349,8 @@ static void emit_deprecated_cmake(struct sbuf *out, const struct kc_ctx *ctx)
 	sbuf_addstr(
 	    out, "\n# List of deprecated options for backward compatibility\n");
 
-	for (size_t i = 0; i < ctx->n_renames; i++) {
-		const struct kc_rename *r = &ctx->renames[i];
-		struct ksym *new_sym = smap_get(&ctx->symtab, r->new_name);
-		if (!new_sym || !should_emit(new_sym))
-			continue;
-		const char *val = new_sym->cur_val ? new_sym->cur_val : "";
-		const char *effective = val;
-		if (new_sym->type == KS_BOOL) {
-			int y = !strcmp(val, "y");
-			if (r->invert)
-				y = !y;
-			effective = y ? "y" : "";
-		}
-		sbuf_addf(out, "set(%s%s ", CONFIG_PREFIX, r->old_name);
-		emit_quoted(out, effective);
-		sbuf_addstr(out, ")\n");
-	}
+	struct dep_emit_ctx dctx = {.ctx = ctx};
+	walk_syms(ctx->root, out, emit_deprecated_cmake_for_sym, &dctx);
 }
 
 /* ================================================================== */
