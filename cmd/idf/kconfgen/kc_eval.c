@@ -261,22 +261,34 @@ static void pass_sym_dep(struct kc_ctx *ctx)
 		(void)s; /* menu-walk below seeds this. */
 	}
 
-	/* Pass 2b: walk menu tree; for each menu that owns a symbol,
-	 * seed effective_dep from the FIRST encountered ctx_dep, then
-	 * skip on subsequent encounters.  The walk stack grows
-	 * dynamically via ALLOC_GROW -- ESP-IDF's menu tree has a few
-	 * thousand nodes and a fixed 256-slot stack silently lost
-	 * nodes past the cap, leaving their symbols' effective_dep
-	 * NULL and thus eval_bool(NULL)=1 falsely marking them visible. */
+	/*
+	 * Pass 2b: walk menu tree; for each menu that owns a symbol,
+	 * OR its ctx_dep into the symbol's effective_dep.  A Kconfig
+	 * can define the same @c config X in multiple `if` blocks
+	 * (ESP-IDF uses this pattern for WiFi: a main definition under
+	 * @c if (WIFI_ENABLED || HOST_WIFI_ENABLED) and a stub under
+	 * @c if !WIFI_ENABLED).  Kconfiglib's @c direct_dep is the OR
+	 * of each definition's propagated dep, so the symbol stays
+	 * visible whenever @em any of its declaration contexts is
+	 * satisfied.  Previously ice picked one menu's ctx_dep, which
+	 * happened to be the last-declared due to the stack-pop order,
+	 * hiding symbols whose stub definition was under a negated
+	 * condition.
+	 *
+	 * The walk stack grows dynamically via ALLOC_GROW -- ESP-IDF's
+	 * menu tree has a few thousand nodes and a fixed 256-slot stack
+	 * silently lost nodes past the cap.
+	 */
 	struct kmenu **stack = NULL;
 	size_t sp = 0, salloc = 0;
 	ALLOC_GROW(stack, sp + 1, salloc);
 	stack[sp++] = ctx->root;
 	while (sp) {
 		struct kmenu *m = stack[--sp];
-		if (m->sym && !m->sym->effective_dep && m->ctx_dep &&
+		if (m->sym && m->ctx_dep &&
 		    (m->kind == KM_SYM || m->kind == KM_CHOICE))
-			m->sym->effective_dep = expr_clone(m->ctx_dep);
+			m->sym->effective_dep = expr_or_take(
+			    m->sym->effective_dep, expr_clone(m->ctx_dep));
 		for (struct kmenu *c = m->children; c; c = c->next) {
 			ALLOC_GROW(stack, sp + 1, salloc);
 			stack[sp++] = c;

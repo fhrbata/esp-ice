@@ -123,6 +123,14 @@ struct ksym {
 				      *   type's zero fallback -- python
 				      *   kconfgen only emits no-prompt
 				      *   ints when a default fired). */
+	int emit_seen;		     /**< Scratch flag used by the output
+				      *   walkers to dedup symbols that are
+				      *   reachable via multiple menu nodes
+				      *   (e.g. a Kconfig with repeated
+				      *   @c config X ... blocks tagged
+				      *   @c # ignore: multiple-definition).
+				      *   Writers reset this across all
+				      *   symbols at the start of the walk. */
 };
 
 /* ------------------------------------------------------------------ */

@@ -317,8 +317,19 @@ static void process_config_line(struct kc_ctx *ctx, char *line,
 void kc_load_config(struct kc_ctx *ctx, const char *path)
 {
 	struct sbuf sb = SBUF_INIT;
-	if (sbuf_read_file(&sb, path) < 0)
-		die_errno("cannot read config '%s'", path);
+	if (sbuf_read_file(&sb, path) < 0) {
+		/*
+		 * Missing @c --config file is not an error -- python
+		 * kconfgen treats it as an empty config and falls through
+		 * to defaults.  ESP-IDF relies on this on first
+		 * @c idf.py set-target (the @c sdkconfig file doesn't
+		 * exist yet; cmake still passes @c --config sdkconfig).
+		 * Silently skip; any errno other than ENOENT surfaces via
+		 * the read attempt above and future invocations.
+		 */
+		sbuf_release(&sb);
+		return;
+	}
 
 	size_t pos = 0;
 	char *line;
@@ -539,6 +550,25 @@ static void walk_syms(const struct kmenu *m, struct sbuf *out, sym_cb cb,
 }
 
 /*
+ * Clear the @c emit_seen dedup flag on every symbol before a walk.
+ * A Kconfig symbol can back multiple KM_SYM nodes when the source
+ * has `config X` declared in several blocks with `# ignore:
+ * multiple-definition` (ESP-IDF uses this e.g. in
+ * components/esp_wifi/remote/Kconfig.soc_wifi_caps.in).  Without
+ * dedup the symbol gets emitted N times.  Python kconfgen iterates
+ * the symbol table directly so it naturally emits once.
+ */
+static void reset_emit_seen(const struct kc_ctx *ctx)
+{
+	for (size_t i = 0; i < ctx->symlist.nr; i++) {
+		struct ksym *s =
+		    smap_get((struct smap *)&ctx->symtab, ctx->symlist.v[i]);
+		if (s)
+			s->emit_seen = 0;
+	}
+}
+
+/*
  * Emit one symbol in the canonical sdkconfig form.
  *
  *   bool  = y    -> CONFIG_X=y
@@ -679,7 +709,8 @@ static void walk_config(const struct kmenu *m, struct sbuf *out)
 	}
 
 	if ((m->kind == KM_SYM || m->kind == KM_CHOICE) && m->sym &&
-	    should_emit(m->sym)) {
+	    !m->sym->emit_seen && should_emit(m->sym)) {
+		m->sym->emit_seen = 1;
 		/* A symbol line right after a menu close gets a blank line
 		 * separator, so `# end of X` doesn't butt up against the
 		 * next CONFIG_.  Nested closes have already stacked without
@@ -820,6 +851,7 @@ static void emit_deprecated_header(struct sbuf *out, const struct kc_ctx *ctx)
 void kc_write_config(const struct kc_ctx *ctx, const char *path)
 {
 	struct sbuf out = SBUF_INIT;
+	reset_emit_seen(ctx);
 
 	/*
 	 * Python kconfgen stamps the ESP-IDF release (`$IDF_VERSION`
@@ -883,14 +915,18 @@ static void emit_header_symbol(struct sbuf *out, const struct ksym *s)
 static void cb_header(struct sbuf *out, const struct ksym *s, void *ud)
 {
 	(void)ud;
+	if (s->emit_seen)
+		return;
 	if (!should_emit(s))
 		return;
+	((struct ksym *)s)->emit_seen = 1;
 	emit_header_symbol(out, s);
 }
 
 void kc_write_header(const struct kc_ctx *ctx, const char *path)
 {
 	struct sbuf out = SBUF_INIT;
+	reset_emit_seen(ctx);
 
 	const char *ver =
 	    (ctx->idf_version && *ctx->idf_version) ? ctx->idf_version : "";
@@ -1129,8 +1165,11 @@ static void cb_json_collect(struct sbuf *out, const struct ksym *s, void *ud)
 {
 	(void)out;
 	struct json_collect *c = ud;
+	if (s->emit_seen)
+		return;
 	if (!should_emit(s))
 		return;
+	((struct ksym *)s)->emit_seen = 1;
 	ALLOC_GROW(c->entries, c->nr + 1, c->alloc);
 	c->entries[c->nr].name = s->name;
 	c->entries[c->nr].type = s->type;
@@ -1141,6 +1180,7 @@ static void cb_json_collect(struct sbuf *out, const struct ksym *s, void *ud)
 void kc_write_json(const struct kc_ctx *ctx, const char *path)
 {
 	struct json_collect c = {0};
+	reset_emit_seen(ctx);
 	walk_syms(ctx->root, NULL, cb_json_collect, &c);
 	qsort(c.entries, c.nr, sizeof(*c.entries), json_kv_cmp);
 
@@ -1247,6 +1287,15 @@ static void json_menu_write_children(struct sbuf *out, const struct kc_ctx *ctx,
 	for (const struct kmenu *c = m->children; c; c = c->next) {
 		if (!json_menu_includes(c))
 			continue;
+		/*
+		 * Dedup KM_SYM / KM_CHOICE entries -- a Kconfig symbol can
+		 * back multiple menu nodes (multi-definition blocks); emit
+		 * the first and skip the rest so the JSON tree matches
+		 * python's one-node-per-symbol shape.
+		 */
+		if ((c->kind == KM_SYM || c->kind == KM_CHOICE) && c->sym &&
+		    c->sym->emit_seen)
+			continue;
 		if (c->kind == KM_IF) {
 			/* Transparent: its children become part of the
 			 * parent's children array. */
@@ -1255,9 +1304,17 @@ static void json_menu_write_children(struct sbuf *out, const struct kc_ctx *ctx,
 			     gc = gc->next) {
 				if (!json_menu_includes(gc))
 					continue;
+				if ((gc->kind == KM_SYM ||
+				     gc->kind == KM_CHOICE) &&
+				    gc->sym && gc->sym->emit_seen)
+					continue;
 				if (!first)
 					sbuf_addstr(out, ",\n");
 				first = 0;
+				if ((gc->kind == KM_SYM ||
+				     gc->kind == KM_CHOICE) &&
+				    gc->sym)
+					gc->sym->emit_seen = 1;
 				json_menu_write_node(out, ctx, gc, level);
 			}
 			continue;
@@ -1265,6 +1322,8 @@ static void json_menu_write_children(struct sbuf *out, const struct kc_ctx *ctx,
 		if (!first)
 			sbuf_addstr(out, ",\n");
 		first = 0;
+		if ((c->kind == KM_SYM || c->kind == KM_CHOICE) && c->sym)
+			c->sym->emit_seen = 1;
 		json_menu_write_node(out, ctx, c, level);
 	}
 }
@@ -1705,6 +1764,7 @@ static void json_menu_write_node(struct sbuf *out, const struct kc_ctx *ctx,
 void kc_write_json_menus(const struct kc_ctx *ctx, const char *path)
 {
 	struct sbuf out = SBUF_INIT;
+	reset_emit_seen(ctx);
 	sbuf_addstr(&out, "[");
 
 	struct sbuf body = SBUF_INIT;
@@ -1729,6 +1789,7 @@ void kc_write_json_menus(const struct kc_ctx *ctx, const char *path)
 void kc_write_cmake(const struct kc_ctx *ctx, const char *path)
 {
 	struct sbuf out = SBUF_INIT;
+	reset_emit_seen(ctx);
 
 	/* Note the SINGLE space before "Configuration" here -- that's
 	 * how python kconfgen renders the cmake banner, unlike the
