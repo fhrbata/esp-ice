@@ -218,7 +218,7 @@ SRCS := $(MAIN_SRCS) $(LIB_SRCS)
 ifdef STATIC
 DEPS_PREFIX := $(CURDIR)/deps/install/$(TRIPLE)
 DEPS_STAMP := $(DEPS_PREFIX)/.stamp
-BUILD_CFLAGS += -I$(DEPS_PREFIX)/include -DCURL_STATICLIB
+BUILD_CFLAGS += -isystem $(DEPS_PREFIX)/include -DCURL_STATICLIB
 LIBS := -L$(DEPS_PREFIX)/lib -L$(DEPS_PREFIX)/lib64 -lcurl -lmbedtls -lmbedx509 -lmbedcrypto -ltfpsacrypto -lz -llzma
 ifeq ($(S),linux)
 ifeq ($(findstring musl,$(TRIPLE)),)
@@ -245,7 +245,12 @@ endif
 # only needed for static/release builds).
 VENDOR_PREFIX := $(CURDIR)/vendor/install/$(TRIPLE)
 VENDOR_STAMP := $(VENDOR_PREFIX)/.stamp
-BUILD_CFLAGS += -I$(VENDOR_PREFIX)/include
+BUILD_CFLAGS += -isystem $(VENDOR_PREFIX)/include
+# PCRE2_STATIC tells the pcre2 headers to drop the default
+# __declspec(dllimport) decoration on function prototypes, which on
+# Windows would otherwise demand a DLL even though we link the
+# static libpcre2-8.a from vendor/.  Harmless on Linux / macOS.
+BUILD_CFLAGS += -DPCRE2_STATIC
 LIBS += -L$(VENDOR_PREFIX)/lib -lflasher -lpcre2-8
 
 ifeq ($(S), win)
