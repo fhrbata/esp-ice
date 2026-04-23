@@ -112,12 +112,13 @@ static const char *sym_str(const struct ksym *s)
 		return "y";
 	if (c == 0)
 		return "n";
-	/* A bareword that looks like a number: its "value" is its name
-	 * (the lexer stored numeric literals as KE_SYMREF with the digit
-	 * string as the name).  Prefer that over an empty cur_val. */
-	if (s->type == KS_UNKNOWN && s->name[0] &&
-	    (s->name[0] == '-' || s->name[0] == '+' ||
-	     (s->name[0] >= '0' && s->name[0] <= '9')))
+	/* Undefined / bareword KE_SYMREF leaves: python kconfiglib returns
+	 * the symbol's name as its str_value when the symbol has no type,
+	 * which is how comparisons like `UNDEF_SYM >= 300` become truthy
+	 * under strcmp ("UNDEF_SYM" > "300").  Covers both numeric
+	 * literals the lexer stashed as KE_SYMREF and references to
+	 * symbols that were never `config`'d anywhere. */
+	if (s->type == KS_UNKNOWN && s->name[0] && !s->cur_val)
 		return s->name;
 	return s->cur_val ? s->cur_val : "";
 }
@@ -345,12 +346,35 @@ static void pass_rev_dep(struct kc_ctx *ctx)
 			struct ksym *dst = p->expr->sym;
 			if (!dst)
 				continue;
-			/* term = (src AND cond) */
+			/*
+			 * term = src AND select-if-cond AND ctx_dep
+			 *
+			 * Python kconfiglib propagates each menu's dep into
+			 * the cond of @c select / @c imply on every symbol
+			 * declared under it (@c _propagate_deps), which means
+			 * a @c select X written on a definition that sits under
+			 * an @c if FOO block only fires when @c FOO is true.
+			 * We mirror that by AND-ing in the declaring node's
+			 * @c ctx_dep, which pass_ctx_dep computed from every
+			 * ancestor @c menu / @c if / @c choice.
+			 *
+			 * Without this, a symbol whose primary definition is
+			 * hidden by its menu context but whose stub definition
+			 * in a separate file stays visible would still force
+			 * the selected target -- we saw this on esp32p4 where
+			 * ESP_WIFI_SLP_IRAM_OPT (visible via the host-Wi-Fi
+			 * stub) was forcing ESP_PHY_IRAM_OPT=y even though
+			 * the `select ESP_PHY_IRAM_OPT` lives on the native-
+			 * Wi-Fi definition whose @c if is false on p4.
+			 */
 			struct kexpr *selref = expr_alloc(KE_SYMREF);
 			selref->sym = src;
-			struct kexpr *term =
-			    p->cond ? expr_and_take(selref, expr_clone(p->cond))
-				    : selref;
+			struct kexpr *term = selref;
+			if (p->cond)
+				term = expr_and_take(term, expr_clone(p->cond));
+			if (p->menu && p->menu->ctx_dep)
+				term = expr_and_take(
+				    term, expr_clone(p->menu->ctx_dep));
 			struct kexpr **slot = (p->kind == KP_SELECT)
 						  ? &dst->rev_dep
 						  : &dst->weak_rev_dep;

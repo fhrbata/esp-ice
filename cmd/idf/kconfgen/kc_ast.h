@@ -91,6 +91,17 @@ struct kprop {
 	struct kexpr *expr2;  /**< KP_RANGE: high bound. */
 	const char *src_file; /**< Input file for diagnostics. */
 	int src_line;	      /**< Input line for diagnostics. */
+	struct kmenu *menu;   /**< Declaring KM_SYM / KM_CHOICE menu node.
+			       *   Set for properties parsed inside a
+			       *   config / menuconfig / choice body; used
+			       *   by kc_eval to fold the declaration's
+			       *   ctx_dep into per-prop computations
+			       *   (select / imply rev_dep, default / range
+			       *   visibility) so a select on one definition
+			       *   of a multi-defined symbol doesn't fire
+			       *   when that definition's menu context is
+			       *   false.  NULL for props attached to the
+			       *   symbol by rename / virtual paths. */
 	struct kprop *next;   /**< Linked-list link on a symbol. */
 };
 

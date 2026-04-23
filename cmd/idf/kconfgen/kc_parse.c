@@ -50,17 +50,14 @@ static void expr_free(struct kexpr *e)
 	free(e);
 }
 
-static struct kprop *prop_new(enum kprop_kind kind, const char *src_file,
-			      int src_line)
-{
-	struct kprop *p = calloc(1, sizeof(*p));
-	if (!p)
-		die_errno("calloc");
-	p->kind = kind;
-	p->src_file = src_file;
-	p->src_line = src_line;
-	return p;
-}
+/* @c prop_new (defined below, after @c struct kc_parser is declared) stamps
+ * the parser's current declaration menu onto each fresh kprop so the
+ * evaluator can fold the declaring node's ctx_dep into prop activation
+ * conditions.  Forward the type here; the declaration-menu pointer is
+ * read through it. */
+struct kc_parser;
+static struct kprop *prop_new(struct kc_parser *p, enum kprop_kind kind,
+			      const char *src_file, int src_line);
 
 static void prop_free(struct kprop *p)
 {
@@ -261,7 +258,32 @@ struct kc_parser {
 	 * because the choice mechanism picks the member).
 	 */
 	int in_choice;
+	/*
+	 * Current @c KM_SYM / @c KM_CHOICE menu whose body is being
+	 * parsed.  Set by @c parse_config_stmt / @c parse_choice_stmt
+	 * around their prop-body loop and cleared on exit.  @c prop_new
+	 * stamps this onto every @c kprop it creates so the evaluator can
+	 * fold the specific declaration's @c ctx_dep into the prop's
+	 * activation condition -- crucial for @c select / @c imply on a
+	 * symbol with multiple definitions (the selector inherits its
+	 * declaring block's @c if guard, matching python kconfiglib's
+	 * @c _propagate_deps).
+	 */
+	struct kmenu *cur_decl_menu;
 };
+
+static struct kprop *prop_new(struct kc_parser *p, enum kprop_kind kind,
+			      const char *src_file, int src_line)
+{
+	struct kprop *pr = calloc(1, sizeof(*pr));
+	if (!pr)
+		die_errno("calloc");
+	pr->kind = kind;
+	pr->src_file = src_file;
+	pr->src_line = src_line;
+	pr->menu = p ? p->cur_decl_menu : NULL;
+	return pr;
+}
 
 static void p_advance(struct kc_parser *p) { kc_lex_next(&p->lex); }
 
@@ -496,7 +518,7 @@ static void parse_type_line(struct kc_parser *p, struct ksym *sym)
 	 * kconfig's "first wins" on type). */
 
 	if (p->lex.tok == KT_STR) {
-		struct kprop *pr = prop_new(KP_PROMPT, p->lex.path, line);
+		struct kprop *pr = prop_new(p, KP_PROMPT, p->lex.path, line);
 		pr->text = p_take_val(p);
 		p_advance(p);
 		pr->cond = parse_if_tail(p);
@@ -536,7 +558,7 @@ static void parse_deftype_line(struct kc_parser *p, struct ksym *sym)
 	if (sym->type == KS_UNKNOWN)
 		sym->type = t;
 
-	struct kprop *pr = prop_new(KP_DEFAULT, p->lex.path, line);
+	struct kprop *pr = prop_new(p, KP_DEFAULT, p->lex.path, line);
 	pr->expr = parse_expr(p);
 	pr->cond = parse_if_tail(p);
 	sym_append_prop(sym, pr);
@@ -571,7 +593,7 @@ static void parse_prompt_line(struct kc_parser *p, struct ksym *sym)
 			      sym->name, dfile, dline);
 		break;
 	}
-	struct kprop *pr = prop_new(KP_PROMPT, p->lex.path, line);
+	struct kprop *pr = prop_new(p, KP_PROMPT, p->lex.path, line);
 	pr->text = p_take_val(p);
 	p_advance(p);
 	pr->cond = parse_if_tail(p);
@@ -584,7 +606,7 @@ static void parse_default_line(struct kc_parser *p, struct ksym *sym)
 {
 	int line = p->lex.line;
 	p_advance(p);
-	struct kprop *pr = prop_new(KP_DEFAULT, p->lex.path, line);
+	struct kprop *pr = prop_new(p, KP_DEFAULT, p->lex.path, line);
 	pr->expr = parse_expr(p);
 	pr->cond = parse_if_tail(p);
 	sym_append_prop(sym, pr);
@@ -617,10 +639,32 @@ static void parse_depends_line(struct kc_parser *p, struct ksym *sym,
 	struct kexpr *e = parse_expr(p);
 	p_expect(p, KT_NL);
 
-	if (sym) {
-		/* Attach to the symbol as a KP_DEPENDS property so the
-		 * evaluator can combine it with menu context later. */
-		struct kprop *pr = prop_new(KP_DEPENDS, p->lex.path, line);
+	/*
+	 * For config / menuconfig: attach to the per-declaration @c KM_SYM
+	 * menu node's @c dep.  pass_ctx_dep then AND-folds it into this
+	 * declaration's ctx_dep, and pass_sym_dep OR-folds each declaration
+	 * of the same symbol to produce the python direct_dep semantics:
+	 *   direct_dep = OR over defs of (parent_ctx AND local_depends)
+	 *
+	 * A shared KP_DEPENDS on the ksym would instead AND every
+	 * definition's `depends on` together, hiding the symbol whenever
+	 * any stub definition's condition was false (as happens with the
+	 * WiFi symbols re-declared under `if !ESP_WIFI_ENABLED` in
+	 * components/esp_wifi/remote/Kconfig.wifi_is_remote.in).
+	 */
+	if (m && m->kind == KM_SYM) {
+		if (m->dep) {
+			struct kexpr *n = expr_new(KE_AND);
+			n->l = m->dep;
+			n->r = e;
+			m->dep = n;
+		} else {
+			m->dep = e;
+		}
+	} else if (sym) {
+		/* Loose `depends on` inside a choice body attaches to the
+		 * choice sym; pass 2c still ANDs it into effective_dep. */
+		struct kprop *pr = prop_new(p, KP_DEPENDS, p->lex.path, line);
 		pr->expr = e;
 		sym_append_prop(sym, pr);
 	} else if (m) {
@@ -646,7 +690,7 @@ static void parse_select_line(struct kc_parser *p, struct ksym *sym)
 	p_advance(p);
 	if (p->lex.tok != KT_NAME)
 		kc_lex_die_unexpected(&p->lex, KT_NAME);
-	struct kprop *pr = prop_new(kind, p->lex.path, line);
+	struct kprop *pr = prop_new(p, kind, p->lex.path, line);
 	pr->expr = expr_new(KE_SYMREF);
 	pr->expr->sym = kc_sym_intern(p->ctx, p->lex.val);
 	p_advance(p);
@@ -688,7 +732,7 @@ static void parse_set_line(struct kc_parser *p, struct ksym *sym)
 	 * (e.g. type-compatibility between target and value) happens at
 	 * eval time rather than here.
 	 */
-	struct kprop *pr = prop_new(kind, p->lex.path, line);
+	struct kprop *pr = prop_new(p, kind, p->lex.path, line);
 	pr->text = target;
 	pr->expr = parse_expr(p);
 	pr->cond = parse_if_tail(p);
@@ -746,7 +790,7 @@ static void parse_warning_line(struct kc_parser *p, struct ksym *sym)
 	p_advance(p);
 	if (p->lex.tok != KT_STR)
 		kc_lex_die_unexpected(&p->lex, KT_STR);
-	struct kprop *pr = prop_new(KP_WARNING, p->lex.path, line);
+	struct kprop *pr = prop_new(p, KP_WARNING, p->lex.path, line);
 	pr->text = p_take_val(p);
 	p_advance(p);
 	pr->cond = parse_if_tail(p);
@@ -759,7 +803,7 @@ static void parse_range_line(struct kc_parser *p, struct ksym *sym)
 {
 	int line = p->lex.line;
 	p_advance(p);
-	struct kprop *pr = prop_new(KP_RANGE, p->lex.path, line);
+	struct kprop *pr = prop_new(p, KP_RANGE, p->lex.path, line);
 	pr->expr = parse_expr(p);
 	pr->expr2 = parse_expr(p);
 	pr->cond = parse_if_tail(p);
@@ -782,7 +826,7 @@ static void parse_help_line(struct kc_parser *p, struct ksym *sym)
 	 * where the last kc_lex_next() left it when returning KT_NL.
 	 */
 	kc_lex_read_help(&p->lex);
-	struct kprop *pr = prop_new(KP_HELP, p->lex.path, line);
+	struct kprop *pr = prop_new(p, KP_HELP, p->lex.path, line);
 	pr->text = p_take_val(p);
 	sym_append_prop(sym, pr);
 	/* Consume the synthetic HELPTEXT token by lexing the next real
@@ -811,7 +855,7 @@ static void parse_option_line(struct kc_parser *p, struct ksym *sym)
 	}
 
 	if (strcmp(name, "env") == 0 && value) {
-		struct kprop *pr = prop_new(KP_ENV, p->lex.path, line);
+		struct kprop *pr = prop_new(p, KP_ENV, p->lex.path, line);
 		pr->text = value;
 		value = NULL;
 		sym_append_prop(sym, pr);
@@ -1074,9 +1118,15 @@ static void parse_config_stmt(struct kc_parser *p, struct kmenu *parent)
 	m->sym = sym;
 	menu_append(parent, m);
 
-	/* Prop-body loop. */
+	/* Prop-body loop.  Stamp every prop created during this declaration
+	 * with @p m so the evaluator can AND in this specific declaration's
+	 * ctx_dep when firing selects / imply / set / defaults -- see
+	 * kc_ast.h::kprop::menu. */
+	struct kmenu *save = p->cur_decl_menu;
+	p->cur_decl_menu = m;
 	while (is_prop_tok(p->lex.tok))
 		parse_prop_line(p, sym, m);
+	p->cur_decl_menu = save;
 }
 
 static void parse_menu_stmt(struct kc_parser *p, struct kmenu *parent)
@@ -1162,10 +1212,20 @@ static void parse_choice_stmt(struct kc_parser *p, struct kmenu *parent)
 	 * Loose props that precede members attach to the choice sym.
 	 * Flip @c in_choice while the body runs so nested @c default
 	 * properties can emit the DefaultInChoice warning.
+	 *
+	 * Install @p m as the current declaration menu so props parsed
+	 * directly on the choice (rather than on one of its members) are
+	 * stamped with the KM_CHOICE node -- matching the fact that
+	 * @c select / @c imply / @c default on a choice really belong to
+	 * the choice's own block.  Nested @c parse_config_stmt saves and
+	 * restores this cell for each member.
 	 */
+	struct kmenu *save_decl = p->cur_decl_menu;
+	p->cur_decl_menu = m;
 	p->in_choice++;
 	parse_block_body(p, m, choice_sym, KT_ENDCHOICE);
 	p->in_choice--;
+	p->cur_decl_menu = save_decl;
 	p_expect(p, KT_ENDCHOICE);
 	p_eat_nl(p);
 }
