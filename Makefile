@@ -130,6 +130,7 @@ LIB_SRCS := \
 	cmd/help/help.c \
 	cmd/idf/idf.c \
 	cmd/idf/configdep/configdep.c \
+	cmd/idf/crt-bundle/crt-bundle.c \
 	cmd/idf/hints/hints.c \
 	cmd/idf/kconfgen/kc_eval.c \
 	cmd/idf/kconfgen/kc_io.c \
