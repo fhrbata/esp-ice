@@ -110,6 +110,7 @@ static int argv_wants_help(int argc, const char **argv)
  * declarations in ice.h.
  */
 int global_no_color;
+int global_no_hints;
 int global_no_pager;
 int global_version;
 int global_verbose;
@@ -206,6 +207,8 @@ int ice_dispatch(int argc, const char **argv, const struct cmd_desc *desc)
 
 const struct option ice_global_opts[] = {
     OPT_BOOL(0, "no-color", &global_no_color, "disable colored output"),
+    OPT_BOOL_CFG(0, "no-hints", &global_no_hints, "core.no-hints", NULL,
+		 "disable auto-hint scan after a failed child process", NULL),
     OPT_BOOL(0, "no-pager", &global_no_pager, "disable the pager"),
     OPT_BOOL_CFG('v', "verbose", &global_verbose, "core.verbose", NULL,
 		 "show full command output", NULL),

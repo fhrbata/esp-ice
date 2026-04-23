@@ -130,6 +130,8 @@ LIB_SRCS := \
 	cmd/help/help.c \
 	cmd/idf/idf.c \
 	cmd/idf/configdep/configdep.c \
+	cmd/idf/crt-bundle/crt-bundle.c \
+	cmd/idf/hints/hints.c \
 	cmd/idf/kconfgen/kc_eval.c \
 	cmd/idf/kconfgen/kc_io.c \
 	cmd/idf/kconfgen/kc_lex.c \
@@ -197,7 +199,9 @@ LIB_SRCS := \
 	vendor/sha256/sha256.c \
 	chip.c \
 	color_rules.c \
-	esf_port.c
+	esf_port.c \
+	hints.c \
+	yaml.c
 
 # MAIN_SRCS provide the program entry point.  Excluded from libice.a
 # so that unit tests (and any future external libice consumer) can
@@ -214,7 +218,7 @@ SRCS := $(MAIN_SRCS) $(LIB_SRCS)
 ifdef STATIC
 DEPS_PREFIX := $(CURDIR)/deps/install/$(TRIPLE)
 DEPS_STAMP := $(DEPS_PREFIX)/.stamp
-BUILD_CFLAGS += -I$(DEPS_PREFIX)/include -DCURL_STATICLIB
+BUILD_CFLAGS += -isystem $(DEPS_PREFIX)/include -DCURL_STATICLIB
 LIBS := -L$(DEPS_PREFIX)/lib -L$(DEPS_PREFIX)/lib64 -lcurl -lmbedtls -lmbedx509 -lmbedcrypto -ltfpsacrypto -lz -llzma
 ifeq ($(S),linux)
 ifeq ($(findstring musl,$(TRIPLE)),)
@@ -241,8 +245,13 @@ endif
 # only needed for static/release builds).
 VENDOR_PREFIX := $(CURDIR)/vendor/install/$(TRIPLE)
 VENDOR_STAMP := $(VENDOR_PREFIX)/.stamp
-BUILD_CFLAGS += -I$(VENDOR_PREFIX)/include
-LIBS += -L$(VENDOR_PREFIX)/lib -lflasher
+BUILD_CFLAGS += -isystem $(VENDOR_PREFIX)/include
+# PCRE2_STATIC tells the pcre2 headers to drop the default
+# __declspec(dllimport) decoration on function prototypes, which on
+# Windows would otherwise demand a DLL even though we link the
+# static libpcre2-8.a from vendor/.  Harmless on Linux / macOS.
+BUILD_CFLAGS += -DPCRE2_STATIC
+LIBS += -L$(VENDOR_PREFIX)/lib -lflasher -lpcre2-8
 
 ifeq ($(S), win)
 
@@ -523,8 +532,8 @@ help:
 	@echo ' lint-platform    - enforce CONTRIBUTING.md platform-abstraction rules'
 	@echo ''
 	@echo 'dependency targets:'
-	@echo ' deps             - build external deps (zlib, mbedTLS, curl, libyaml, xz)'
-	@echo ' vendor           - build vendor libs (esp-serial-flasher)'
+	@echo ' deps             - build external deps (zlib, mbedTLS, curl, xz)'
+	@echo ' vendor           - build vendor libs (esp-serial-flasher, pcre2)'
 	@echo ''
 	@echo 'misc targets:'
 	@echo ' clean            - remove: $(O) $(DIST) $(STAGE) $(T_OUT)'

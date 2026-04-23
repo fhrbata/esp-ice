@@ -154,6 +154,13 @@ int link_w(const char *target, const char *linkpath);
  */
 #define PLATFORM_ANSI_VT_DEFAULT 0
 
+/**
+ * Path to the interpreter binary inside a @c{python -m venv} tree,
+ * relative to the venv root.  Windows venvs place the interpreter
+ * under @c{Scripts\\python.exe}; POSIX venvs use @c{bin/python3}.
+ */
+#define PLATFORM_VENV_PYTHON_REL "Scripts/python.exe"
+
 #else /* POSIX */
 
 /** End-of-line sequence (LF on POSIX). */
@@ -167,6 +174,12 @@ int link_w(const char *target, const char *linkpath);
 
 /** POSIX terminals always render ANSI escape sequences. */
 #define PLATFORM_ANSI_VT_DEFAULT 1
+
+/**
+ * Path to the interpreter binary inside a @c{python -m venv} tree,
+ * relative to the venv root.  See the Windows branch above.
+ */
+#define PLATFORM_VENV_PYTHON_REL "bin/python3"
 
 #include <unistd.h>
 

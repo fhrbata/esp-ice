@@ -3,12 +3,13 @@
 /deps/.stamp
 /vendor/install/
 /vendor/*/build/
-/deps/*/yaml-*/
 /deps/*/zlib-*/
 /deps/*/mbedtls-*/
 /deps/*/curl-*/
 /deps/*/xz-*/
 /deps/*/*.tar.*
+/vendor/pcre2/pcre2-*/
+/vendor/pcre2/*.tar.*
 /toolchains/
 dist/
 stage/

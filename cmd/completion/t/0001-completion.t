@@ -59,6 +59,7 @@ tap_done "subcommand list includes all visible commands (shell does prefix filte
 "$BINARY" __complete 2 ice idf "" >idfsubs.out
 tap_check cand_present 'size'            idfsubs.out
 tap_check cand_present 'configdep'       idfsubs.out
+tap_check cand_present 'hints'           idfsubs.out
 tap_check cand_present 'ldgen'           idfsubs.out
 tap_check cand_present 'partition-table' idfsubs.out
 tap_done "ice idf <TAB> lists bundled IDF tools"

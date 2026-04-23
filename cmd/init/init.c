@@ -320,6 +320,9 @@ static void build_define_set(struct svec *out)
 	free(entries);
 }
 
+static void venv_python(struct sbuf *out);
+static void setup_venv(void);
+
 /** Run cmake's configure step on the active profile. */
 static int cmake_configure(void)
 {
@@ -343,12 +346,42 @@ static int cmake_configure(void)
 	svec_push(&args, "-B");
 	svec_push(&args, build_dir);
 	/*
-	 * Short-circuit IDF's `__build_check_python` -- ice runs the build
-	 * without a Python venv, so the dependency check would fail on the
-	 * very first import.  The property is consulted in project.cmake
-	 * before the check runs, so setting it via -D is enough.
+	 * Short-circuit IDF's `__build_check_python` -- the ice venv does
+	 * not have IDF's pip packages installed (kconfgen, idf-component-
+	 * manager, ...) because the tools they provide are intercepted at
+	 * the Python-level via sitecustomize.py.  The property is consulted
+	 * in project.cmake before the check runs, so setting it via -D
+	 * skips the import-style probe.
 	 */
 	svec_push(&args, "-DPYTHON_DEPS_CHECKED=1");
+	/*
+	 * Pin every Python interpreter cmake and IDF might spawn to the
+	 * ice-managed venv so their invocations route through
+	 * sitecustomize.py (see setup_venv() for the mechanism).  We have
+	 * to set two variables because ESP-IDF and cmake name the
+	 * interpreter differently:
+	 *
+	 *   Python3_EXECUTABLE  cmake's find_package(Python3) result,
+	 *                       consumed by generic rules.
+	 *   PYTHON              IDF's `project.cmake` build property
+	 *                       (set_default(PYTHON "python") in
+	 *                       tools/cmake/build.cmake); used as
+	 *                       ${python} in all ESP-IDF COMMAND lines
+	 *                       including `${python} -m kconfgen`.
+	 *
+	 * Without the PYTHON override IDF would fall back to searching
+	 * PATH for "python", which on a machine with a previous
+	 * esp-idf/install.sh run resolves to ~/.espressif/python_env/...
+	 * and bypasses our sitecustomize entirely.
+	 */
+	{
+		struct sbuf py = SBUF_INIT;
+
+		venv_python(&py);
+		svec_pushf(&args, "-DPython3_EXECUTABLE=%s", py.buf);
+		svec_pushf(&args, "-DPYTHON=%s", py.buf);
+		sbuf_release(&py);
+	}
 	for (size_t i = 0; i < defines.nr; i++)
 		svec_pushf(&args, "-D%s", defines.v[i]);
 
@@ -369,325 +402,254 @@ static int cmake_configure(void)
 }
 
 /* ------------------------------------------------------------------ */
-/* build.ninja patching -- post-configure fixups                       */
-/*   gen_esp32part.py   -> ice idf partition-table                     */
-/*   ldgen.py           -> ice idf ldgen                               */
-/*   esptool elf2image  -> ice image create                            */
+/* Python venv + sitecustomize.py -- dispatch IDF's host Python        */
+/* scripts to their native ice equivalents                             */
 /*                                                                     */
-/* IDF's cmake files wire these scripts into build.ninja COMMAND       */
-/* lines.  We rewrite them to call the native ice equivalents so no    */
-/* Python is needed at build time.                                     */
+/*   ldgen.py            -> ice idf ldgen                              */
+/*   gen_esp32part.py    -> ice idf partition-table  (generate form)   */
+/*   gen_esp32part.py    -> exit 0                   (display form)    */
+/*   gen_crt_bundle.py   -> ice idf crt-bundle                         */
+/*   esptool.py          -> ice image create         (elf2image only)  */
+/*   python -m esptool   -> ice image create         (elf2image only)  */
+/*   python -m kconfgen  -> ice idf kconfgen                           */
 /*                                                                     */
-/* The patchers share a single-pass driver (@p patch_ninja_apply):     */
-/* each rule is a tuple of (needle, optional second needle, line       */
-/* rewriter).  Adding a new tool replacement is one array entry in     */
-/* patch_ninja() plus a line-rewriter function; the file I/O and line  */
-/* walk are shared.                                                    */
+/* IDF wires these scripts into its cmake rules (and thus into         */
+/* build.ninja, or Makefiles when -G "Unix Makefiles") as              */
+/* `${Python3_EXECUTABLE} <script>`.  We create a venv once under      */
+/* @c{ice_home()/venv/}, install a sitecustomize.py into its site-     */
+/* packages, and point cmake at the venv's interpreter (under         */
+/* @c{bin/} on POSIX, @c{Scripts/} on Windows) via                     */
+/* -DPython3_EXECUTABLE.  Python's site.py runs sitecustomize at       */
+/* interpreter startup, which inspects sys.argv and execs the ice      */
+/* binary for any recognised script -- transparently to cmake, ninja,  */
+/* and IDF, and regardless of which generator cmake writes files for.  */
 /*                                                                     */
-/* This is a temporary hack that lives here (rather than being         */
-/* replayed on every build) because cmake configure is the only thing  */
-/* that regenerates build.ninja, so doing the patch once after init is */
-/* sufficient.  Re-running ice init re-applies it.                     */
+/* Python3_EXECUTABLE is baked into CMakeCache.txt, so every cmake     */
+/* re-configure (including bootloader / ULP sub-projects triggered by  */
+/* ninja) picks up the same interpreter.  Unrecognised invocations     */
+/* (-c, -m <other>, cmake's own Python3 probing) fall through to the   */
+/* real venv python without interception.                              */
 /* ------------------------------------------------------------------ */
 
-static const char *mem_find(const char *p, const char *end, const char *needle,
-			    size_t nlen)
+/** @c{<ice_home>/venv} -- venv is shared across projects and IDF trees. */
+static void venv_dir(struct sbuf *out)
 {
-	for (; p + nlen <= end; p++)
-		if (!memcmp(p, needle, nlen))
-			return p;
+	sbuf_addf(out, "%s/venv", ice_home());
+}
+
+/**
+ * Absolute path to the venv's Python interpreter -- the value we hand
+ * cmake via @c -DPython3_EXECUTABLE.  The relative path differs per
+ * OS (@c bin/python3 vs @c Scripts/python.exe), encoded in
+ * PLATFORM_VENV_PYTHON_REL.
+ */
+static void venv_python(struct sbuf *out)
+{
+	sbuf_addf(out, "%s/venv/%s", ice_home(), PLATFORM_VENV_PYTHON_REL);
+}
+
+/** Pick an interpreter to bootstrap the venv with.  Returns NULL if none. */
+static const char *host_python(void)
+{
+	if (find_in_path("python3"))
+		return "python3";
+	if (find_in_path("python"))
+		return "python";
 	return NULL;
 }
 
-static void patch_command_line(struct sbuf *out, const char *line, size_t len)
-{
-	static const char needle[] = "gen_esp32part.py";
-	static const size_t nlen = sizeof(needle) - 1;
-	const char *p = line;
-	const char *end = line + len;
-	int occurrence = 0;
-
-	while (p < end) {
-		const char *found = mem_find(p, end, needle, nlen);
-		if (!found) {
-			sbuf_add(out, p, end - p);
-			return;
-		}
-
-		const char *script_start = found;
-		while (script_start > p && script_start[-1] != ' ')
-			script_start--;
-
-		const char *python_start = script_start;
-		if (python_start > p)
-			python_start--;
-		while (python_start > p && python_start[-1] != ' ')
-			python_start--;
-
-		sbuf_add(out, p, python_start - p);
-
-		/*
-		 * IDF calls gen_esp32part.py twice per COMMAND line:
-		 *   1st call: generate  -- replace with ice idf partition-table
-		 *   2nd call: display   -- replace with true
-		 */
-		if (occurrence == 0) {
-			const char *exe = process_exe();
-
-			sbuf_addstr(out, exe ? exe : "ice");
-			sbuf_addstr(out, " idf partition-table");
-		} else {
-			sbuf_addstr(out, "true");
-		}
-		occurrence++;
-
-		p = found + nlen;
-	}
-}
-
 /*
- * Per-target rewrite rule: if a COMMAND line contains @c needle (and,
- * optionally, @c needle2), @c patch is called to write the replacement
- * to @c out.  Otherwise the line is passed through untouched.
+ * Ask the venv python for its site-packages directory and fill @p out.
+ * Returns 0 on success, -1 on spawn / read / exit failure.  Using
+ * site.getsitepackages()[0] avoids hard-coding the Python minor version
+ * in the path -- the venv's python is the single source of truth.
  */
-struct ninja_rule {
-	const char *needle;  /**< primary substring the line must contain */
-	const char *needle2; /**< optional second substring (or NULL) */
-	void (*patch)(struct sbuf *out, const char *line, size_t len);
-};
-
-/* Returns 1 if @p rule matches @p line. */
-static int rule_matches(const struct ninja_rule *rule, const char *line,
-			const char *end)
+static int venv_site_packages(const char *py, struct sbuf *out)
 {
-	if (!mem_find(line, end, rule->needle, strlen(rule->needle)))
-		return 0;
-	if (rule->needle2 &&
-	    !mem_find(line, end, rule->needle2, strlen(rule->needle2)))
-		return 0;
-	return 1;
-}
-
-/*
- * Walk @b{build.ninja} once, applying the first matching rule to each
- * COMMAND line.  Lines not matching any rule pass through unchanged.
- * Atomically writes back only if any line was rewritten.
- */
-static void patch_ninja_apply(const char *build_dir,
-			      const struct ninja_rule *rules, size_t nrules)
-{
-	struct sbuf ninja_path = SBUF_INIT;
-	struct sbuf content = SBUF_INIT;
-	struct sbuf out = SBUF_INIT;
-	const char *p, *end, *nl;
-	int modified = 0;
-
-	sbuf_addf(&ninja_path, "%s/build.ninja", build_dir);
-
-	if (sbuf_read_file(&content, ninja_path.buf) < 0)
-		goto done;
-
-	p = content.buf;
-	end = content.buf + content.len;
-
-	while (p < end) {
-		nl = memchr(p, '\n', end - p);
-		if (!nl)
-			nl = end;
-
-		size_t line_len = (size_t)(nl - p);
-		const struct ninja_rule *hit = NULL;
-
-		if (line_len > 11 && !memcmp(p, "  COMMAND =", 11)) {
-			for (size_t i = 0; i < nrules; i++) {
-				if (rule_matches(&rules[i], p, nl)) {
-					hit = &rules[i];
-					break;
-				}
-			}
-		}
-
-		if (hit) {
-			hit->patch(&out, p, line_len);
-			modified = 1;
-		} else {
-			sbuf_add(&out, p, line_len);
-		}
-
-		if (nl < end)
-			sbuf_addch(&out, '\n');
-		p = nl + (nl < end ? 1 : 0);
-	}
-
-	if (modified)
-		write_file_atomic(ninja_path.buf, out.buf, out.len);
-
-done:
-	sbuf_release(&ninja_path);
-	sbuf_release(&content);
-	sbuf_release(&out);
-}
-
-/*
- * Walk back @p n whitespace-delimited tokens from @p p toward
- * @p line_start, returning a pointer to the start of the token @p n
- * positions back.
- */
-static const char *back_n_tokens(const char *p, const char *line_start, int n)
-{
-	while (n-- > 0) {
-		while (p > line_start && p[-1] == ' ')
-			p--;
-		while (p > line_start && p[-1] != ' ')
-			p--;
-	}
-	return p;
-}
-
-/*
- * Replace the esptool elf2image invocation on a COMMAND line with
- * the native `ice image create` equivalent.  IDF's COMMAND line has
- * one of two shapes:
- *
- *   cd <dir> && <python> -m esptool --chip <chip> elf2image ...   (module)
- *   cd <dir> && <python> <esptool.py> --chip <chip> elf2image ... (script)
- *
- * v5.3 uses the script form; newer trees sometimes use -m.  Either
- * way we need to land on the python invocation so the preceding
- * `cd <dir> && ` chain is preserved when we splice in the ice call.
- */
-static void patch_elf2image_line(struct sbuf *out, const char *line, size_t len)
-{
-	static const char e2i_needle[] = "elf2image";
-	static const size_t e2ilen = sizeof(e2i_needle) - 1;
-	static const char esptool_needle[] = "esptool";
-	static const size_t elen = sizeof(esptool_needle) - 1;
-	static const char chip_needle[] = "--chip";
-	static const size_t chip_nlen = sizeof(chip_needle) - 1;
-
-	const char *end = line + len;
-	const char *etool = mem_find(line, end, esptool_needle, elen);
-
-	if (!etool)
-		goto passthrough;
-
-	const char *e2i = mem_find(etool + elen, end, e2i_needle, e2ilen);
-	if (!e2i)
-		goto passthrough;
-
-	const char *etool_start = etool;
-	while (etool_start > line && etool_start[-1] != ' ')
-		etool_start--;
-
-	/*
-	 * One token back from @esptool_start is either "-m" (module
-	 * form; python is one further back) or the python invocation
-	 * itself (script form).
-	 */
-	const char *prev = back_n_tokens(etool_start, line, 1);
-	int module_form = prev + 2 < etool_start && prev[0] == '-' &&
-			  prev[1] == 'm' && prev[2] == ' ';
-	const char *invoke_start =
-	    module_form ? back_n_tokens(etool_start, line, 2) : prev;
-
-	const char *chip_arg =
-	    mem_find(etool + elen, e2i, chip_needle, chip_nlen);
-	const char *chip_val_start = NULL;
-	const char *chip_val_end = NULL;
-	if (chip_arg) {
-		chip_val_start = chip_arg + chip_nlen;
-		while (chip_val_start < e2i && *chip_val_start == ' ')
-			chip_val_start++;
-		chip_val_end = chip_val_start;
-		while (chip_val_end < e2i && *chip_val_end != ' ')
-			chip_val_end++;
-	}
-
-	sbuf_add(out, line, invoke_start - line);
-
-	{
-		const char *exe = process_exe();
-
-		sbuf_addstr(out, exe ? exe : "ice");
-	}
-	sbuf_addstr(out, " image create");
-	if (chip_val_start && chip_val_end > chip_val_start) {
-		sbuf_addstr(out, " --chip ");
-		sbuf_add(out, chip_val_start, chip_val_end - chip_val_start);
-	}
-
-	sbuf_add(out, e2i + e2ilen, end - (e2i + e2ilen));
-	return;
-
-passthrough:
-	sbuf_add(out, line, len);
-}
-
-/*
- * Replace a Python ldgen invocation with the native `ice idf ldgen`.
- * IDF's COMMAND line looks like:
- *
- *   cd <dir> && <python> <...>/tools/ldgen/ldgen.py --config ... \
- *        --fragments-list "..." --input ... --output ...           \
- *        --kconfig ... --env-file ... --libraries-file ...         \
- *        --objdump ...
- *
- * We rewrite everything from the python invocation up to and including
- * `ldgen.py` into `<ice> idf ldgen`.  The trailing flags are preserved
- * as-is: our CLI accepts --kconfig / --env-file / --objdump as ignored
- * compatibility shims.
- */
-static void patch_ldgen_line(struct sbuf *out, const char *line, size_t len)
-{
-	static const char needle[] = "ldgen.py";
-	static const size_t nlen = sizeof(needle) - 1;
-	const char *end = line + len;
-
-	const char *found = mem_find(line, end, needle, nlen);
-	if (!found) {
-		sbuf_add(out, line, len);
-		return;
-	}
-
-	/* Walk left from "ldgen.py" to the start of its path token, then
-	 * one more token back to land on the python invocation. */
-	const char *script_start = found;
-	while (script_start > line && script_start[-1] != ' ')
-		script_start--;
-
-	const char *python_start = script_start;
-	if (python_start > line)
-		python_start--;
-	while (python_start > line && python_start[-1] != ' ')
-		python_start--;
-
-	sbuf_add(out, line, python_start - line);
-
-	{
-		const char *exe = process_exe();
-
-		sbuf_addstr(out, exe ? exe : "ice");
-	}
-	sbuf_addstr(out, " idf ldgen");
-
-	sbuf_add(out, found + nlen, end - (found + nlen));
-}
-
-/*
- * Apply every ninja rewrite rule in a single pass over build.ninja.
- * Rules are tried per line in declaration order; the first match wins.
- * Order matters only to disambiguate when two rules could claim the
- * same line -- none of the current rules overlap, but keep the more
- * specific needles first to stay robust.
- */
-static void patch_ninja(const char *build_dir)
-{
-	static const struct ninja_rule rules[] = {
-	    {"gen_esp32part.py", NULL, patch_command_line},
-	    {"ldgen.py", NULL, patch_ldgen_line},
-	    {"esptool", "elf2image", patch_elf2image_line},
+	const char *argv[] = {
+	    py,
+	    "-c",
+	    "import site; print(site.getsitepackages()[0])",
+	    NULL,
 	};
-	patch_ninja_apply(build_dir, rules, sizeof(rules) / sizeof(rules[0]));
+	struct process proc = PROCESS_INIT;
+	char buf[4096];
+	size_t len = 0;
+
+	proc.argv = argv;
+	proc.pipe_out = 1;
+	if (process_start(&proc) < 0)
+		return -1;
+
+	for (;;) {
+		ssize_t n = pipe_read_timed(proc.out, buf + len,
+					    sizeof(buf) - 1 - len, 1000);
+		if (n <= 0)
+			break;
+		len += (size_t)n;
+		if (len >= sizeof(buf) - 1)
+			break;
+	}
+	if (process_finish(&proc) != 0 || len == 0)
+		return -1;
+
+	while (len > 0 && (buf[len - 1] == '\n' || buf[len - 1] == '\r'))
+		len--;
+	sbuf_add(out, buf, len);
+	return 0;
+}
+
+/*
+ * Write `sitecustomize.py` under @p site_packages.  The ice absolute
+ * path is embedded verbatim (POSIX paths contain neither quotes nor
+ * backslashes in practice, so no escaping is needed).  Called every
+ * @c{ice init} so the path stays fresh if the binary moves.
+ */
+static void write_sitecustomize(const char *site_packages, const char *ice_path)
+{
+	struct sbuf path = SBUF_INIT;
+	struct sbuf content = SBUF_INIT;
+
+	sbuf_addf(&path, "%s/sitecustomize.py", site_packages);
+	sbuf_addf(
+	    &content,
+	    "# Generated by `ice init`.  Intercepts ESP-IDF host Python\n"
+	    "# scripts at interpreter startup and hands them off to the\n"
+	    "# native ice equivalents.  Do not edit -- rewritten on\n"
+	    "# every `ice init`.\n"
+	    "import os\n"
+	    "import sys\n"
+	    "\n"
+	    "_ICE = \"%s\"\n"
+	    "\n"
+	    "\n"
+	    "def _esptool_dispatch(args):\n"
+	    "    \"\"\"Map `esptool <args>` to `ice image create`.\"\"\"\n"
+	    "    if \"elf2image\" not in args:\n"
+	    "        return\n"
+	    "    i = args.index(\"elf2image\")\n"
+	    "    before, after = args[:i], args[i + 1:]\n"
+	    "    chip = None\n"
+	    "    kept = []\n"
+	    "    j = 0\n"
+	    "    while j < len(before):\n"
+	    "        if before[j] == \"--chip\" and j + 1 < len(before):\n"
+	    "            chip = before[j + 1]\n"
+	    "            j += 2\n"
+	    "        else:\n"
+	    "            kept.append(before[j])\n"
+	    "            j += 1\n"
+	    "    new = [_ICE, \"image\", \"create\"]\n"
+	    "    if chip:\n"
+	    "        new += [\"--chip\", chip]\n"
+	    "    new += kept + after\n"
+	    "    os.execv(_ICE, new)\n"
+	    "\n"
+	    "\n"
+	    "def _main():\n"
+	    "    if not sys.argv:\n"
+	    "        return\n"
+	    "    base = os.path.basename(sys.argv[0])\n"
+	    "    if base == \"ldgen.py\":\n"
+	    "        os.execv(_ICE, [_ICE, \"idf\", \"ldgen\", "
+	    "*sys.argv[1:]])\n"
+	    "    elif base == \"gen_esp32part.py\":\n"
+	    "        # IDF calls gen_esp32part.py twice per target:\n"
+	    "        #   generate  (csv -> bin) -- has a .csv argument\n"
+	    "        #   display   (bin)        -- no .csv argument\n"
+	    "        # Route generate through ice; treat display as no-op.\n"
+	    "        # Use os._exit so we bail without unwinding through\n"
+	    "        # site.py (SystemExit during site init is fatal).\n"
+	    "        if any(a.endswith(\".csv\") for a in sys.argv[1:]):\n"
+	    "            os.execv(_ICE,\n"
+	    "                     [_ICE, \"idf\", \"partition-table\",\n"
+	    "                      *sys.argv[1:]])\n"
+	    "        else:\n"
+	    "            os._exit(0)\n"
+	    "    elif base == \"gen_crt_bundle.py\":\n"
+	    "        os.execv(_ICE,\n"
+	    "                 [_ICE, \"idf\", \"crt-bundle\", *sys.argv[1:]])\n"
+	    "    elif base == \"esptool.py\":\n"
+	    "        _esptool_dispatch(sys.argv[1:])\n"
+	    "    elif sys.argv[0] == \"-m\" and \"elf2image\" in "
+	    "sys.argv[1:]:\n"
+	    "        # `python -m esptool ...`: Python consumes the module\n"
+	    "        # name, so sys.argv is [\"-m\", <user args...>] and\n"
+	    "        # \"esptool\" is not visible.  Use `elf2image`'s\n"
+	    "        # presence as the disambiguator -- that matches\n"
+	    "        # patch_ninja's exact coverage.\n"
+	    "        _esptool_dispatch(sys.argv[1:])\n"
+	    "    elif sys.argv[0] == \"-m\" and \"--kconfig\" in "
+	    "sys.argv[1:]:\n"
+	    "        # `python -m kconfgen ...`: same argv-eating quirk as\n"
+	    "        # esptool above.  `--kconfig` is kconfgen's mandatory\n"
+	    "        # root flag and doesn't appear in any other IDF-invoked\n"
+	    "        # python module, so it is a safe disambiguator.\n"
+	    "        os.execv(_ICE,\n"
+	    "                 [_ICE, \"idf\", \"kconfgen\", *sys.argv[1:]])\n"
+	    "\n"
+	    "\n"
+	    "try:\n"
+	    "    _main()\n"
+	    "except BaseException as _exc:\n"
+	    "    sys.stderr.write(\"ice sitecustomize: \" + repr(_exc) + "
+	    "\"\\n\")\n",
+	    ice_path);
+
+	if (write_file_atomic(path.buf, content.buf, content.len) < 0)
+		die_errno("write '%s'", path.buf);
+
+	sbuf_release(&path);
+	sbuf_release(&content);
+}
+
+/*
+ * Create @c{<ice_home>/venv} on first init and write sitecustomize.py
+ * into its site-packages.  Subsequent calls skip venv creation but
+ * always refresh sitecustomize.py so the embedded ice path tracks the
+ * currently-running binary.  Dies on any step that must succeed.
+ */
+static void setup_venv(void)
+{
+	struct sbuf venv = SBUF_INIT;
+	struct sbuf py = SBUF_INIT;
+	struct sbuf site = SBUF_INIT;
+	const char *exe = process_exe();
+
+	venv_dir(&venv);
+	venv_python(&py);
+
+	if (access(py.buf, X_OK) != 0) {
+		const char *host = host_python();
+		struct svec cmd = SVEC_INIT;
+		struct process proc = PROCESS_INIT;
+		int rc;
+
+		if (!host)
+			die("no host python found on PATH "
+			    "(install python3 to bootstrap @c{~/.ice/venv})");
+
+		svec_push(&cmd, host);
+		svec_push(&cmd, "-m");
+		svec_push(&cmd, "venv");
+		svec_push(&cmd, venv.buf);
+
+		proc.argv = cmd.v;
+		rc = process_run_progress(&proc, "Creating Python venv",
+					  "init-venv", NULL);
+		svec_clear(&cmd);
+		if (rc)
+			die("failed to create @c{%s}", venv.buf);
+	}
+
+	if (venv_site_packages(py.buf, &site) < 0)
+		die("cannot query site-packages from @c{%s}", py.buf);
+
+	write_sitecustomize(site.buf, exe ? exe : "ice");
+
+	sbuf_release(&venv);
+	sbuf_release(&py);
+	sbuf_release(&site);
 }
 
 /*
@@ -906,6 +868,11 @@ int cmd_init(int argc, const char **argv)
 	if (rc)
 		goto out;
 
+	/* Create ~/.ice/venv (if missing) and refresh its sitecustomize.py
+	 * so cmake's Python3_EXECUTABLE can safely route IDF's host scripts
+	 * through ice -- see the section comment on setup_venv() above. */
+	setup_venv();
+
 	/* Wipe the profile's build dir and back up its sdkconfig. */
 	backup_sdkconfig(sdkconfig);
 	rc = wipe_build_dir(build_dir);
@@ -982,8 +949,6 @@ int cmd_init(int argc, const char **argv)
 	sbuf_reset(&marker);
 	sbuf_addf(&marker, "%s/.ice/built", build_dir);
 	unlink(marker.buf);
-
-	patch_ninja(build_dir);
 
 out:
 	free(idf_path);
