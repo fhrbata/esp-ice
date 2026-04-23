@@ -41,6 +41,7 @@
 #include "platform.h"
 #include "progress.h"
 #include "sbuf.h"
+#include "smap.h"
 #include "svec.h"
 #include "term.h"
 
