@@ -106,6 +106,56 @@ The portable helpers built on top of the platform primitives
 (`fs_mkdirp`, `rmtree`, `write_file_atomic`, CSV readers, …) live at
 the root and have no `#ifdef`s.  Keep it that way.
 
+### Prefer POSIX names over new `ice_*` APIs
+
+When a POSIX function exists for what you need, extend it to Windows
+via a `foo_w()` shim (UTF-8 → `wchar_t` via `mbs_to_wcs`, then call
+the `_w`-suffixed Win32 CRT function) and `#define foo foo_w` in
+`platform.h`.  Call sites then read as plain POSIX C on both sides.
+The canonical shims are `fopen_w`, `access_w`, `mkdir_w`, `open_w`,
+`unlink_w`, `rmdir_w`, `rename_w`, `chdir_w`, `chmod_w`, `getcwd_w`,
+`symlink_w`, `link_w`; follow this pattern.
+
+Reach for a new ice-named helper (`process_start`, `dir_foreach`,
+`pipe_read_timed`, …) only when no POSIX function fits at all.  If
+you find yourself inventing `ice_path_*` or `ice_console_*` to hide
+a single `#ifdef` branch, you almost certainly want a `_w` shim
+instead.
+
+### UTF-8 path invariant
+
+**Every path-accepting POSIX call on Windows MUST route through a
+`_w` shim.**  Without it, non-ASCII paths are silently mangled via
+the system ANSI code page.  Before adding a call to a POSIX function
+that takes a path argument (`stat`, `truncate`, `utime`, `freopen`,
+…), check that `platform.h` already maps the bare name to a UTF-8
+shim; if not, add the shim before the call site.
+
+Equivalently: raw `chdir(path)`, `chmod(path, …)`, `remove(path)`,
+`getcwd(buf, n)`, etc. in root or `cmd/` code is a bug even if the
+CI build passes — the bug only manifests when a user has a non-ASCII
+character in a path on Windows.
+
+### Before-submitting smell tests
+
+Run these greps against your changes:
+
+- `#ifdef _WIN32` / `#ifndef _WIN32` outside `platform/` → push into
+  a shim, or inline an unconditional version that is a no-op on the
+  platform where the check is irrelevant.
+- `#include <dirent.h>` / `<sys/select.h>` / `<sys/wait.h>` /
+  `<termios.h>` outside `platform/` → `platform.h` should provide
+  the primitive instead.
+- Forward declarations of POSIX functions in a `.c` file
+  (`int fileno(FILE *);`, `int dup2(int, int);`, …) → move the
+  declaration to `platform.h` so every caller picks it up.
+- `popen` / `pclose` → use `struct process` with `pipe_in` /
+  `use_shell`.
+- Raw `chdir`, `chmod`, `getcwd`, `remove` → either the file is
+  missing `#include "ice.h"` / `#include "platform.h"` (so the
+  shim macros aren't visible), or the shim is missing and should
+  be added.
+
 ## `cmd/` layout
 
 Every `ice <command>` — leaf or namespace — has exactly one directory

@@ -44,3 +44,19 @@ repos:
     hooks:
       - id: clang-format
         types_or: [c, c++]
+
+  # Platform-abstraction rules (see CONTRIBUTING.md):
+  #   - no #ifdef _WIN32/__linux__/... outside platform/
+  #   - no POSIX-only <dirent.h>/<sys/select.h>/... includes
+  #   - no popen()/pclose()
+  # The make target scans the full tree on every invocation, so
+  # pass_filenames is off and the hook fires whenever a C source
+  # or header changes.
+  - repo: local
+    hooks:
+      - id: lint-platform
+        name: lint-platform (CONTRIBUTING.md "Platform abstraction")
+        language: system
+        entry: make lint-platform
+        pass_filenames: false
+        types_or: [c, c++]

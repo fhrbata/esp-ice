@@ -25,8 +25,8 @@
  * @brief Start the pager if stdout is an interactive terminal.
  *
  * No-op if stdout is already redirected, if the pager is already
- * running, or if popen() fails.  An atexit() handler ensures the
- * pager is closed cleanly when the process exits.
+ * running, or if the child process fails to spawn.  An atexit()
+ * handler ensures the pager is closed cleanly when the process exits.
  */
 void pager_start(void);
 
