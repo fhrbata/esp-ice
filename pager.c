@@ -10,30 +10,11 @@
  */
 #include "ice.h"
 
-#ifdef _WIN32
-#define popen _popen
-#define pclose _pclose
-#define dup _dup
-#define dup2 _dup2
-#endif
-
-/*
- * POSIX functions not declared by ISO C99 <stdio.h> under
- * -std=c99 -pedantic.  Same pattern as putenv() in platform.h.
- */
-#ifndef _WIN32
-int fileno(FILE *stream);
-int dup(int oldfd);
-int dup2(int oldfd, int newfd);
-int setenv(const char *name, const char *value, int overwrite);
-FILE *popen(const char *command, const char *type);
-int pclose(FILE *stream);
-#endif
-
-static FILE *pager_pipe;
+static struct process pager_proc;
+static int pager_started;
 static int saved_stdout_fd = -1;
 
-int pager_active(void) { return pager_pipe != NULL; }
+int pager_active(void) { return pager_started; }
 
 /*
  * Return 1 if the first whitespace-separated token of @p cmd resolves
@@ -63,8 +44,9 @@ static int pager_available(const char *cmd)
 void pager_start(void)
 {
 	const char *cmd;
+	const char *argv[2];
 
-	if (pager_pipe)
+	if (pager_started)
 		return;
 	if (!isatty(STDOUT_FILENO))
 		return;
@@ -82,28 +64,36 @@ void pager_start(void)
 	 *   F -- exit immediately if output fits on one screen
 	 *   R -- pass raw ANSI colour sequences through
 	 *   X -- don't clear the screen on start/exit
+	 *
+	 * putenv() is portable (platform.h remaps to _putenv on Windows);
+	 * we only install the default if $LESS is unset, so we never
+	 * clobber the user's value.  The string must outlive the process,
+	 * which a literal does.
 	 */
-#ifdef _WIN32
 	if (!getenv("LESS"))
-		putenv("LESS=FRX");
-#else
-	setenv("LESS", "FRX", 0);
-#endif
+		putenv((char *)"LESS=FRX");
 
-	pager_pipe = popen(cmd, "w");
-	if (!pager_pipe)
+	argv[0] = cmd;
+	argv[1] = NULL;
+	pager_proc.argv = argv;
+	pager_proc.use_shell = 1;
+	pager_proc.pipe_in = 1;
+	if (process_start(&pager_proc))
 		return;
 
 	fflush(stdout);
 	saved_stdout_fd = dup(STDOUT_FILENO);
-	dup2(fileno(pager_pipe), STDOUT_FILENO);
+	dup2(pager_proc.in, STDOUT_FILENO);
+	close(pager_proc.in);
+	pager_proc.in = -1;
 
+	pager_started = 1;
 	atexit(pager_end);
 }
 
 void pager_end(void)
 {
-	if (!pager_pipe)
+	if (!pager_started)
 		return;
 
 	fflush(stdout);
@@ -112,6 +102,6 @@ void pager_end(void)
 		close(saved_stdout_fd);
 		saved_stdout_fd = -1;
 	}
-	pclose(pager_pipe);
-	pager_pipe = NULL;
+	process_finish(&pager_proc);
+	pager_started = 0;
 }
