@@ -186,19 +186,20 @@ static void sbuf_pad(struct sbuf *sb, const char *s, int width)
 }
 
 /*
- * Render one body row @p idx (visible index 0..body_rows-1) with
- * the underlying item at @p item_idx or a blank filler row.
+ * Row layout (1-based columns, W = L->width):
  *
- * Layout per row (1-based columns):
- *   col 1      :  '>' if cursor, ' ' otherwise
- *   col 2      :  ' ' (padding)
- *   col 3..W-V :  left-aligned text, truncated / padded
- *   col W-V..W :  right-aligned value (if any)
+ *   col 1..2     "> " for cursor, "  " otherwise   (prefix_w = 2)
+ *   col 3..M     text, padded with spaces          (text_w)
+ *   col M+1..W   " VALUE " or blank filler         (value block)
+ *
+ * Totals always add to exactly W so the reverse-video stripe on a
+ * cursor row reaches the right edge without leaking the previous
+ * frame's trailing text.
  */
 static void render_item_row(struct sbuf *sb, const struct tui_list *L, int idx)
 {
 	int item_idx = L->top + idx;
-	sbuf_addf(sb, "\x1b[%d;1H", 2 + idx); /* body row = title + 1 + idx */
+	sbuf_addf(sb, "\x1b[%d;1H", 2 + idx);
 	if (item_idx >= L->n_items) {
 		/* Blank filler so the previous frame's row is cleared. */
 		for (int i = 0; i < L->width; i++)
@@ -210,39 +211,66 @@ static void render_item_row(struct sbuf *sb, const struct tui_list *L, int idx)
 	int is_heading = (it->flags & TUI_ITEM_HEADING) != 0;
 	int is_disabled = (it->flags & TUI_ITEM_DISABLED) != 0;
 
+	/*
+	 * Row-level style.  Only one of reverse / bold / dim applies at a
+	 * time -- cursor dominates (so the stripe reads clearly), then
+	 * headings, then disabled.  Emitted as a single SGR sequence and
+	 * reset at row end.
+	 */
+	const char *row_sgr = NULL;
 	if (is_cursor)
-		sbuf_addstr(sb, "\x1b[7m"); /* reverse video */
+		row_sgr = "\x1b[7m"; /* reverse video */
 	else if (is_heading)
-		sbuf_addstr(sb, "\x1b[1m"); /* bold */
+		row_sgr = "\x1b[1;33m"; /* bold yellow: "group label" */
 	else if (is_disabled)
-		sbuf_addstr(sb, "\x1b[2m"); /* dim */
+		row_sgr = "\x1b[2m"; /* dim */
+	if (row_sgr)
+		sbuf_addstr(sb, row_sgr);
 
 	sbuf_addch(sb, is_cursor ? '>' : ' ');
 	sbuf_addch(sb, ' ');
 
 	int value_w = it->value ? (int)strlen(it->value) : 0;
 	/*
-	 * Column budget: width - 2 (prefix) - 1 (gap) - value_w - 1 (trailing).
-	 * Falls back to "no value" if the value itself wouldn't fit.
+	 * " VALUE " (surrounding spaces) takes value_w + 2 columns.  Text
+	 * gets whatever's left after the 2-column prefix.  If the
+	 * terminal is too narrow for both, drop the value so the text
+	 * stays legible.
 	 */
-	int text_w = L->width - 3 - value_w - 1;
+	int value_block_w = value_w > 0 ? value_w + 2 : 0;
+	int text_w = L->width - 2 - value_block_w;
 	if (text_w < 0) {
-		text_w = L->width - 3;
+		text_w = L->width - 2;
 		value_w = 0;
+		value_block_w = 0;
 	}
 	sbuf_pad(sb, it->text, text_w);
 	if (value_w > 0) {
 		sbuf_addch(sb, ' ');
+		/*
+		 * Apply per-item value_sgr only when the row-level style
+		 * would not conflict with it.  On a cursor row the reverse-
+		 * video already carries the whole line, so keep the value
+		 * under that style.  Disabled rows also override (dimmed
+		 * values read consistently with their dim label).
+		 */
+		int apply_value_sgr =
+		    it->value_sgr && !is_cursor && !is_disabled;
+		if (apply_value_sgr)
+			sbuf_addf(sb, "\x1b[%sm", it->value_sgr);
 		sbuf_add(sb, it->value, (size_t)value_w);
+		if (apply_value_sgr) {
+			/* Re-assert the row-level style (if any) after the
+			 * item-level one.  An empty string-reset here would
+			 * clear the reverse / dim row stripe entirely. */
+			sbuf_addstr(sb, "\x1b[0m");
+			if (row_sgr)
+				sbuf_addstr(sb, row_sgr);
+		}
 		sbuf_addch(sb, ' ');
-	} else {
-		/* Pad out the trailing cells so the reverse-video cursor
-		 * stripe reaches the right edge. */
-		for (int i = 0; i < value_w + 1; i++)
-			sbuf_addch(sb, ' ');
 	}
 
-	sbuf_addstr(sb, "\x1b[0m"); /* reset SGR */
+	sbuf_addstr(sb, "\x1b[0m");
 }
 
 void tui_list_render(const struct tui_list *L)
@@ -251,11 +279,16 @@ void tui_list_render(const struct tui_list *L)
 
 	/* Full repaint: rather than track dirty regions, clear and redraw.
 	 * With sbuf batching the cost is one write per frame -- dwarfed
-	 * by the user's keystroke cadence. */
-	sbuf_addstr(&sb, "\x1b[2J\x1b[H");
+	 * by the user's keystroke cadence.  Hide the cursor for the
+	 * duration: without it, every ESC[r;cH between rows briefly
+	 * flashes a visible cursor across the screen.  A modal prompt
+	 * layered on top re-enables the cursor at its input position. */
+	sbuf_addstr(&sb, "\x1b[?25l\x1b[2J\x1b[H");
 
-	/* Title bar in reverse video, left-padded. */
-	sbuf_addstr(&sb, "\x1b[1;1H\x1b[7m");
+	/* Title bar: bold white on blue (classic menuconfig palette).
+	 * Includes a one-space left margin so the text doesn't crowd
+	 * the terminal edge. */
+	sbuf_addstr(&sb, "\x1b[1;1H\x1b[1;37;44m");
 	sbuf_addch(&sb, ' ');
 	sbuf_pad(&sb, L->title, L->width - 1);
 	sbuf_addstr(&sb, "\x1b[0m");
@@ -265,10 +298,10 @@ void tui_list_render(const struct tui_list *L)
 	for (int i = 0; i < rows; i++)
 		render_item_row(&sb, L, i);
 
-	/* Footer row in reverse video.  L->height is 1-based; position at
-	 * the last row. */
+	/* Footer: white on blue (no bold) -- matches the title palette
+	 * but reads as a secondary band. */
 	if (L->height >= 2) {
-		sbuf_addf(&sb, "\x1b[%d;1H\x1b[7m", L->height);
+		sbuf_addf(&sb, "\x1b[%d;1H\x1b[37;44m", L->height);
 		sbuf_addch(&sb, ' ');
 		sbuf_pad(&sb, L->footer, L->width - 1);
 		sbuf_addstr(&sb, "\x1b[0m");
@@ -401,6 +434,15 @@ void tui_prompt_render(const struct tui_prompt *P)
 	int top = (P->height - PROMPT_BOX_ROWS) / 2 + 1;
 	int inner = cols - 2; /* between the two vertical borders */
 
+	/*
+	 * Hide the cursor for the duration of the frame.  Without this,
+	 * each ESC[r;cH between box-draw commands briefly positions a
+	 * visible cursor at the border cells, producing the "cursor jumps
+	 * around the screen" flicker users see when the modal pops up.
+	 * Re-enabled at the final cursor placement below.
+	 */
+	sbuf_addstr(&sb, "\x1b[?25l");
+
 	/* Light-line box using the term.h box-draw macros.  The top line
 	 * carries the title; the middle separator splits it from the
 	 * input; the input line holds the buffer + cursor; the bottom
@@ -454,8 +496,12 @@ void tui_prompt_render(const struct tui_prompt *P)
 	 * already in @c left. */
 	sbuf_addf(&sb, "\x1b[%d;%dH", top + 3,
 		  left + 2 + (P->cursor - view_start));
-	/* Show the cursor while the modal is up -- the alt-screen enter
-	 * hid it.  Callers restore by calling term_screen_leave on exit. */
+	/*
+	 * Re-show the cursor at its final edit position.  The alt-screen
+	 * enter hid it, and tui_list_render also hides it at the top of
+	 * every frame, so this is the one place a visible cursor is
+	 * wanted while the TUI is active.
+	 */
 	sbuf_addstr(&sb, "\x1b[?25h");
 
 	fputs(sb.buf, stdout);

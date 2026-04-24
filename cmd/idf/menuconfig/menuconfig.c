@@ -118,8 +118,8 @@ static void view_reset(struct view *v)
 	v->n = 0;
 }
 
-static void view_add(struct view *v, char *text, char *value, int flags,
-		     struct kmenu *menu)
+static void view_add(struct view *v, char *text, char *value,
+		     const char *value_sgr, int flags, struct kmenu *menu)
 {
 	if (v->n == v->cap) {
 		size_t next = v->cap ? v->cap * 2 : 16;
@@ -133,6 +133,7 @@ static void view_add(struct view *v, char *text, char *value, int flags,
 	v->rows[v->n].owned_value = value;
 	v->items[v->n].text = text;
 	v->items[v->n].value = value;
+	v->items[v->n].value_sgr = value_sgr;
 	v->items[v->n].flags = flags;
 	v->items[v->n].userdata = menu;
 	v->n++;
@@ -198,17 +199,28 @@ static void flatten_node(struct view *v, struct kmenu *c)
 			return;
 		char *text = sbuf_strdup(prompt);
 		char *value;
+		const char *value_sgr = NULL;
 		int flags = 0;
 		if (c->sym->type == KS_BOOL) {
 			value = bool_marker(c->sym);
+			/* Bold green for "on" markers so a glance across
+			 * the list shows what's active.  "off" markers stay
+			 * in the default colour; colouring them too makes
+			 * the list louder than it needs to be. */
+			int on = c->sym->cur_val &&
+				 strcmp(c->sym->cur_val, "y") == 0;
+			if (on)
+				value_sgr = "1;32";
 		} else {
-			/* Non-bool display-only in v1.  Dim the row so
-			 * the caret skips it and users see why pressing
-			 * Space / Enter does nothing. */
+			/* Non-bool display-only in v1.  Dim the row so the
+			 * caret skips it and users see why pressing Space /
+			 * Enter does nothing; value column in cyan to hint
+			 * "read-only for now". */
 			value = paren_value(c->sym);
+			value_sgr = "36";
 			flags |= TUI_ITEM_DISABLED;
 		}
-		view_add(v, text, value, flags, c);
+		view_add(v, text, value, value_sgr, flags, c);
 		return;
 	}
 	case KM_CHOICE: {
@@ -241,7 +253,8 @@ static void flatten_node(struct view *v, struct kmenu *c)
 		sbuf_addch(&val, '(');
 		sbuf_addstr(&val, winner_prompt);
 		sbuf_addch(&val, ')');
-		view_add(v, sbuf_detach(&lbl), sbuf_detach(&val), 0, c);
+		/* Cyan value matches the non-bool paren style. */
+		view_add(v, sbuf_detach(&lbl), sbuf_detach(&val), "36", 0, c);
 		return;
 	}
 	case KM_MENU: {
@@ -250,14 +263,14 @@ static void flatten_node(struct view *v, struct kmenu *c)
 		struct sbuf sb = SBUF_INIT;
 		sbuf_addstr(&sb, c->prompt);
 		sbuf_addstr(&sb, "  --->");
-		view_add(v, sbuf_detach(&sb), NULL, 0, c);
+		view_add(v, sbuf_detach(&sb), NULL, NULL, 0, c);
 		return;
 	}
 	case KM_COMMENT: {
 		if (!c->prompt)
 			return;
 		char *text = sbuf_strdup(c->prompt);
-		view_add(v, text, NULL, TUI_ITEM_HEADING, c);
+		view_add(v, text, NULL, NULL, TUI_ITEM_HEADING, c);
 		return;
 	}
 	case KM_ROOT:
@@ -399,9 +412,18 @@ static int yn_prompt(struct view *v, const char *title)
 	tui_prompt_render(&p);
 	for (;;) {
 		struct term_event ev;
-		int rc = term_read_event(&ev, 0);
+		/*
+		 * Block with a generous timeout rather than polling.  A
+		 * non-blocking poll here spins the modal's render hundreds
+		 * of times a second, which on some terminals manifests as
+		 * a flickering cursor and drives the fan -- neither of
+		 * which anyone wants while they're answering a y/n prompt.
+		 */
+		int rc = term_read_event(&ev, 1000);
 		if (rc < 0)
 			return -1;
+		if (rc == 0)
+			continue;
 		if (ev.key == TK_RESIZE) {
 			tui_prompt_resize(&p, ev.cols, ev.rows);
 			redraw(v); /* repaint list behind the modal */

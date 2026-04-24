@@ -39,8 +39,13 @@ struct term_event;
 struct tui_list_item {
 	const char *text;  /**< Left-aligned label; widget does not own. */
 	const char *value; /**< Right-aligned value string; NULL for none. */
-	int flags;	   /**< Bitmask of @c TUI_ITEM_* flags. */
-	void *userdata;	   /**< Opaque to the widget; caller interprets. */
+	const char *value_sgr; /**< Optional SGR params (e.g. "1;32") wrapped
+				*   around the value column on non-cursor rows.
+				*   NULL keeps the row-level style.  Ignored
+				*   when the row is highlighted so the reverse-
+				*   video stripe stays consistent. */
+	int flags;	       /**< Bitmask of @c TUI_ITEM_* flags. */
+	void *userdata;	       /**< Opaque to the widget; caller interprets. */
 };
 
 struct tui_list {
