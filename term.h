@@ -276,6 +276,47 @@ void term_screen_enter(void);
  */
 void term_screen_leave(void);
 
+/* ------------------------------------------------------------------ */
+/*  Raw-mode output helpers                                           */
+/* ------------------------------------------------------------------ */
+
+/*
+ * All helpers below emit ANSI escape sequences directly to stdout
+ * with an immediate fflush.  On POSIX the terminal interprets them
+ * natively.  On Windows 10+ with VT enabled the path is the same;
+ * on legacy conhost, platform/win/io.c's console_write_legacy parses
+ * the same sequences and dispatches to Console API calls -- callers
+ * stay OS-agnostic.
+ *
+ * Row / column arguments are 1-based to match the VT100 convention
+ * (ESC[1;1H is the top-left cell).
+ */
+
+/** @brief Move the cursor to (row, col).  1-based. */
+void term_move(int row, int col);
+
+/** @brief Erase from the cursor to the end of the current line. */
+void term_clear_to_eol(void);
+
+/** @brief Erase the entire current line.  Cursor position unchanged. */
+void term_clear_line(void);
+
+/** @brief Erase the whole screen and home the cursor. */
+void term_clear_screen(void);
+
+/**
+ * @brief Apply SGR attributes.
+ *
+ * @p codes is the semicolon-separated parameter string that goes
+ * between @c ESC[ and @c m -- e.g. @c "1;37;44" for bold white on
+ * blue, @c "0" (or the empty string) to reset all attributes.
+ * Passing @c NULL is equivalent to @c "0".
+ */
+void term_sgr(const char *codes);
+
+/** @brief Reset all SGR attributes.  Shortcut for @c term_sgr("0"). */
+void term_sgr_reset(void);
+
 /* Box-drawing characters (UTF-8) matching Rich's heavy-head style. */
 #define TL "\xe2\x94\x8f" /* ┏ */
 #define TM "\xe2\x94\xb3" /* ┳ */

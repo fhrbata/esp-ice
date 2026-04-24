@@ -432,3 +432,49 @@ int term_read_event(struct term_event *ev, unsigned timeout_ms)
 	ev->key = TK_ESC;
 	return 1;
 }
+
+/* ================================================================== */
+/*  Raw-mode output helpers                                           */
+/* ================================================================== */
+
+/*
+ * Every helper writes via stdio so the Windows output shim in
+ * platform/win/io.c can intercept the byte stream when VT processing
+ * is unavailable and dispatch to Console API calls.  fflush keeps the
+ * TUI redraw order tight against stdin -- without it a buffered
+ * escape could leave the cursor in the wrong place between keystrokes.
+ */
+
+void term_move(int row, int col)
+{
+	printf("\x1b[%d;%dH", row, col);
+	fflush(stdout);
+}
+
+void term_clear_to_eol(void)
+{
+	fputs("\x1b[K", stdout);
+	fflush(stdout);
+}
+
+void term_clear_line(void)
+{
+	fputs("\x1b[2K", stdout);
+	fflush(stdout);
+}
+
+void term_clear_screen(void)
+{
+	/* Clear the screen and home the cursor in one fflush -- the two
+	 * together are the canonical "fresh frame" prologue. */
+	fputs("\x1b[2J\x1b[H", stdout);
+	fflush(stdout);
+}
+
+void term_sgr(const char *codes)
+{
+	printf("\x1b[%sm", codes && *codes ? codes : "0");
+	fflush(stdout);
+}
+
+void term_sgr_reset(void) { term_sgr(NULL); }
