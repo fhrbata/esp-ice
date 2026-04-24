@@ -22,6 +22,8 @@
 #include "ice.h"
 #include "tui.h"
 
+#include <strings.h> /* strncasecmp for the search matcher */
+
 #include "cmd/idf/kconfgen/kc_ast.h"
 #include "cmd/idf/kconfgen/kc_eval.h"
 #include "cmd/idf/kconfgen/kc_io.h"
@@ -836,6 +838,417 @@ static int handle_quit(struct view *v)
 }
 
 /* ================================================================== */
+/*  Global symbol search (`/`)                                         */
+/* ================================================================== */
+
+/*
+ * Case-insensitive substring match.  Returns 1 when @p needle occurs
+ * anywhere in @p haystack under ASCII case folding.  Empty needles
+ * match everything so the initial render with an empty query shows
+ * the full symbol list.
+ */
+static int ci_contains(const char *haystack, const char *needle)
+{
+	if (!needle || !*needle)
+		return 1;
+	if (!haystack)
+		return 0;
+	size_t nlen = strlen(needle);
+	for (const char *h = haystack; *h; h++) {
+		if (strncasecmp(h, needle, nlen) == 0)
+			return 1;
+	}
+	return 0;
+}
+
+/*
+ * One search match.  @c menu is the @c KM_SYM kmenu node that declares
+ * the symbol, i.e. the node a jump needs to land on in the parent's
+ * flattened item list.
+ */
+struct hit {
+	struct kmenu *menu;
+	struct ksym *sym;
+};
+
+/*
+ * Walk the menu tree collecting every visible symbol whose name or
+ * prompt contains @p query.  Uses the same visibility / prompt rules
+ * as the list flattener so search only returns symbols the user
+ * could actually navigate to.
+ */
+static void collect_hits_visit(struct kmenu *m, const char *query,
+			       struct hit **hits, size_t *n, size_t *cap)
+{
+	for (struct kmenu *c = m->children; c; c = c->next) {
+		if (c->kind == KM_IF || c->kind == KM_MENU ||
+		    c->kind == KM_CHOICE || c->kind == KM_ROOT)
+			collect_hits_visit(c, query, hits, n, cap);
+		if ((c->kind == KM_SYM || c->kind == KM_CHOICE) && c->sym &&
+		    c->sym->visible) {
+			const char *prompt = sym_prompt(c->sym);
+			if (!prompt)
+				continue;
+			if (!ci_contains(c->sym->name, query) &&
+			    !ci_contains(prompt, query))
+				continue;
+			if (*n == *cap) {
+				size_t next = *cap ? *cap * 2 : 32;
+				*hits = realloc(*hits, next * sizeof(**hits));
+				if (!*hits)
+					die_errno("realloc");
+				*cap = next;
+			}
+			(*hits)[*n].menu = c;
+			(*hits)[*n].sym = c->sym;
+			(*n)++;
+		}
+	}
+}
+
+/*
+ * Walk up from a @c KM_SYM node through any transparent @c KM_IF
+ * wrappers until we hit the real enclosing container the list
+ * flattener would render it under (menu / choice / root).
+ */
+static struct kmenu *find_container(struct kmenu *sym_menu)
+{
+	struct kmenu *p = sym_menu ? sym_menu->parent : NULL;
+	while (p && p->kind == KM_IF)
+		p = p->parent;
+	return p;
+}
+
+/*
+ * Make @p target_sym_menu the current selection: switch to its
+ * enclosing container, rebuild the item list, and position the
+ * caret on its row.  Clears the submenu-position stack -- a jump
+ * is a teleport, not a descent, so there's no meaningful parent to
+ * pop back to with Esc.
+ */
+static void jump_to(struct view *v, struct kmenu *target_sym_menu)
+{
+	struct kmenu *container = find_container(target_sym_menu);
+	if (!container)
+		return;
+	v->stack_n = 0;
+	v->cur = container;
+	refresh_list(v, 0);
+	for (size_t i = 0; i < v->n; i++) {
+		if (v->items[i].userdata == target_sym_menu) {
+			v->list.cursor = (int)i;
+			tui_list_resize(&v->list, v->list.width,
+					v->list.height);
+			return;
+		}
+	}
+}
+
+/*
+ * Render the search modal into @p sb.  Layout (centred, ~80% width,
+ * ~70% height):
+ *
+ *   ┌─ Search ──────────────────────────┐
+ *   │ query_text                        │   <- input row; cursor visible
+ *   ├───────────────────────────────────┤
+ *   │ > CONFIG_FOO          Foo prompt  │   <- selected = reverse video
+ *   │   CONFIG_BAR          Bar prompt  │
+ *   │   ...                             │
+ *   └───────────────────────────────────┘
+ *    ↑↓ navigate  •  Enter jump  •  Esc cancel
+ */
+static void render_search(int width, int height, const char *query,
+			  const struct hit *hits, size_t n_hits, int selected,
+			  int top)
+{
+	struct sbuf sb = SBUF_INIT;
+
+	int cols = width * 8 / 10;
+	if (cols < 40)
+		cols = width > 40 ? 40 : width - 2;
+	if (cols > width - 2)
+		cols = width - 2;
+	int box_rows = height * 7 / 10;
+	if (box_rows < 10)
+		box_rows = height > 10 ? 10 : height - 2;
+	if (box_rows > height - 1)
+		box_rows = height - 1;
+	int left = (width - cols) / 2 + 1;
+	int boxtop = (height - box_rows) / 2 + 1;
+	int inner = cols - 2;
+	int result_rows = box_rows - 4; /* top, input, sep, bottom */
+
+#define S_BORDER "\x1b[36m"
+#define S_INPUT "\x1b[0m"
+#define S_SEL "\x1b[7m"
+#define S_DIM "\x1b[0;2m"
+#define S_HINT "\x1b[0;2m"
+#define S_RESET "\x1b[0m"
+
+	sbuf_addstr(&sb, "\x1b[?25l");
+
+	/* Top border with inline " Search " label. */
+	sbuf_addf(&sb, "\x1b[%d;%dH%s", boxtop, left, S_BORDER);
+	sbuf_addstr(&sb, "\xe2\x94\x8c");
+	const char *label = "\xe2\x94\x80 Search ";
+	sbuf_addstr(&sb, label);
+	for (int i = 9; i < inner; i++)
+		sbuf_addstr(&sb, HL);
+	sbuf_addstr(&sb, "\xe2\x94\x90");
+
+	/* Input row. */
+	sbuf_addf(&sb, "\x1b[%d;%dH%s", boxtop + 1, left, S_BORDER);
+	sbuf_addstr(&sb, VL);
+	sbuf_addstr(&sb, S_INPUT);
+	sbuf_addch(&sb, ' ');
+	int qlen = (int)strlen(query);
+	int view_w = inner - 1;
+	int vstart = qlen > view_w ? qlen - view_w : 0;
+	int vlen = qlen - vstart;
+	if (vlen > view_w)
+		vlen = view_w;
+	if (vlen > 0)
+		sbuf_add(&sb, query + vstart, (size_t)vlen);
+	for (int i = vlen; i < view_w; i++)
+		sbuf_addch(&sb, ' ');
+	sbuf_addstr(&sb, S_BORDER);
+	sbuf_addstr(&sb, VL);
+
+	/* Separator. */
+	sbuf_addf(&sb, "\x1b[%d;%dH%s", boxtop + 2, left, S_BORDER);
+	sbuf_addstr(&sb, "\xe2\x94\x9c");
+	for (int i = 0; i < inner; i++)
+		sbuf_addstr(&sb, HL);
+	sbuf_addstr(&sb, "\xe2\x94\xa4");
+
+	/*
+	 * Result rows.  Name left-aligned, prompt right-aligned with a
+	 * gap -- truncate either side if the terminal is narrow.  The
+	 * currently selected hit is drawn in reverse video so the
+	 * cursor reads as the same "stripe" as the list widget.
+	 */
+	int name_col = 20; /* budget for CONFIG_NAME column */
+	if (name_col > inner / 2)
+		name_col = inner / 2;
+	for (int r = 0; r < result_rows; r++) {
+		int idx = top + r;
+		sbuf_addf(&sb, "\x1b[%d;%dH%s", boxtop + 3 + r, left, S_BORDER);
+		sbuf_addstr(&sb, VL);
+		if (idx >= (int)n_hits) {
+			sbuf_addstr(&sb, S_INPUT);
+			for (int i = 0; i < inner; i++)
+				sbuf_addch(&sb, ' ');
+			sbuf_addstr(&sb, S_BORDER);
+			sbuf_addstr(&sb, VL);
+			continue;
+		}
+		int is_sel = idx == selected;
+		sbuf_addstr(&sb, is_sel ? S_SEL : S_INPUT);
+		sbuf_addch(&sb, is_sel ? '>' : ' ');
+		sbuf_addch(&sb, ' ');
+
+		const struct hit *h = &hits[idx];
+		char name_buf[64];
+		snprintf(name_buf, sizeof(name_buf), "CONFIG_%s", h->sym->name);
+		int nlen = (int)strlen(name_buf);
+		if (nlen > name_col)
+			nlen = name_col;
+		sbuf_add(&sb, name_buf, (size_t)nlen);
+		for (int i = nlen; i < name_col; i++)
+			sbuf_addch(&sb, ' ');
+		sbuf_addch(&sb, ' ');
+
+		const char *pstr = sym_prompt(h->sym);
+		int prompt_w =
+		    inner - 2 - name_col - 1 - 1; /* prefix + gap + trail */
+		if (prompt_w < 0)
+			prompt_w = 0;
+		int plen = pstr ? (int)strlen(pstr) : 0;
+		if (plen > prompt_w)
+			plen = prompt_w;
+		if (pstr)
+			sbuf_add(&sb, pstr, (size_t)plen);
+		for (int i = plen; i < prompt_w; i++)
+			sbuf_addch(&sb, ' ');
+		sbuf_addch(&sb, ' ');
+		sbuf_addstr(&sb, S_RESET);
+		sbuf_addstr(&sb, S_BORDER);
+		sbuf_addstr(&sb, VL);
+	}
+
+	/* Bottom border. */
+	sbuf_addf(&sb, "\x1b[%d;%dH%s", boxtop + box_rows - 1, left, S_BORDER);
+	sbuf_addstr(&sb, "\xe2\x94\x94");
+	for (int i = 0; i < inner; i++)
+		sbuf_addstr(&sb, HL);
+	sbuf_addstr(&sb, "\xe2\x94\x98");
+	sbuf_addstr(&sb, S_RESET);
+
+	/* Hint line. */
+	if (boxtop + box_rows <= height) {
+		struct sbuf hint = SBUF_INIT;
+		sbuf_addf(&hint,
+			  "\xe2\x86\x91\xe2\x86\x93 navigate  \xe2\x80\xa2  "
+			  "Enter jump  \xe2\x80\xa2  Esc cancel  "
+			  "\xe2\x80\xa2  %zu match%s",
+			  n_hits, n_hits == 1 ? "" : "es");
+		sbuf_addf(&sb, "\x1b[%d;%dH%s ", boxtop + box_rows, left,
+			  S_HINT);
+		int hint_cap = cols - 1;
+		int hlen = (int)hint.len;
+		if (hlen > hint_cap)
+			hlen = hint_cap;
+		sbuf_add(&sb, hint.buf, (size_t)hlen);
+		for (int i = hlen; i < hint_cap; i++)
+			sbuf_addch(&sb, ' ');
+		sbuf_release(&hint);
+		sbuf_addstr(&sb, S_RESET);
+	}
+
+	/* Put the caret in the input field so the user can see where
+	 * they're typing.  Column: left-border + 1 gap + visible-offset. */
+	int cursor_col = left + 2 + (qlen - vstart);
+	sbuf_addf(&sb, "\x1b[%d;%dH\x1b[?25h", boxtop + 1, cursor_col);
+
+	(void)S_DIM;
+
+#undef S_BORDER
+#undef S_INPUT
+#undef S_SEL
+#undef S_DIM
+#undef S_HINT
+#undef S_RESET
+
+	fputs(sb.buf, stdout);
+	fflush(stdout);
+	sbuf_release(&sb);
+}
+
+/*
+ * Entry point: open the search modal, rebuild matches on every
+ * keystroke, jump to the selected symbol on Enter, or restore the
+ * original view on Esc.
+ */
+static void search_prompt(struct view *v)
+{
+	int cols, rows;
+	term_size(&cols, &rows);
+
+	char query[128] = "";
+	int qlen = 0;
+
+	struct hit *hits = NULL;
+	size_t n_hits = 0, cap = 0;
+	collect_hits_visit(v->kc->root, query, &hits, &n_hits, &cap);
+
+	int selected = 0;
+	int top = 0;
+	int result_rows = rows * 7 / 10 - 4;
+	if (result_rows < 1)
+		result_rows = 1;
+
+	render_search(cols, rows, query, hits, n_hits, selected, top);
+
+	for (;;) {
+		struct term_event ev;
+		int rc = term_read_event(&ev, 1000);
+		if (rc < 0)
+			goto out;
+		if (rc == 0)
+			continue;
+
+		if (ev.key == TK_RESIZE) {
+			cols = ev.cols;
+			rows = ev.rows;
+			result_rows = rows * 7 / 10 - 4;
+			if (result_rows < 1)
+				result_rows = 1;
+			redraw(v);
+			render_search(cols, rows, query, hits, n_hits, selected,
+				      top);
+			continue;
+		}
+		if (ev.key == TK_ESC)
+			goto out;
+		if (ev.key == TK_ENTER) {
+			if (selected >= 0 && selected < (int)n_hits)
+				jump_to(v, hits[selected].menu);
+			goto out;
+		}
+		if (ev.key == TK_UP) {
+			if (selected > 0)
+				selected--;
+			if (selected < top)
+				top = selected;
+			render_search(cols, rows, query, hits, n_hits, selected,
+				      top);
+			continue;
+		}
+		if (ev.key == TK_DOWN) {
+			if (selected + 1 < (int)n_hits)
+				selected++;
+			if (selected >= top + result_rows)
+				top = selected - result_rows + 1;
+			render_search(cols, rows, query, hits, n_hits, selected,
+				      top);
+			continue;
+		}
+		if (ev.key == TK_PGUP) {
+			selected -= result_rows;
+			if (selected < 0)
+				selected = 0;
+			top = selected;
+			render_search(cols, rows, query, hits, n_hits, selected,
+				      top);
+			continue;
+		}
+		if (ev.key == TK_PGDN) {
+			selected += result_rows;
+			if (selected >= (int)n_hits)
+				selected = (int)n_hits - 1;
+			if (selected < 0)
+				selected = 0;
+			if (selected >= top + result_rows)
+				top = selected - result_rows + 1;
+			render_search(cols, rows, query, hits, n_hits, selected,
+				      top);
+			continue;
+		}
+		if (ev.key == TK_BACKSPACE || ev.key == 0x08) {
+			if (qlen > 0) {
+				qlen--;
+				query[qlen] = '\0';
+				n_hits = 0;
+				collect_hits_visit(v->kc->root, query, &hits,
+						   &n_hits, &cap);
+				selected = 0;
+				top = 0;
+			}
+			render_search(cols, rows, query, hits, n_hits, selected,
+				      top);
+			continue;
+		}
+		if (ev.key >= 0x20 && ev.key <= 0x7e &&
+		    qlen < (int)sizeof(query) - 1) {
+			query[qlen++] = (char)ev.key;
+			query[qlen] = '\0';
+			n_hits = 0;
+			collect_hits_visit(v->kc->root, query, &hits, &n_hits,
+					   &cap);
+			selected = 0;
+			top = 0;
+			render_search(cols, rows, query, hits, n_hits, selected,
+				      top);
+			continue;
+		}
+	}
+
+out:
+	free(hits);
+	redraw(v);
+}
+
+/* ================================================================== */
 /*  Run loop                                                          */
 /* ================================================================== */
 
@@ -896,6 +1309,9 @@ static int run_loop(struct view *v)
 				show_help(v, m->sym);
 			break;
 		}
+		case '/':
+			search_prompt(v);
+			break;
 		case TK_CTRL('c'):
 			/* Raw mode suppressed SIGINT; emulate the classic
 			 * "Ctrl-C means abort without saving" here. */
@@ -932,9 +1348,8 @@ int cmd_idf_menuconfig(int argc, const char **argv)
 	v.kc = &kc;
 	v.cur = kc.root;
 	tui_list_init(&v.list);
-	tui_list_set_footer(
-	    &v.list,
-	    "  Space=toggle  Enter=open  ?=help  Esc=back  s=save  q=quit");
+	tui_list_set_footer(&v.list, "  Space=toggle  Enter=open  /=search  "
+				     "?=help  Esc=back  s=save  q=quit");
 
 	int rc = term_raw_enter();
 	if (rc)
