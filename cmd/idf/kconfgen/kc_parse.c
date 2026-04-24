@@ -122,27 +122,28 @@ void kc_ctx_init(struct kc_ctx *ctx)
 	ctx->srctree = NULL;
 	ctx->root_file = NULL;
 	ctx->defaults_policy = 0;
-	ctx->n_notifications = 0;
+	kc_report_init(&ctx->report);
 }
 
-/*
- * Print one diagnostic line to stderr and bump the context's
- * notification counter.  The counter feeds kconfgen.c's end-of-run
- * `Status: Finished ...` summary (successfully vs with notifications),
- * which the upstream esp-idf-kconfig test suite matches against in its
- * golden stderr fixtures.  Callers are responsible for including any
- * "warning:" / "error:" prefix in @p fmt -- the exact line shape has
- * to match what Python's esp_kconfiglib emits.
- */
 void kc_ctx_notify(struct kc_ctx *ctx, const char *fmt, ...)
 {
 	va_list ap;
+	struct sbuf sb = SBUF_INIT;
+
 	va_start(ap, fmt);
-	vfprintf(stderr, fmt, ap);
+	sbuf_vaddf(&sb, fmt, ap);
 	va_end(ap);
-	if (fmt && fmt[0] && fmt[strlen(fmt) - 1] != '\n')
-		fputc('\n', stderr);
-	ctx->n_notifications++;
+
+	/*
+	 * Strip a trailing newline if the caller included one -- the
+	 * deferred report formatter always terminates each line, and the
+	 * original immediate-stderr kc_ctx_notify tolerated both shapes.
+	 */
+	if (sb.len && sb.buf[sb.len - 1] == '\n')
+		sbuf_setlen(&sb, sb.len - 1);
+
+	kc_report_warning(&ctx->report, NULL, 0, "%s", sb.buf);
+	sbuf_release(&sb);
 }
 
 const char *kc_ctx_intern_file(struct kc_ctx *ctx, const char *path)
@@ -243,6 +244,8 @@ void kc_ctx_release(struct kc_ctx *ctx)
 
 	free(ctx->root_file);
 	ctx->root_file = NULL;
+
+	kc_report_release(&ctx->report);
 }
 
 /* ================================================================== */
@@ -619,7 +622,7 @@ static void parse_prompt_line(struct kc_parser *p, struct ksym *sym)
 		    sym->decl_file ? sym->decl_file : p->lex.path;
 		int dline = sym->decl_line ? sym->decl_line : line;
 		kc_ctx_notify(p->ctx,
-			      "warning: %s (defined at %s:%d) defined with "
+			      "%s (defined at %s:%d) defined with "
 			      "multiple prompts in single location",
 			      sym->name, dfile, dline);
 		break;
@@ -652,7 +655,7 @@ static void parse_default_line(struct kc_parser *p, struct ksym *sym)
 	 */
 	if (p->in_choice && sym && sym->name && !sym->is_choice) {
 		kc_ctx_notify(p->ctx,
-			      "warning: default on the choice symbol %s "
+			      "default on the choice symbol %s "
 			      "will have no effect, as defaults do not "
 			      "affect choice symbols",
 			      sym->name);

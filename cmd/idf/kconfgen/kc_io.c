@@ -442,7 +442,7 @@ static void process_config_line(struct kc_ctx *ctx, char *line,
 		struct ksym *s = smap_get(&ctx->symtab, name);
 		if (s && !value_matches_type(val, s->type)) {
 			kc_ctx_notify(ctx,
-				      "warning: value '%s' is not a valid %s "
+				      "value '%s' is not a valid %s "
 				      "for CONFIG_%s; ignoring",
 				      val,
 				      s->type == KS_INT	    ? "int"
