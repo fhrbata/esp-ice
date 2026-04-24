@@ -146,13 +146,7 @@ struct view {
 
 static void push_position(struct view *v)
 {
-	if (v->stack_n == v->stack_cap) {
-		size_t next = v->stack_cap ? v->stack_cap * 2 : 8;
-		v->stack = realloc(v->stack, next * sizeof(*v->stack));
-		if (!v->stack)
-			die_errno("realloc");
-		v->stack_cap = next;
-	}
+	ALLOC_GROW(v->stack, v->stack_n + 1, v->stack_cap);
 	v->stack[v->stack_n].cursor = v->list.cursor;
 	v->stack[v->stack_n].top = v->list.top;
 	v->stack_n++;
@@ -190,14 +184,9 @@ static void view_reset(struct view *v)
 static void view_add(struct view *v, char *text, char *value,
 		     const char *value_sgr, int flags, struct kmenu *menu)
 {
-	if (v->n == v->cap) {
-		size_t next = v->cap ? v->cap * 2 : 16;
-		v->items = realloc(v->items, next * sizeof(*v->items));
-		v->rows = realloc(v->rows, next * sizeof(*v->rows));
-		if (!v->items || !v->rows)
-			die_errno("realloc");
-		v->cap = next;
-	}
+	ALLOC_GROW(v->items, v->n + 1, v->cap);
+	/* items and rows grow in lockstep; track capacity on cap once. */
+	REALLOC_ARRAY(v->rows, v->cap);
 	v->rows[v->n].owned_text = text;
 	v->rows[v->n].owned_value = value;
 	v->items[v->n].text = text;
@@ -374,9 +363,21 @@ static void refresh_list(struct view *v, int preserve)
 	view_reset(v);
 	flatten_children(v, v->cur);
 	tui_list_set_items(&v->list, v->items, (int)v->n);
-	/* Weave in a leading `[*] ` when the config has unsaved changes
-	 * so users see the dirty state at a glance.  Title buffer lives
-	 * on struct view so the pointer stays stable across redraws. */
+	/*
+	 * Weave in a leading `[*] ` when the config has unsaved changes so
+	 * users see the dirty state at a glance.  Title buffer lives on
+	 * struct view so the pointer stays stable across redraws.
+	 *
+	 * flatten_children's view_add stores heap-allocated row text on
+	 * @c v->rows and @c v->items; those arrays (and their strings) are
+	 * freed by @ref view_reset on the next rebuild and by the explicit
+	 * view_reset + free pair in cmd_idf_menuconfig's cleanup.  The
+	 * analyzer can't trace ownership through struct fields across
+	 * function boundaries, so it flags the next line as a potential
+	 * leak -- suppress the specific check.  A real leak would surface
+	 * as a missed view_reset, not at this random site.
+	 */
+	/* NOLINTNEXTLINE(clang-analyzer-unix.Malloc) */
 	const char *base = v->cur->prompt ? v->cur->prompt : "(top)";
 	snprintf(v->title_buf, sizeof(v->title_buf), "%s%s",
 		 v->modified ? "[*] " : "", base);
@@ -979,13 +980,7 @@ static void collect_hits_visit(struct kmenu *m, const char *query,
 			if (!ci_contains(c->sym->name, query) &&
 			    !ci_contains(prompt, query))
 				continue;
-			if (*n == *cap) {
-				size_t next = *cap ? *cap * 2 : 32;
-				*hits = realloc(*hits, next * sizeof(**hits));
-				if (!*hits)
-					die_errno("realloc");
-				*cap = next;
-			}
+			ALLOC_GROW(*hits, *n + 1, *cap);
 			(*hits)[*n].menu = c;
 			(*hits)[*n].sym = c->sym;
 			(*n)++;

@@ -240,9 +240,11 @@ static void render_item_row(struct sbuf *sb, const struct tui_list *L, int idx)
 	int value_block_w = value_w > 0 ? value_w + 2 : 0;
 	int text_w = L->width - 2 - value_block_w;
 	if (text_w < 0) {
+		/* Terminal too narrow for both text and value -- drop the
+		 * value so the label stays legible.  value_block_w drops to
+		 * zero implicitly via the value_w==0 path below. */
 		text_w = L->width - 2;
 		value_w = 0;
-		value_block_w = 0;
 	}
 	sbuf_pad(sb, it->text, text_w);
 	if (value_w > 0) {
@@ -562,27 +564,19 @@ void tui_prompt_render(const struct tui_prompt *P)
  */
 static void info_split_lines(struct tui_info *I)
 {
-	int capacity = 16;
-	I->lines = malloc((size_t)capacity * sizeof(*I->lines));
-	I->line_lens = malloc((size_t)capacity * sizeof(*I->line_lens));
-	if (!I->lines || !I->line_lens)
-		die_errno("malloc");
+	size_t cap = 0;
 	I->n_lines = 0;
+	I->lines = NULL;
+	I->line_lens = NULL;
 
 	const char *p = I->body;
 	while (*p || I->n_lines == 0) {
 		const char *eol = strchr(p, '\n');
 		int len = eol ? (int)(eol - p) : (int)strlen(p);
-		if (I->n_lines == capacity) {
-			capacity *= 2;
-			I->lines = realloc(I->lines, (size_t)capacity *
-							 sizeof(*I->lines));
-			I->line_lens =
-			    realloc(I->line_lens,
-				    (size_t)capacity * sizeof(*I->line_lens));
-			if (!I->lines || !I->line_lens)
-				die_errno("realloc");
-		}
+		ALLOC_GROW(I->lines, (size_t)I->n_lines + 1, cap);
+		/* line_lens grows in lockstep with lines; cap is tracked
+		 * once via the ALLOC_GROW above. */
+		REALLOC_ARRAY(I->line_lens, cap);
 		I->lines[I->n_lines] = p;
 		I->line_lens[I->n_lines] = len;
 		I->n_lines++;
