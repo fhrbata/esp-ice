@@ -1969,9 +1969,9 @@ static void json_menu_write_node(struct sbuf *out, const struct kc_ctx *ctx,
 			long long hv = his ? strtoll(his, &e, 0) : 0;
 			int hi_num = his && e != his && !*e;
 			if (m->sym->type == KS_FLOAT || !lo_num || !hi_num) {
-				double dlo = los ? strtod(los, &e) : 0.0;
+				double dlo = los ? kc_strtod_c(los, &e) : 0.0;
 				int lo_f = los && e != los && !*e;
-				double dhi = his ? strtod(his, &e) : 0.0;
+				double dhi = his ? kc_strtod_c(his, &e) : 0.0;
 				int hi_f = his && e != his && !*e;
 				if (lo_f && hi_f) {
 					sbuf_addf(out, "[\n%*s%g,\n%*s%g\n%*s]",
