@@ -445,26 +445,38 @@ void tui_prompt_render(const struct tui_prompt *P)
 	 */
 	sbuf_addstr(&sb, "\x1b[?25l");
 
-	/* Light-line box using the term.h box-draw macros.  The top line
-	 * carries the title; the middle separator splits it from the
-	 * input; the input line holds the buffer + cursor; the bottom
-	 * line closes the box. */
+	/*
+	 * Modal palette.  Cyan borders frame the dialog so it reads as
+	 * "separate from the list behind it" without the heaviness of a
+	 * filled background.  Bold title text carries the emphasis.
+	 * Input area stays in the default colour so the cursor is
+	 * clearly visible.  A dim hint line below the box advertises
+	 * the key bindings.
+	 */
+#define MODAL_BORDER "\x1b[36m" /* cyan */
+#define MODAL_TITLE "\x1b[0;1m" /* bold, default fg */
+#define MODAL_INPUT "\x1b[0m"	/* default */
+#define MODAL_HINT "\x1b[0;2m"	/* dim */
+#define MODAL_RESET "\x1b[0m"
+
 	/* Top border. */
-	sbuf_addf(&sb, "\x1b[%d;%dH", top, left);
+	sbuf_addf(&sb, "\x1b[%d;%dH%s", top, left, MODAL_BORDER);
 	sbuf_addstr(&sb, "\xe2\x94\x8c"); /* U+250C ┌ */
 	for (int i = 0; i < inner; i++)
 		sbuf_addstr(&sb, HL);
 	sbuf_addstr(&sb, "\xe2\x94\x90"); /* U+2510 ┐ */
 
 	/* Title row. */
-	sbuf_addf(&sb, "\x1b[%d;%dH", top + 1, left);
+	sbuf_addf(&sb, "\x1b[%d;%dH%s", top + 1, left, MODAL_BORDER);
 	sbuf_addstr(&sb, VL);
+	sbuf_addstr(&sb, MODAL_TITLE);
 	sbuf_addch(&sb, ' ');
 	sbuf_pad(&sb, P->title, inner - 1);
+	sbuf_addstr(&sb, MODAL_BORDER);
 	sbuf_addstr(&sb, VL);
 
 	/* Separator. */
-	sbuf_addf(&sb, "\x1b[%d;%dH", top + 2, left);
+	sbuf_addf(&sb, "\x1b[%d;%dH%s", top + 2, left, MODAL_BORDER);
 	sbuf_addstr(&sb, "\xe2\x94\x9c"); /* U+251C ├ */
 	for (int i = 0; i < inner; i++)
 		sbuf_addstr(&sb, HL);
@@ -472,8 +484,9 @@ void tui_prompt_render(const struct tui_prompt *P)
 
 	/* Input row.  Scroll the visible window so the cursor stays
 	 * inside the inner area even for long buffers. */
-	sbuf_addf(&sb, "\x1b[%d;%dH", top + 3, left);
+	sbuf_addf(&sb, "\x1b[%d;%dH%s", top + 3, left, MODAL_BORDER);
 	sbuf_addstr(&sb, VL);
+	sbuf_addstr(&sb, MODAL_INPUT);
 	sbuf_addch(&sb, ' ');
 	int view_w = inner - 1;
 	int view_start = P->cursor > view_w - 1 ? P->cursor - (view_w - 1) : 0;
@@ -484,14 +497,33 @@ void tui_prompt_render(const struct tui_prompt *P)
 		sbuf_add(&sb, P->buf + view_start, (size_t)view_len);
 	for (int i = view_len; i < view_w; i++)
 		sbuf_addch(&sb, ' ');
+	sbuf_addstr(&sb, MODAL_BORDER);
 	sbuf_addstr(&sb, VL);
 
 	/* Bottom border. */
-	sbuf_addf(&sb, "\x1b[%d;%dH", top + 4, left);
+	sbuf_addf(&sb, "\x1b[%d;%dH%s", top + 4, left, MODAL_BORDER);
 	sbuf_addstr(&sb, "\xe2\x94\x94"); /* U+2514 └ */
 	for (int i = 0; i < inner; i++)
 		sbuf_addstr(&sb, HL);
 	sbuf_addstr(&sb, "\xe2\x94\x98"); /* U+2518 ┘ */
+	sbuf_addstr(&sb, MODAL_RESET);
+
+	/*
+	 * Dim hint line just below the box advertising the key bindings.
+	 * Fits within the same horizontal footprint so the eye groups it
+	 * with the dialog.  Rendered only when there's a row to spare
+	 * (on extremely short terminals, skip).
+	 */
+	if (top + PROMPT_BOX_ROWS <= P->height) {
+		const char *hint = "Enter accept  \xe2\x80\xa2  Esc cancel";
+		sbuf_addf(&sb, "\x1b[%d;%dH%s", top + PROMPT_BOX_ROWS, left,
+			  MODAL_HINT);
+		/* Left-pad one space so the hint lines up with the box
+		 * content rather than the border. */
+		sbuf_addch(&sb, ' ');
+		sbuf_pad(&sb, hint, cols - 1);
+		sbuf_addstr(&sb, MODAL_RESET);
+	}
 
 	/* Put the cursor at the edit position.  Column: left border + 1
 	 * gap + (cursor - view_start).  The +1 for 1-based columns is
@@ -505,6 +537,12 @@ void tui_prompt_render(const struct tui_prompt *P)
 	 * wanted while the TUI is active.
 	 */
 	sbuf_addstr(&sb, "\x1b[?25h");
+
+#undef MODAL_BORDER
+#undef MODAL_TITLE
+#undef MODAL_INPUT
+#undef MODAL_HINT
+#undef MODAL_RESET
 
 	fputs(sb.buf, stdout);
 	fflush(stdout);

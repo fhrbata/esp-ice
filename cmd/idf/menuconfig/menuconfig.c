@@ -37,22 +37,31 @@ static const struct cmd_manual idf_menuconfig_manual = {
 	.description =
 	H_PARA("Launches a native ncurses-free terminal UI for browsing "
 	       "and editing Kconfig symbols against a given @b{--kconfig} "
-	       "tree.  An existing sdkconfig can be layered via @b{--config}; "
-	       "changes are written to @b{--output} (or @b{--config} if "
-	       "@b{--output} is omitted).")
+	       "tree.  Input and output paths are separate so build-system "
+	       "callers (esp-idf's cmakev2) can load from a source "
+	       "sdkconfig and write to a build-directory copy without "
+	       "mutating the project tree.")
+	H_PARA("@b{--config} loads an existing sdkconfig on entry "
+	       "(optional -- omit for pure-defaults start).  @b{--output} "
+	       "is where @b{s} saves; if omitted it defaults to "
+	       "@b{--config} so the common case of editing a single file "
+	       "in place is a single flag.  At least one of the two must "
+	       "be given for @b{s} to have somewhere to write.")
 	H_PARA("Bool symbols toggle with @b{Space} or @b{Enter}.  Submenus "
 	       "and choice groups open on @b{Enter}; @b{Esc} / @b{Left} "
 	       "goes up a level.  @b{s} saves without leaving; @b{q} quits "
 	       "without saving.  At the root menu, @b{Esc} prompts to save "
 	       "any pending changes before quitting.")
-	H_PARA("Int / hex / string editing is not yet implemented -- those "
-	       "entries render with their current value but cannot be "
-	       "edited from the UI.  Edit them directly in the sdkconfig "
-	       "file as a workaround until support lands."),
+	H_PARA("Int / hex / float / string symbols open a modal input "
+	       "box on @b{Enter}, pre-filled with the current value.  "
+	       "Confirm with @b{Enter}, discard with @b{Esc}.  Invalid "
+	       "input (non-numeric text in an int field, for example) "
+	       "keeps the modal open so the typo can be fixed without "
+	       "losing the in-progress text."),
 
 	.examples =
 	H_EXAMPLE("ice idf menuconfig --kconfig Kconfig --config sdkconfig")
-	H_EXAMPLE("ice idf menuconfig -k Kconfig -c sdkconfig -o sdkconfig.out"),
+	H_EXAMPLE("ice idf menuconfig -k Kconfig -c in.sdkconfig -o out.sdkconfig"),
 };
 /* clang-format on */
 
@@ -64,9 +73,9 @@ static const struct option cmd_idf_menuconfig_opts[] = {
     OPT_STRING('k', "kconfig", &opt_kconfig, "path",
 	       "root Kconfig file (required)", NULL),
     OPT_STRING('c', "config", &opt_config, "path",
-	       "existing sdkconfig to load (optional)", NULL),
+	       "existing sdkconfig to load on entry (optional)", NULL),
     OPT_STRING('o', "output", &opt_output, "path",
-	       "where to save changes (default: same as --config)", NULL),
+	       "where 's' writes; defaults to --config if omitted", NULL),
     OPT_END(),
 };
 
@@ -242,7 +251,6 @@ static void flatten_node(struct view *v, struct kmenu *c)
 		char *text = sbuf_strdup(prompt);
 		char *value;
 		const char *value_sgr = NULL;
-		int flags = 0;
 		if (c->sym->type == KS_BOOL) {
 			value = bool_marker(c->sym);
 			/* Bold green for "on" markers so a glance across
@@ -254,15 +262,14 @@ static void flatten_node(struct view *v, struct kmenu *c)
 			if (on)
 				value_sgr = "1;32";
 		} else {
-			/* Non-bool display-only in v1.  Dim the row so the
-			 * caret skips it and users see why pressing Space /
-			 * Enter does nothing; value column in cyan to hint
-			 * "read-only for now". */
+			/* int / hex / string / float: render the current
+			 * value in cyan so the row reads as "editable,
+			 * non-bool".  Enter opens a modal prompt (see
+			 * edit_value). */
 			value = paren_value(c->sym);
 			value_sgr = "36";
-			flags |= TUI_ITEM_DISABLED;
 		}
-		view_add(v, text, value, value_sgr, flags, c);
+		view_add(v, text, value, value_sgr, 0, c);
 		return;
 	}
 	case KM_CHOICE: {
@@ -394,6 +401,207 @@ static void clear_choice_siblings(struct view *v, struct ksym *s)
 }
 
 /*
+ * Type-aware input validation for the edit modal.  Returns 1 if @p s
+ * is a legal value for @p t, 0 otherwise.  kc_resolve clamps numeric
+ * values against any @c range property during the fixpoint, so we
+ * only need to gate on the lexical shape of the input here.
+ */
+static int looks_like_int(const char *s)
+{
+	if (!s || !*s)
+		return 0;
+	const char *p = s;
+	if (*p == '-' || *p == '+')
+		p++;
+	if (!*p)
+		return 0;
+	for (; *p; p++)
+		if (*p < '0' || *p > '9')
+			return 0;
+	return 1;
+}
+
+static int looks_like_hex(const char *s)
+{
+	if (!s || !*s)
+		return 0;
+	const char *p = s;
+	if (p[0] == '0' && (p[1] == 'x' || p[1] == 'X'))
+		p += 2;
+	if (!*p)
+		return 0;
+	for (; *p; p++) {
+		if (!((*p >= '0' && *p <= '9') || (*p >= 'a' && *p <= 'f') ||
+		      (*p >= 'A' && *p <= 'F')))
+			return 0;
+	}
+	return 1;
+}
+
+static int looks_like_float(const char *s)
+{
+	if (!s || !*s)
+		return 0;
+	char *end;
+	strtod(s, &end);
+	return end != s && *end == '\0';
+}
+
+static int value_is_valid(enum ksym_type t, const char *s)
+{
+	switch (t) {
+	case KS_INT:
+		return looks_like_int(s);
+	case KS_HEX:
+		return looks_like_hex(s);
+	case KS_FLOAT:
+		return looks_like_float(s);
+	case KS_STRING:
+		return 1; /* any text accepted */
+	default:
+		return 0;
+	}
+}
+
+static const char *type_label(enum ksym_type t)
+{
+	switch (t) {
+	case KS_INT:
+		return "int";
+	case KS_HEX:
+		return "hex";
+	case KS_FLOAT:
+		return "float";
+	case KS_STRING:
+		return "string";
+	default:
+		return "?";
+	}
+}
+
+/*
+ * Resolve a range-bound expression to a displayable string.
+ *
+ * Range bounds come in three shapes:
+ *   - @c KE_LITERAL  : e->str is the text (rare for numeric ranges).
+ *   - @c KE_SYMREF to a numeric bareword : the parser interned the
+ *     number itself as a KS_UNKNOWN symbol whose @c name is the digit
+ *     string; @c cur_val is never populated for these.  This is the
+ *     common @c "range 1024 16384" case.
+ *   - @c KE_SYMREF to a real config symbol : its @c cur_val is the
+ *     evaluated value (e.g. @c `range MIN MAX` where MIN / MAX are
+ *     other int symbols).
+ */
+static const char *bound_str(const struct kexpr *e)
+{
+	if (!e)
+		return NULL;
+	if (e->op == KE_LITERAL)
+		return e->str;
+	if (e->op == KE_SYMREF && e->sym) {
+		if (e->sym->cur_val && *e->sym->cur_val)
+			return e->sym->cur_val;
+		if (e->sym->name && *e->sym->name)
+			return e->sym->name;
+	}
+	return NULL;
+}
+
+/*
+ * Return the @c (lo, hi) strings for the first active @c range
+ * property on @p s, or @c (NULL, NULL) when the symbol has none.
+ * The active one is the first whose @c if guard evaluates true --
+ * matches @c kc_eval's range_clamp semantics.
+ */
+static void get_active_range(const struct ksym *s, const char **lo,
+			     const char **hi)
+{
+	*lo = *hi = NULL;
+	for (struct kprop *p = s->props; p; p = p->next) {
+		if (p->kind != KP_RANGE)
+			continue;
+		if (!kc_expr_bool(p->cond))
+			continue;
+		*lo = bound_str(p->expr);
+		*hi = bound_str(p->expr2);
+		return;
+	}
+}
+
+/*
+ * Modal editor for int / hex / float / string symbols.  Opens a
+ * prompt pre-filled with the current value; confirms on Enter when
+ * the input passes value_is_valid, discards on Esc, and rejects
+ * silently (keeps the prompt open) on Enter with invalid input so
+ * the user can fix the typo without losing their text.
+ */
+static void edit_value(struct view *v, struct ksym *s)
+{
+	int cols, rows;
+	term_size(&cols, &rows);
+
+	char title[160];
+	const char *prompt = sym_prompt(s);
+	const char *lo = NULL, *hi = NULL;
+	if (s->type == KS_INT || s->type == KS_HEX || s->type == KS_FLOAT)
+		get_active_range(s, &lo, &hi);
+	if (lo && hi) {
+		snprintf(title, sizeof(title), "%s (%s, range %s..%s)",
+			 prompt ? prompt : s->name, type_label(s->type), lo,
+			 hi);
+	} else {
+		snprintf(title, sizeof(title), "%s (%s)",
+			 prompt ? prompt : s->name, type_label(s->type));
+	}
+
+	struct tui_prompt p;
+	tui_prompt_init(&p, title, s->cur_val ? s->cur_val : "");
+	tui_prompt_resize(&p, cols, rows);
+	tui_prompt_render(&p);
+
+	for (;;) {
+		struct term_event ev;
+		int rc = term_read_event(&ev, 1000);
+		if (rc < 0)
+			return;
+		if (rc == 0)
+			continue;
+
+		if (ev.key == TK_RESIZE) {
+			tui_prompt_resize(&p, ev.cols, ev.rows);
+			redraw(v);
+			tui_prompt_render(&p);
+			continue;
+		}
+
+		int r = tui_prompt_on_event(&p, &ev);
+		if (r < 0) {
+			/* Esc: discard.  Redraw the list so the modal's
+			 * box is painted over. */
+			redraw(v);
+			return;
+		}
+		if (r > 0) {
+			if (!value_is_valid(s->type, p.buf)) {
+				/* Reject silently -- keep the modal open so
+				 * the user can fix their input.  No visible
+				 * error indicator in v1; the fact that Enter
+				 * didn't close is the signal. */
+				tui_prompt_render(&p);
+				continue;
+			}
+			kc_sym_set_user(v->kc, s->name, p.buf);
+			kc_resolve(v->kc);
+			v->modified = 1;
+			refresh_list(v, 1);
+			redraw(v);
+			return;
+		}
+		tui_prompt_render(&p);
+	}
+}
+
+/*
  * Toggle @p sym between "y" and "n".  For choice members, any toggle
  * is treated as a "set this one" -- kc_resolve's enforce_choice
  * forces the other members to "n".
@@ -428,8 +636,12 @@ static void activate(struct view *v)
 	struct kmenu *m = it->userdata;
 	if (!m)
 		return;
-	if (m->kind == KM_SYM && m->sym && m->sym->type == KS_BOOL) {
-		toggle_bool(v, m->sym);
+	if (m->kind == KM_SYM && m->sym) {
+		if (m->sym->type == KS_BOOL) {
+			toggle_bool(v, m->sym);
+		} else {
+			edit_value(v, m->sym);
+		}
 		return;
 	}
 	if (m->kind == KM_MENU || m->kind == KM_CHOICE) {
@@ -457,19 +669,13 @@ static int ascend(struct view *v)
 /*  Save / quit prompt                                                */
 /* ================================================================== */
 
-static const char *save_path(void)
-{
-	return opt_output ? opt_output : opt_config;
-}
-
 static int save_config(struct view *v)
 {
-	const char *path = save_path();
+	const char *path = opt_output ? opt_output : opt_config;
 	if (!path) {
-		/* Nothing to save to -- tell the user via the footer
-		 * rather than dying in the middle of a TUI session. */
 		tui_list_set_footer(
-		    &v->list, "  no --output / --config path; press q to quit");
+		    &v->list,
+		    "  no --output / --config set; nothing to save to");
 		redraw(v);
 		return -1;
 	}
@@ -614,7 +820,13 @@ int cmd_idf_menuconfig(int argc, const char **argv)
 	struct kc_ctx kc;
 	kc_ctx_init(&kc);
 	kc_parse_file(&kc, opt_kconfig, NULL);
-	if (opt_config)
+	/*
+	 * --config loads a starting sdkconfig; optional so the user can
+	 * start from pure Kconfig defaults.  Skip the load when --config
+	 * points at a file that does not exist yet (first-ever run of
+	 * `-c foo -o foo` pattern).
+	 */
+	if (opt_config && access(opt_config, F_OK) == 0)
 		kc_load_config(&kc, opt_config);
 	kc_eval(&kc);
 
