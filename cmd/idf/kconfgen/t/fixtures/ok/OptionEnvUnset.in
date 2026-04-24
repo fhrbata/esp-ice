@@ -1,0 +1,6 @@
+mainmenu "Test option env= with unset variable"
+
+config MYVAR
+    bool "Config with unset env"
+    option env="THIS_ENV_VAR_SHOULD_NOT_EXIST_CCONFIG_TEST"
+    default n

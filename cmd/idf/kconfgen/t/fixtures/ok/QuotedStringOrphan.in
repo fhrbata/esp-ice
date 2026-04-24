@@ -1,0 +1,9 @@
+mainmenu "Test quoted string vs config name disambiguation"
+
+config E
+    bool "Config E"
+    default y
+
+config F
+    string "Uses quoted E"
+    default "E"
