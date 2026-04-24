@@ -145,10 +145,12 @@ LIB_SRCS := \
 	cmd/idf/configdep/configdep.c \
 	cmd/idf/crt-bundle/crt-bundle.c \
 	cmd/idf/hints/hints.c \
+	cmd/idf/kconfgen/kc_confread.c \
 	cmd/idf/kconfgen/kc_eval.c \
 	cmd/idf/kconfgen/kc_io.c \
 	cmd/idf/kconfgen/kc_lex.c \
 	cmd/idf/kconfgen/kc_parse.c \
+	cmd/idf/kconfgen/kc_rename.c \
 	cmd/idf/kconfgen/kc_report.c \
 	cmd/idf/kconfgen/kconfgen.c \
 	cmd/idf/ldgen/gen.c \
