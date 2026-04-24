@@ -228,18 +228,17 @@ static void csi_erase_in_line(HANDLE h, const int *params, int n_params)
 	switch (mode) {
 	case 0: /* cursor -> end of line */
 		from = info.dwCursorPosition;
-		len =
-		    (DWORD)(info.srWindow.Right - info.dwCursorPosition.X + 1);
+		len = info.srWindow.Right - info.dwCursorPosition.X + 1;
 		break;
 	case 1: /* start of line -> cursor */
 		from.X = info.srWindow.Left;
 		from.Y = info.dwCursorPosition.Y;
-		len = (DWORD)(info.dwCursorPosition.X - info.srWindow.Left + 1);
+		len = info.dwCursorPosition.X - info.srWindow.Left + 1;
 		break;
 	case 2: /* entire line */
 		from.X = info.srWindow.Left;
 		from.Y = info.dwCursorPosition.Y;
-		len = (DWORD)(info.srWindow.Right - info.srWindow.Left + 1);
+		len = info.srWindow.Right - info.srWindow.Left + 1;
 		break;
 	default:
 		return;
@@ -262,10 +261,9 @@ static void csi_erase_in_display(HANDLE h, const int *params, int n_params)
 	case 0: /* cursor -> end of screen */
 		/* Rest of current line... */
 		from = info.dwCursorPosition;
-		fill_cells(
-		    h, from,
-		    (DWORD)(info.srWindow.Right - info.dwCursorPosition.X + 1),
-		    info.wAttributes);
+		fill_cells(h, from,
+			   info.srWindow.Right - info.dwCursorPosition.X + 1,
+			   info.wAttributes);
 		/* ...then all following lines. */
 		from.X = info.srWindow.Left;
 		from.Y = (SHORT)(info.dwCursorPosition.Y + 1);
@@ -282,10 +280,9 @@ static void csi_erase_in_display(HANDLE h, const int *params, int n_params)
 			fill_cells(h, from, (DWORD)w * (DWORD)rows_to_bottom,
 				   info.wAttributes);
 		from.Y = info.dwCursorPosition.Y;
-		fill_cells(
-		    h, from,
-		    (DWORD)(info.dwCursorPosition.X - info.srWindow.Left + 1),
-		    info.wAttributes);
+		fill_cells(h, from,
+			   info.dwCursorPosition.X - info.srWindow.Left + 1,
+			   info.wAttributes);
 		break;
 	case 2: /* entire screen */
 	case 3: /* screen + scrollback -- we just do screen */

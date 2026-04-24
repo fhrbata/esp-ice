@@ -128,6 +128,9 @@ int link_w(const char *target, const char *linkpath);
 #define chmod chmod_w
 #define isatty _isatty
 #define putenv _putenv
+/* setenv is POSIX; on Windows use _putenv_s (same name+value interface,
+ * copies both strings, always overwrites -- POSIX callers pass 1). */
+#define setenv(name, value, overwrite) _putenv_s((name), (value))
 #define fileno _fileno
 #define dup _dup
 #define dup2 _dup2
