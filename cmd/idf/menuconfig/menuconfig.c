@@ -126,6 +126,9 @@ struct view {
 	size_t stack_n;
 	size_t stack_cap;
 	int modified; /* Set by any kc_sym_set_user the UI performs. */
+	/* Heap buffer backing tui_list->title so refresh_list can weave
+	 * in the dirty-state prefix without making the widget copy. */
+	char title_buf[256];
 };
 
 static void push_position(struct view *v)
@@ -348,7 +351,13 @@ static void refresh_list(struct view *v, int preserve)
 	view_reset(v);
 	flatten_children(v, v->cur);
 	tui_list_set_items(&v->list, v->items, (int)v->n);
-	tui_list_set_title(&v->list, v->cur->prompt ? v->cur->prompt : "(top)");
+	/* Weave in a leading `[*] ` when the config has unsaved changes
+	 * so users see the dirty state at a glance.  Title buffer lives
+	 * on struct view so the pointer stays stable across redraws. */
+	const char *base = v->cur->prompt ? v->cur->prompt : "(top)";
+	snprintf(v->title_buf, sizeof(v->title_buf), "%s%s",
+		 v->modified ? "[*] " : "", base);
+	tui_list_set_title(&v->list, v->title_buf);
 	if (preserve && saved_cursor < v->list.n_items) {
 		v->list.cursor = saved_cursor;
 		v->list.top = saved_top;
@@ -573,19 +582,15 @@ static char *build_help_body(const struct ksym *s)
 }
 
 /*
- * Open a read-only help modal for @p s and block until the user
- * dismisses it (Esc / q / Enter).  Background list is redrawn on
- * close so the modal's box is painted over.
+ * Drive a tui_info modal until the user dismisses it.  Shared by
+ * @ref show_help (per-symbol help) and @ref show_keys_help (static
+ * key-binding reference) so both reuse the same event loop and
+ * resize handling.
  */
-static void show_help(struct view *v, struct ksym *s)
+static void run_info_modal(struct view *v, const char *title, const char *body)
 {
 	int cols, rows;
 	term_size(&cols, &rows);
-
-	char *body = build_help_body(s);
-	char title[160];
-	const char *prompt = sym_prompt(s);
-	snprintf(title, sizeof(title), "Help -- %s", prompt ? prompt : s->name);
 
 	struct tui_info info;
 	tui_info_init(&info, title, body);
@@ -611,8 +616,65 @@ static void show_help(struct view *v, struct ksym *s)
 	}
 
 	tui_info_release(&info);
-	free(body);
 	redraw(v);
+}
+
+/*
+ * Show the static key-binding reference.  Bound to F1 -- `?` stays
+ * reserved for contextual help on the current symbol.
+ */
+static void show_keys_help(struct view *v)
+{
+	static const char *body =
+	    "Navigation\n"
+	    "\n"
+	    "  Up / Down             Move the cursor one row\n"
+	    "  PageUp / PageDown     Move by a full page\n"
+	    "  Home / End            Jump to first / last row\n"
+	    "  Enter                 Open a submenu / choice, toggle a bool,\n"
+	    "                        or edit a numeric / string value\n"
+	    "  Space                 Toggle a bool; select a choice member\n"
+	    "  Esc / Left            Go up one menu level (save prompt at "
+	    "root)\n"
+	    "\n"
+	    "Actions\n"
+	    "\n"
+	    "  s / S                 Save to the --output path\n"
+	    "  q / Q                 Quit (prompts to save when modified)\n"
+	    "  /                     Global symbol search + jump\n"
+	    "  ? / h / H             Help for the symbol under the cursor\n"
+	    "  F1                    This key reference\n"
+	    "  Ctrl-C                Abort without saving\n"
+	    "\n"
+	    "Symbol indicators\n"
+	    "\n"
+	    "  [*] / [ ]             Bool on / off\n"
+	    "  (*) / ( )             Choice member: selected / not\n"
+	    "  (value)               Int / hex / string -- Enter to edit\n"
+	    "  --->                  Submenu or choice group -- Enter to open\n"
+	    "\n"
+	    "Search modal\n"
+	    "\n"
+	    "  Type anything         Case-insensitive match on name + prompt\n"
+	    "  Up / Down             Move through matches\n"
+	    "  Enter                 Jump to the highlighted symbol\n"
+	    "  Esc                   Cancel and return to the list\n";
+	run_info_modal(v, "Key bindings", body);
+}
+
+/*
+ * Open a read-only help modal for @p s and block until the user
+ * dismisses it (Esc / q / Enter).  Background list is redrawn on
+ * close so the modal's box is painted over.
+ */
+static void show_help(struct view *v, struct ksym *s)
+{
+	char *body = build_help_body(s);
+	char title[160];
+	const char *prompt = sym_prompt(s);
+	snprintf(title, sizeof(title), "Help -- %s", prompt ? prompt : s->name);
+	run_info_modal(v, title, body);
+	free(body);
 }
 
 /*
@@ -768,8 +830,10 @@ static int save_config(struct view *v)
 	}
 	kc_write_config(v->kc, path);
 	v->modified = 0;
+	/* Rebuild so the `[*]` prefix in the title goes away. */
+	refresh_list(v, 1);
 	tui_list_set_footer(
-	    &v->list, "  saved.  Space=toggle  Enter=open  s=save  q=quit");
+	    &v->list, "  saved.  Enter=open  /=search  ?=help  s=save  q=quit");
 	redraw(v);
 	return 0;
 }
@@ -1312,6 +1376,9 @@ static int run_loop(struct view *v)
 		case '/':
 			search_prompt(v);
 			break;
+		case TK_F1:
+			show_keys_help(v);
+			break;
 		case TK_CTRL('c'):
 			/* Raw mode suppressed SIGINT; emulate the classic
 			 * "Ctrl-C means abort without saving" here. */
@@ -1348,8 +1415,8 @@ int cmd_idf_menuconfig(int argc, const char **argv)
 	v.kc = &kc;
 	v.cur = kc.root;
 	tui_list_init(&v.list);
-	tui_list_set_footer(&v.list, "  Space=toggle  Enter=open  /=search  "
-				     "?=help  Esc=back  s=save  q=quit");
+	tui_list_set_footer(&v.list, "  Enter=open  /=search  ?=help  "
+				     "F1=keys  s=save  q=quit");
 
 	int rc = term_raw_enter();
 	if (rc)
