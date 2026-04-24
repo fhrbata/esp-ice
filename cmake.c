@@ -135,6 +135,85 @@ done:
 }
 
 /*
+ * Load @c <build>/config.env -- the JSON dump cmake writes during
+ * configure with everything ESP-IDF's Kconfig tree needs for
+ * @c $(VAR) / @c $VAR interpolation (IDF_TARGET, IDF_ENV_FPGA,
+ * COMPONENT_KCONFIGS, COMPONENT_SDKCONFIG_RENAMES, the two
+ * COMPONENT_KCONFIGS_*_SOURCE_FILE paths, ...).
+ *
+ * Each entry is exposed two ways so both in-process callers (the
+ * Kconfig parser, menuconfig's argv builder) and spawned children
+ * (cmake, ninja, anything the ice process might re-exec) see the
+ * same values:
+ *
+ *   - @c _project.env.<NAME> under @c CONFIG_SCOPE_PROJECT so
+ *     @c config_get("_project.env.IDF_TARGET") and friends work
+ *     from any PROJECT_CONFIGURED command.
+ *   - @c setenv(NAME, value, 1) into the process env so
+ *     @c kc_parse_file's @c getenv-based @c $(VAR) substitution
+ *     and any child process inherit them without a per-caller
+ *     @c --env plumb.
+ *
+ * Best-effort: a missing file is fine (non-IDF ice projects don't
+ * have a config.env), and unparseable contents are silently skipped
+ * rather than aborting commands that don't actually need Kconfig.
+ */
+static void populate_kconfig_env(const char *build_dir)
+{
+	struct sbuf path = SBUF_INIT;
+	struct sbuf buf = SBUF_INIT;
+
+	sbuf_addf(&path, "%s/config.env", build_dir);
+	if (sbuf_read_file(&buf, path.buf) < 0)
+		goto done;
+
+	struct json_value *root = json_parse(buf.buf, buf.len);
+	if (!root || json_type(root) != JSON_OBJECT) {
+		json_free(root);
+		goto done;
+	}
+
+	for (int i = 0; i < root->u.object.nr; i++) {
+		const struct json_member *m = &root->u.object.members[i];
+		const char *val = NULL;
+		char numbuf[32];
+
+		switch (json_type(m->value)) {
+		case JSON_STRING:
+			val = json_as_string(m->value);
+			break;
+		case JSON_BOOL:
+			val = json_as_bool(m->value) ? "y" : "n";
+			break;
+		case JSON_NUMBER:
+			snprintf(numbuf, sizeof(numbuf), "%lld",
+				 (long long)json_as_number(m->value));
+			val = numbuf;
+			break;
+		case JSON_NULL:
+			val = "";
+			break;
+		default:
+			continue; /* arrays / objects: skip */
+		}
+		if (!val)
+			val = "";
+
+		struct sbuf key = SBUF_INIT;
+		sbuf_addf(&key, "_project.env.%s", m->key);
+		config_add(&config, key.buf, val, CONFIG_SCOPE_PROJECT);
+		sbuf_release(&key);
+
+		setenv(m->key, val, 1);
+	}
+	json_free(root);
+
+done:
+	sbuf_release(&buf);
+	sbuf_release(&path);
+}
+
+/*
  * Resolve the active profile name.  Precedence: CLI (--profile / env
  * ICE_PROFILE seed parse_options already folded into global_profile) >
  * config @c project.default-profile > "default".  Never returns NULL.
@@ -209,6 +288,7 @@ void setup_project(enum project_need needs)
 	}
 
 	populate_flash_info(build_dir);
+	populate_kconfig_env(build_dir);
 	config_add(&config, "_project.configured", "1", CONFIG_SCOPE_PROJECT);
 
 	/*

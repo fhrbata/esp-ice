@@ -30,6 +30,7 @@
 #define KC_IO_H
 
 struct kc_ctx;
+struct svec;
 
 /**
  * @brief Load a sdkconfig.rename mapping file.
@@ -44,6 +45,24 @@ struct kc_ctx;
  * applicable).
  */
 void kc_load_rename(struct kc_ctx *ctx, const char *path);
+
+/**
+ * @brief Load @c NAME=VAL entries from an env-file into @p env.
+ *
+ * Two formats are accepted:
+ *   - JSON object ( @c {"NAME": "value", ...} ) -- what ESP-IDF's
+ *     cmake writes to @c build/config.env.  Values of type
+ *     string / bool / number / null are converted to their
+ *     @c NAME=VAL string form; arrays / objects are skipped.
+ *   - Plain @c NAME=VAL lines, one per row.  Blank and @c #-comment
+ *     lines are ignored.
+ *
+ * The first non-whitespace byte of the file selects the parser.  The
+ * file is additive -- existing @p env entries from earlier calls or
+ * command-line @c --env flags are preserved.  Dies on I/O failure or
+ * malformed JSON.
+ */
+void kc_load_env_file(struct svec *env, const char *path);
 
 /**
  * @brief Load a Makefile-style sdkconfig / defaults file.

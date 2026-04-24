@@ -70,6 +70,10 @@ static const struct cmd_manual idf_menuconfig_manual = {
 static const char *opt_kconfig;
 static const char *opt_config;
 static const char *opt_output;
+static struct svec opt_defaults = SVEC_INIT;
+static struct svec opt_renames = SVEC_INIT;
+static struct svec opt_env = SVEC_INIT;
+static const char *opt_env_file;
 
 static const struct option cmd_idf_menuconfig_opts[] = {
     OPT_STRING('k', "kconfig", &opt_kconfig, "path",
@@ -78,6 +82,15 @@ static const struct option cmd_idf_menuconfig_opts[] = {
 	       "existing sdkconfig to load on entry (optional)", NULL),
     OPT_STRING('o', "output", &opt_output, "path",
 	       "where 's' writes; defaults to --config if omitted", NULL),
+    OPT_STRING_LIST(0, "defaults", &opt_defaults, "path",
+		    "sdkconfig.defaults file (repeatable; later wins)", NULL),
+    OPT_STRING_LIST(0, "sdkconfig-rename", &opt_renames, "path",
+		    "deprecated->current symbol rename map (repeatable)", NULL),
+    OPT_STRING_LIST('E', "env", &opt_env, "NAME=VAL",
+		    "env variable for Kconfig $(VAR) expansion (repeatable)",
+		    NULL),
+    OPT_STRING(0, "env-file", &opt_env_file, "path",
+	       "file with NAME=VAL lines or JSON, layered under --env", NULL),
     OPT_END(),
 };
 
@@ -313,6 +326,16 @@ static void flatten_node(struct view *v, struct kmenu *c)
 	}
 	case KM_MENU: {
 		if (!c->prompt)
+			return;
+		/*
+		 * Honour both the menu's propagated `depends on` chain
+		 * (ctx_dep) and its optional `visible if` clause -- the
+		 * latter is how esp-idf's Kconfig gates target-specific
+		 * menus such as `Boot ROM Behavior` (visible if
+		 * !IDF_TARGET_ESP32).  kc_expr_bool returns 1 for a NULL
+		 * expression, so menus without either clause always show.
+		 */
+		if (!kc_expr_bool(c->ctx_dep) || !kc_expr_bool(c->visible_if))
 			return;
 		struct sbuf sb = SBUF_INIT;
 		sbuf_addstr(&sb, c->prompt);
@@ -1389,6 +1412,31 @@ static int run_loop(struct view *v)
 	}
 }
 
+/*
+ * Iterate a `;`-separated path list in @p value and call
+ * @ref kc_load_rename on each non-empty segment.  Used to apply the
+ * per-component rename files ESP-IDF's cmake exports via the
+ * @c COMPONENT_SDKCONFIG_RENAMES env var -- python kconfgen reads
+ * that env var directly; we do the same so interactive menuconfig
+ * sees the full rename coverage without the caller having to
+ * repeat `--sdkconfig-rename` for every component.
+ */
+static void load_rename_list(struct kc_ctx *ctx, const char *value)
+{
+	const char *p = value;
+	while (*p) {
+		const char *sep = p;
+		while (*sep && *sep != ';')
+			sep++;
+		if (sep > p) {
+			char *path = sbuf_strndup(p, (size_t)(sep - p));
+			kc_load_rename(ctx, path);
+			free(path);
+		}
+		p = *sep ? sep + 1 : sep;
+	}
+}
+
 int cmd_idf_menuconfig(int argc, const char **argv)
 {
 	argc = parse_options(argc, argv, &cmd_idf_menuconfig_desc);
@@ -1397,15 +1445,46 @@ int cmd_idf_menuconfig(int argc, const char **argv)
 	if (!opt_kconfig)
 		die("--kconfig is required");
 
+	/* Layer --env-file under --env, so flags from the CLI override
+	 * file entries (matches kconfgen's ordering). */
+	if (opt_env_file)
+		kc_load_env_file(&opt_env, opt_env_file);
+
 	struct kc_ctx kc;
 	kc_ctx_init(&kc);
-	kc_parse_file(&kc, opt_kconfig, NULL);
-	/*
-	 * --config loads a starting sdkconfig; optional so the user can
-	 * start from pure Kconfig defaults.  Skip the load when --config
-	 * points at a file that does not exist yet (first-ever run of
-	 * `-c foo -o foo` pattern).
-	 */
+
+	/* Rename tables must be loaded before any sdkconfig load so the
+	 * reader can translate legacy CONFIG_* keys on the fly. */
+	for (size_t i = 0; i < opt_renames.nr; i++)
+		kc_load_rename(&kc, opt_renames.v[i]);
+
+	/* COMPONENT_SDKCONFIG_RENAMES gives the per-component rename
+	 * files as a `;`-separated list.  Look in the --env table first
+	 * (explicit beats implicit), fall back to the process env so
+	 * setup_project's populate_kconfig_env path works transparently. */
+	const char *comp_renames = NULL;
+	for (size_t i = 0; i < opt_env.nr; i++) {
+		const char pfx[] = "COMPONENT_SDKCONFIG_RENAMES=";
+		if (!strncmp(opt_env.v[i], pfx, sizeof(pfx) - 1)) {
+			comp_renames = opt_env.v[i] + sizeof(pfx) - 1;
+			break;
+		}
+	}
+	if (!comp_renames)
+		comp_renames = getenv("COMPONENT_SDKCONFIG_RENAMES");
+	if (comp_renames)
+		load_rename_list(&kc, comp_renames);
+
+	kc_parse_file(&kc, opt_kconfig,
+		      opt_env.nr ? (const char *const *)opt_env.v : NULL);
+
+	/* Layered sdkconfig load: --defaults in CLI order (later wins),
+	 * then --config on top.  Skip entries whose file doesn't exist
+	 * yet -- first-run use writes them on save. */
+	for (size_t i = 0; i < opt_defaults.nr; i++) {
+		if (access(opt_defaults.v[i], F_OK) == 0)
+			kc_load_config(&kc, opt_defaults.v[i]);
+	}
 	if (opt_config && access(opt_config, F_OK) == 0)
 		kc_load_config(&kc, opt_config);
 	kc_eval(&kc);
