@@ -65,13 +65,9 @@ void pager_start(void)
 	 *   R -- pass raw ANSI colour sequences through
 	 *   X -- don't clear the screen on start/exit
 	 *
-	 * putenv() is portable (platform.h remaps to _putenv on Windows);
-	 * we only install the default if $LESS is unset, so we never
-	 * clobber the user's value.  The string must outlive the process,
-	 * which a literal does.
+	 * overwrite=0 preserves the user's own LESS if they've set one.
 	 */
-	if (!getenv("LESS"))
-		putenv((char *)"LESS=FRX");
+	setenv("LESS", "FRX", 0);
 
 	argv[0] = cmd;
 	argv[1] = NULL;

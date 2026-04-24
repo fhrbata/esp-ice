@@ -970,6 +970,41 @@ out:
 	return rv;
 }
 
+/*
+ * UTF-8-aware setenv() for Windows.  The CRT's narrow _putenv_s takes
+ * the current ANSI code page, so non-ASCII bytes in a UTF-8 value would
+ * be mangled before entering the environment block (where Win32 stores
+ * them as UTF-16).  Convert both name and value to wide-char first,
+ * then call _wputenv_s which writes the environment natively.
+ *
+ * _wputenv_s copies its inputs, matching POSIX setenv semantics (no
+ * lifetime requirement on the source strings).  The overwrite flag is
+ * emulated: _wputenv_s always overwrites, so we check _wgetenv first
+ * when the caller asks to preserve an existing value.
+ */
+int setenv_w(const char *name, const char *value, int overwrite)
+{
+	wchar_t *wname = mbs_to_wcs(name);
+	wchar_t *wvalue = mbs_to_wcs(value ? value : "");
+	int rv = -1;
+
+	if (!wname || !wvalue) {
+		errno = ENOMEM;
+		goto out;
+	}
+
+	if (!overwrite && _wgetenv(wname)) {
+		rv = 0;
+		goto out;
+	}
+
+	rv = _wputenv_s(wname, wvalue) == 0 ? 0 : -1;
+out:
+	free(wname);
+	free(wvalue);
+	return rv;
+}
+
 int dir_foreach(const char *path, int (*cb)(const char *name, void *ud),
 		void *ud)
 {

@@ -721,7 +721,6 @@ static void activate_staged_profile(const char *chip, const char *idf_path,
 				    const struct svec *sdkconfig_defaults,
 				    const struct svec *defines)
 {
-	struct sbuf env = SBUF_INIT;
 	struct sbuf log_dir = SBUF_INIT;
 
 	config_add(&config, "_project.chip", chip, CONFIG_SCOPE_PROJECT);
@@ -753,9 +752,8 @@ static void activate_staged_profile(const char *chip, const char *idf_path,
 	sbuf_release(&log_dir);
 
 	setup_tool_env(idf_path);
-	sbuf_addf(&env, "IDF_PATH=%s", idf_path);
-	putenv(sbuf_detach(&env));
-	putenv((char *)"IDF_COMPONENT_MANAGER=0");
+	setenv("IDF_PATH", idf_path, 1);
+	setenv("IDF_COMPONENT_MANAGER", "0", 1);
 }
 
 /* ------------------------------------------------------------------ */
@@ -764,16 +762,6 @@ static void activate_staged_profile(const char *chip, const char *idf_path,
 
 int cmd_init(int argc, const char **argv)
 {
-	/*
-	 * Handshake with esp-idf/tools/cmake/project.cmake: when this env
-	 * var is set, project.cmake renames an existing sdkconfig to
-	 * sdkconfig.old before __target_init runs, so a stale IDF_TARGET
-	 * from the old sdkconfig is not consulted for consistency checks.
-	 *
-	 * putenv() stores the pointer, not a copy, so the storage must
-	 * outlive the call -- a function-static array provides that.
-	 */
-	static char envstr[] = "_IDF_PY_SET_TARGET_ACTION=1";
 	const char *chip;
 	const char *name;
 	char *idf_path = NULL;
@@ -903,7 +891,13 @@ int cmd_init(int argc, const char **argv)
 	activate_staged_profile(chip, idf_path, sdkconfig, build_dir, generator,
 				&opt_sdkconfig_defaults, &opt_defines);
 
-	putenv(envstr);
+	/*
+	 * Handshake with esp-idf/tools/cmake/project.cmake: when this env
+	 * var is set, project.cmake renames an existing sdkconfig to
+	 * sdkconfig.old before __target_init runs, so a stale IDF_TARGET
+	 * from the old sdkconfig is not consulted for consistency checks.
+	 */
+	setenv("_IDF_PY_SET_TARGET_ACTION", "1", 1);
 
 	rc = cmake_configure();
 	if (rc != 0) {

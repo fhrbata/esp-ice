@@ -259,18 +259,16 @@ int main(void)
 		};
 		struct cmd_desc cmd_desc = {.opts = opts};
 		const char *argv[] = {"prog"};
-		static char env[] = "ICE_TEST_BUILD_DIR=from-env";
-		static char clear[] = "ICE_TEST_BUILD_DIR=";
 		int argc;
 
 		config_release(&config);
 		config_set(&config, "core.build-dir", "from-config",
 			   CONFIG_SCOPE_USER);
-		putenv(env);
+		setenv("ICE_TEST_BUILD_DIR", "from-env", 1);
 		argc = parse_options(1, argv, &cmd_desc);
 		tap_check(argc == 0);
 		tap_check(path != NULL && strcmp(path, "from-env") == 0);
-		putenv(clear);
+		setenv("ICE_TEST_BUILD_DIR", "", 1);
 		config_release(&config);
 		tap_done("OPT_STRING_CFG env_var overrides config_key");
 	}

@@ -108,6 +108,16 @@ int symlink_w(const char *target, const char *linkpath);
 int link_w(const char *target, const char *linkpath);
 
 /*
+ * UTF-8-aware setenv() replacement.  The narrow _putenv_s interprets
+ * its arguments through the current ANSI code page, which mangles
+ * non-ASCII bytes in UTF-8 paths / values.  setenv_w converts to wide
+ * char first and calls _wputenv_s so the environment block (stored as
+ * UTF-16 by Windows) keeps the original content intact.  Copies both
+ * inputs -- caller is free to release source buffers.
+ */
+int setenv_w(const char *name, const char *value, int overwrite);
+
+/*
  * X_OK is not a meaningful mode for the Win32 _access() CRT call, but
  * it is the semantic POSIX callers want ("can I spawn this?").  We
  * define the POSIX bit here and let access_w() interpret it by trying
@@ -127,10 +137,7 @@ int link_w(const char *target, const char *linkpath);
 #define chdir chdir_w
 #define chmod chmod_w
 #define isatty _isatty
-#define putenv _putenv
-/* setenv is POSIX; on Windows use _putenv_s (same name+value interface,
- * copies both strings, always overwrites -- POSIX callers pass 1). */
-#define setenv(name, value, overwrite) _putenv_s((name), (value))
+#define setenv setenv_w
 #define fileno _fileno
 #define dup _dup
 #define dup2 _dup2
@@ -186,8 +193,10 @@ int link_w(const char *target, const char *linkpath);
 
 #include <unistd.h>
 
-/* putenv exists in libc but is not declared in C99 <stdlib.h>. */
-int putenv(char *);
+/* setenv exists in libc but is hidden from C99 <stdlib.h> without
+ * _POSIX_C_SOURCE; the main build defines it but test drivers compile
+ * individual files with plain -std=c99, so the prototype lives here. */
+int setenv(const char *name, const char *value, int overwrite);
 
 /* fileno exists in libc but is hidden from C99 <stdio.h> without
  * _POSIX_C_SOURCE; platform.h maps it to _fileno on Windows. */

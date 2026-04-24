@@ -171,7 +171,6 @@ void setup_tool_env(const char *idf_path)
 					continue;
 
 				struct sbuf envstr = SBUF_INIT;
-				sbuf_addf(&envstr, "%s=", *kv);
 
 				/* Replace ${TOOL_PATH} */
 				const char *p = val;
@@ -185,7 +184,8 @@ void setup_tool_env(const char *idf_path)
 					}
 				}
 
-				putenv(sbuf_detach(&envstr));
+				setenv(*kv, envstr.buf, 1);
+				sbuf_release(&envstr);
 			}
 		}
 
@@ -199,11 +199,7 @@ void setup_tool_env(const char *idf_path)
 			sbuf_addch(&path_prepend, ':');
 			sbuf_addstr(&path_prepend, old_path);
 		}
-		{
-			struct sbuf env = SBUF_INIT;
-			sbuf_addf(&env, "PATH=%s", path_prepend.buf);
-			putenv(sbuf_detach(&env));
-		}
+		setenv("PATH", path_prepend.buf, 1);
 	}
 
 	json_free(root);

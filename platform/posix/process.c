@@ -101,8 +101,21 @@ int process_start(struct process *proc)
 			dup2(STDOUT_FILENO, STDERR_FILENO);
 
 		if (proc->env) {
-			for (int i = 0; proc->env[i]; i++)
-				putenv((char *)proc->env[i]);
+			for (int i = 0; proc->env[i]; i++) {
+				const char *kv = proc->env[i];
+				const char *eq = strchr(kv, '=');
+				char name[256];
+				size_t nlen;
+
+				if (!eq)
+					continue;
+				nlen = (size_t)(eq - kv);
+				if (nlen >= sizeof(name))
+					continue;
+				memcpy(name, kv, nlen);
+				name[nlen] = '\0';
+				setenv(name, eq + 1, 1);
+			}
 		}
 
 		if (proc->dir && chdir(proc->dir) == -1) {

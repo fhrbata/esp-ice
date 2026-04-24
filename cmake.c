@@ -75,14 +75,11 @@ static void setup_tooling_env(void)
 	const char *idf_path = config_get("_project.idf-path");
 
 	if (idf_path && *idf_path) {
-		struct sbuf env = SBUF_INIT;
-
 		setup_tool_env(idf_path);
-		sbuf_addf(&env, "IDF_PATH=%s", idf_path);
-		putenv(sbuf_detach(&env));
+		setenv("IDF_PATH", idf_path, 1);
 	}
 
-	putenv((char *)"IDF_COMPONENT_MANAGER=0");
+	setenv("IDF_COMPONENT_MANAGER", "0", 1);
 }
 
 /*
