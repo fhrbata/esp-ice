@@ -126,6 +126,8 @@ LIB_SRCS := \
 	cmd/clean/clean.c \
 	cmd/completion/completion.c \
 	cmd/config/config.c \
+	cmd/docs/docs.c \
+	cmd/docs/getting-started/getting-started.c \
 	cmd/flash/flash.c \
 	cmd/help/help.c \
 	cmd/idf/idf.c \

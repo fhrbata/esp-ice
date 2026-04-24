@@ -221,6 +221,7 @@ static const struct cmd_desc *const ice_subs[] = {
     &cmd_clean_desc,
     &cmd_completion_desc,
     &cmd_config_desc,
+    &cmd_docs_desc,
     &cmd_flash_desc,
     &cmd_help_desc,
     &cmd_idf_desc,
@@ -326,8 +327,9 @@ const struct cmd_manual ice_root_manual = {
 	.description =
 	H_PARA("@b{ice} drives the build, flash, configuration and size "
 	       "tooling for ESP-IDF projects.  It replaces @b{idf.py} with "
-	       "a single self-contained binary -- no Python, no "
-	       "@b{export.sh}, no virtual environments."),
+	       "a single self-contained binary and manages the Python "
+	       "tooling internally -- you don't source @b{export.sh} or "
+	       "maintain a virtualenv yourself."),
 
 	.list_aliases = 1,
 
@@ -339,35 +341,10 @@ const struct cmd_manual ice_root_manual = {
 	H_EXAMPLE("ice help config"),
 
 	.getting_started =
-	H_PARA("Enable tab completion for your shell (see "
-	       "@b{ice completion --help} for bash, zsh, fish, powershell):")
-	H_LINE("@y{$} @b{eval \"$(ice completion bash)\"}")
-	H_RAW("")
-	H_PARA("To persist it, append the same line to your shell rc file:")
-	H_LINE("@y{$} @b{echo 'eval \"$(ice completion bash)\"' >> ~/.bashrc}")
-	H_RAW("")
-	H_PARA("Fetch ESP-IDF (managed by @b{ice}; cached under @b{~/.ice/}):")
-	H_LINE("@y{$} @b{ice repo clone}                         clone ESP-IDF into ~/.ice/esp-idf")
-	H_LINE("@y{$} @b{ice repo checkout v5.4}                 creates ~/.ice/checkouts/v5.4")
-	H_RAW("")
-	H_PARA("Cd into your project -- ESP-IDF ships a @b{hello_world} example "
-	       "you can use to verify everything is wired up:")
-	H_LINE("@y{$} @b{cd ~/.ice/checkouts/v5.4/examples/get-started/hello_world}")
-	H_RAW("")
-	H_PARA("Bind the project to a chip + IDF (installs tools, runs cmake):")
-	H_LINE("@y{$} @b{ice init esp32 v5.4}                    default profile")
-	H_LINE("@y{$} @b{ice init esp32s3 v5.4 production}       named profile")
-	H_RAW("")
-	H_PARA("Build, flash, and watch the serial output (Ctrl-] exits):")
-	H_LINE("@y{$} @b{ice build}")
-	H_LINE("@y{$} @b{ice flash}")
-	H_LINE("@y{$} @b{ice monitor}")
-	H_RAW("")
-	H_PARA("@b{ice flash} rebuilds first if anything has changed (matches "
-	       "@b{idf.py} behaviour; toggle via @b{core.build-always}).")
-	H_PARA("No @b{export.sh} or environment setup needed -- @b{ice} "
-	       "finds the tools automatically.  Run @b{ice help <command>} for "
-	       "details on any subcommand."),
+	H_PARA("Run @b{ice docs getting-started} for the first-run "
+	       "walkthrough -- from fresh install to a flashed "
+	       "@b{hello_world}.  For any subcommand, @b{ice help <command>} "
+	       "(or @b{ice <command> --help}) shows its manual page."),
 
 	.extras =
 	H_SECTION("MANAGING ESP-IDF VERSIONS")

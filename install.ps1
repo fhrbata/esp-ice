@@ -112,10 +112,10 @@ $step++
 
 @"
 
-  $step. Run ice for the built-in getting-started guide -- it walks
-     you from zero to a flashed hello_world:
+  $step. Run the built-in getting-started guide -- it walks you
+     from zero to a flashed hello_world:
 
-       ice
+       ice docs getting-started
 
 Note: the binary is currently unsigned (PoC).  On first launch,
 Windows SmartScreen may warn "Windows protected your PC" -- click

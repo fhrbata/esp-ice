@@ -133,9 +133,9 @@ EOF
 step=$((step + 1))
 
 cat <<EOF
-  $step. Run ice for the built-in getting-started guide -- it walks
-     you from zero to a flashed hello_world:
+  $step. Run the built-in getting-started guide -- it walks you
+     from zero to a flashed hello_world:
 
-       ice
+       ice docs getting-started
 
 EOF

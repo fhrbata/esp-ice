@@ -57,6 +57,9 @@ Default install location is `%LOCALAPPDATA%\Programs\ice\bin\ice.exe`
 and is added to your user `PATH` automatically.  Override with
 `$env:ICE_INSTALL_DIR` or `$env:ICE_VERSION`.
 
+Once installed, run `ice docs getting-started` for the guided
+walkthrough -- from fresh install to a flashed `hello_world`.
+
 ### From source
 
 #### Development build
@@ -157,87 +160,6 @@ catalogue of available cross-compilation toolchains.
 | `make clean` | Remove build artifacts for the current triple |
 | `make mrproper` | Remove all build artifacts and vendored deps |
 | `make help` | Show all build variables and targets |
-
-## Quick start
-
-First, enable tab completion for your shell -- it makes every
-subcommand and flag below (and everything else) discoverable by
-pressing `TAB`:
-
-```bash
-eval "$(ice completion bash)"   # or zsh, fish, powershell
-```
-
-Add the same line to your shell rc file (`~/.bashrc`, `~/.zshrc`,
-...) to make it permanent.  See [Shell completion](#shell-completion)
-below for other shells.
-
-Then, from a fresh install to a running ESP32:
-
-```bash
-# 1. Fetch ESP-IDF (managed by ice; lands in ~/.ice/).
-ice repo clone
-ice repo checkout v5.4
-# (pass an explicit path to drop the checkout anywhere else:
-#  `ice repo checkout v5.4 ~/work/esp-idf-5.4`)
-
-# 2. Cd into a project.  ESP-IDF ships a hello_world example you can
-#    use to verify your install.
-cd ~/.ice/checkouts/v5.4/examples/get-started/hello_world
-
-# 3. Bind the project to a chip + IDF version (installs tools, runs cmake).
-ice init esp32 v5.4
-
-# 4. Build, flash, and watch serial output.  Press Ctrl-] to exit monitor.
-ice build
-ice flash
-ice monitor
-```
-
-`ice flash` rebuilds first if anything has changed (matching `idf.py`
-behaviour); `ice build` above is shown for clarity but isn't strictly
-required.  Set `core.build-always = false` to opt out.
-
-Already have an ESP-IDF checkout you'd rather use?
-`ice init esp32 ~/path/to/esp-idf` -- ice accepts any ESP-IDF tree as
-the `<idf>` argument, so you don't have to re-clone.
-
-For the full walkthrough -- including the three ways to provide
-ESP-IDF, profile setup, and troubleshooting -- see
-[docs/getting-started.md](docs/getting-started.md).
-
-## Shell completion
-
-`ice` ships with completion support for bash, zsh, fish, and
-PowerShell.  The install scripts print the matching line for your
-shell; you can also add it manually:
-
-```bash
-# ~/.bashrc
-eval "$(ice completion bash)"
-```
-
-```zsh
-# ~/.zshrc
-eval "$(ice completion zsh)"
-```
-
-```fish
-# ~/.config/fish/config.fish
-ice completion fish | source
-```
-
-```powershell
-# $PROFILE
-ice completion powershell | Out-String | Invoke-Expression
-```
-
-Each `ice completion <shell>` invocation prints a tiny init snippet on
-stdout; evaluating it binds a dispatch function to the `ice` command.
-Every `TAB` then re-invokes `ice` itself to list candidates —
-subcommands, long / short flags, aliases, chip targets, known config
-keys — so completion stays in sync with the binary automatically and
-there is nothing to regenerate after an upgrade.
 
 ## Contributing
 
