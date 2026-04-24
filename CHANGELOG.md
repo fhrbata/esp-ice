@@ -1,3 +1,62 @@
+## v0.5.0 (2026-04-24)
+
+### ✨ New Features
+
+- **cmd/init**: intercept gen_crt_bundle.py in sitecustomize.py *(Frantisek Hrbata - a2ea6d1)*
+- **cmd/idf/crt-bundle**: native x509 certificate bundle generator *(Frantisek Hrbata - e4ae0f5)*
+- **cmd/idf/hints**: print HINT lines in yellow *(Frantisek Hrbata - a4ac2ae)*
+- **cmd/idf/hints**: match hints.yml rules against a log file *(Frantisek Hrbata - 8aa3a4a)*
+- **cmd/idf/kconfgen**: drop-in parity with python esp-idf-kconfig *(Frantisek Hrbata - f3b11b4)*
+- **cmd/idf/kconfgen**: sdkconfig.cmake hex formatting matches python *(Frantisek Hrbata - 6629a75)*
+- **cmd/idf/kconfgen**: kconfig_menus.json implicit-menuconfig tree shape *(Frantisek Hrbata - 46dc68d)*
+- **cmd/idf/kconfgen**: kconfig_menus.json parity -- choice and id shape *(Frantisek Hrbata - 2610dd6)*
+- **cmd/idf/kconfgen**: final sdkconfig formatting polish *(Frantisek Hrbata - a7055c9)*
+- **cmd/idf/kconfgen**: close output-parity gaps against python *(Frantisek Hrbata - f0635ae)*
+- **cmd/idf/kconfgen**: disambiguate choice-vs-config same-name collisions *(Frantisek Hrbata - a3f443a)*
+- **cmd/idf/kconfgen**: narrow emit filter + auto-load per-component renames *(Frantisek Hrbata - b1ee7a3)*
+- **cmd/idf/kconfgen**: wire compatibility with ESP-IDF build invocations *(Frantisek Hrbata - 7c8595f)*
+- **cmd/idf/kconfgen**: json / json_menus output formats *(Frantisek Hrbata - bfe711d)*
+- **cmd/idf/kconfgen**: --env / --env-file / --list-separator for build parity *(Frantisek Hrbata - a63eaf5)*
+- **cmd/idf/kconfgen**: sdkconfig.rename + deprecated-aliases block *(Frantisek Hrbata - e19acf1)*
+- **cmd/idf/kconfgen**: choice-group mutual exclusion + declaration-order emit *(Frantisek Hrbata - c5dbfee)*
+- **cmd/idf/kconfgen**: sdkconfig.h and sdkconfig.cmake writers *(Frantisek Hrbata - 62c64ea)*
+- **cmd/idf/kconfgen**: sdkconfig load / write *(Frantisek Hrbata - d62d1f9)*
+- **cmd/idf/kconfgen**: symbol evaluator + --dump-symbols *(Frantisek Hrbata - 88cdfdd)*
+- **cmd/idf/kconfgen**: native Kconfig parser with --dump-ast *(Frantisek Hrbata - b182bd4)*
+- **smap**: generic string-keyed hash map *(Frantisek Hrbata - d97bed8)*
+- **cmd/size**: porcelain wrapper around ice idf size *(Frantisek Hrbata - 4599726)*
+- **cmd/idf/ldgen**: native linker-script generator *(Frantisek Hrbata - 73066d4)*
+- **cmake**: honour core.build-always in setup_project *(Frantisek Hrbata - d391ad6)*
+- auto-run hints on failed process_run_progress *(Frantisek Hrbata - 6b19df4)*
+
+### 🐛 Bug Fixes
+
+- **cmd/idf/kconfgen**: silence clang-tidy warnings *(Frantisek Hrbata - 8116b43)*
+- **cmd/idf/kconfgen**: three parity bugs uncovered by 10-chip hello_world diff *(Frantisek Hrbata - ed0ea7b)*
+- **cmd/idf/kconfgen**: match python sdkconfig byte-for-byte *(Frantisek Hrbata - afa95ec)*
+- **cmd/idf/kconfgen**: three sdkconfig-parity bugs uncovered by hello_world diff *(Frantisek Hrbata - f13e63a)*
+- **cmd/idf/kconfgen**: full hello_world coverage on all supported chips *(Frantisek Hrbata - 3a05011)*
+- **cmd/idf/kconfgen**: unbounded menu walks + visibility-gated defaults *(Frantisek Hrbata - da7005a)*
+- **cmd/log**: expand color tokens before writing to stdout *(Frantisek Hrbata - 6da649c)*
+
+### 📖 Documentation
+
+- **contributing**: codify platform abstraction rules *(Frantisek Hrbata - e7b158e)*
+- consolidate onboarding into `ice docs getting-started` *(Frantisek Hrbata - 180e0e2)*
+
+### 🔧 Code Refactoring
+
+- **platform**: PLATFORM_VENV_PYTHON_REL for venv interpreter path *(Frantisek Hrbata - fde4e8b)*
+- **cmd/init**: replace patch_ninja with venv + sitecustomize.py *(Frantisek Hrbata - a8b68c4)*
+- **hints**: return hints via svec instead of printing *(Frantisek Hrbata - 96ae214)*
+- **platform**: #ifdef-free call sites, UTF-8-safe path shims *(Frantisek Hrbata - 7815000)*
+- **cmd/init**: consolidate ninja patchers, add ldgen rule *(Frantisek Hrbata - b706b18)*
+
+### 🗑️ Removals
+
+- **menuconfig**: drop ice menuconfig command *(Frantisek Hrbata - ebf85a4)*
+
+
 ## v0.4.0 (2026-04-21)
 
 ### ✨ New Features
