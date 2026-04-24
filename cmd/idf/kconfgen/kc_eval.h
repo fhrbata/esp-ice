@@ -26,8 +26,23 @@
 #ifndef KC_EVAL_H
 #define KC_EVAL_H
 
+#include "kc_ast.h"
+
 struct kc_ctx;
 struct kexpr;
+
+/**
+ * @brief Canonical "zero value" for a symbol type.
+ *
+ * Returns a pointer into static storage: @c "n" for KS_BOOL, @c "0"
+ * for KS_INT, @c "0x0" for KS_HEX, @c "0.0" for KS_FLOAT, and @c ""
+ * for KS_STRING / KS_UNKNOWN.  Callers that need ownership must
+ * @c sbuf_strdup the result.
+ *
+ * Used as the fallback payload when a visible symbol has no
+ * user-provided value and no @c default property fires.
+ */
+const char *kc_sym_type_default(enum ksym_type type);
 
 /**
  * @brief Evaluate an expression to a boolean using current symbol

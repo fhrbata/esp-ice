@@ -1199,20 +1199,7 @@ static char *compute_kconfig_default(const struct ksym *s)
 			raw = "";
 		return sbuf_strdup(raw);
 	}
-	switch (s->type) {
-	case KS_BOOL:
-		return sbuf_strdup("n");
-	case KS_INT:
-		return sbuf_strdup("0");
-	case KS_HEX:
-		return sbuf_strdup("0x0");
-	case KS_FLOAT:
-		return sbuf_strdup("0.0");
-	case KS_STRING:
-	case KS_UNKNOWN:
-	default:
-		return sbuf_strdup("");
-	}
+	return sbuf_strdup(kc_sym_type_default(s->type));
 }
 
 /*

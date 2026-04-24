@@ -31,6 +31,24 @@
 
 #define MAX_FIXPOINT_ITERS 50
 
+const char *kc_sym_type_default(enum ksym_type type)
+{
+	switch (type) {
+	case KS_BOOL:
+		return "n";
+	case KS_INT:
+		return "0";
+	case KS_HEX:
+		return "0x0";
+	case KS_FLOAT:
+		return "0.0";
+	case KS_STRING:
+	case KS_UNKNOWN:
+		break;
+	}
+	return "";
+}
+
 double kc_strtod_c(const char *nptr, char **endptr)
 {
 	/*
@@ -764,27 +782,8 @@ static int fixpoint_step(struct kc_ctx *ctx)
 			s->default_applied = default_hit;
 			changed = 1;
 		}
-		if (!new_val) {
-			const char *zero;
-			switch (s->type) {
-			case KS_BOOL:
-				zero = "n";
-				break;
-			case KS_INT:
-				zero = "0";
-				break;
-			case KS_HEX:
-				zero = "0x0";
-				break;
-			case KS_FLOAT:
-				zero = "0.0";
-				break;
-			default:
-				zero = "";
-				break;
-			}
-			new_val = sbuf_strdup(zero);
-		}
+		if (!new_val)
+			new_val = sbuf_strdup(kc_sym_type_default(s->type));
 
 		/*
 		 * Select: force "y" if any selector is active.  NULL
