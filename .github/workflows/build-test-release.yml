@@ -68,6 +68,8 @@ jobs:
             make
             diffutils
             perl
+            python
+            zip
 
       - name: lint
         shell: msys2 {0}
