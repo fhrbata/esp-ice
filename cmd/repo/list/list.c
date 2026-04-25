@@ -53,7 +53,7 @@ int cmd_repo_list(int argc, const char **argv)
 		    "origin/master", "origin/release/*", NULL};
 		struct sbuf branches = SBUF_INIT;
 
-		if (repo_run_git_capture(base, git_argv, &branches) == 0) {
+		if (git_capture(base, git_argv, &branches) == 0) {
 			fprintf(stdout, "Branches:\n");
 			pos = 0;
 			while ((line = sbuf_getline(branches.buf, branches.len,
@@ -76,7 +76,7 @@ int cmd_repo_list(int argc, const char **argv)
 		const char *git_argv[] = {
 		    "git", "tag", "--sort=-version:refname", "-l", "v*", NULL};
 
-		if (repo_run_git_capture(base, git_argv, &out) == 0) {
+		if (git_capture(base, git_argv, &out) == 0) {
 			fprintf(stdout, "\nTags:\n");
 			pos = 0;
 			while ((line = sbuf_getline(out.buf, out.len, &pos))) {

@@ -96,19 +96,19 @@ int cmd_repo___pull(int argc, const char **argv)
 
 	{
 		const char *argv[] = {"git", "clean", "-ffdx", NULL};
-		repo_run_git(base, argv);
+		git_run(base, argv);
 	}
 
 	{
 		const char *argv[] = {"git", "checkout", "--force", "master",
 				      NULL};
-		if (repo_run_git(base, argv) != 0)
+		if (git_run(base, argv) != 0)
 			die("git checkout master failed");
 	}
 
 	{
 		const char *argv[] = {"git", "pull", "--ff-only", NULL};
-		if (repo_run_git(base, argv) != 0)
+		if (git_run(base, argv) != 0)
 			die("git pull failed");
 	}
 
@@ -123,7 +123,7 @@ int cmd_repo___pull(int argc, const char **argv)
 				      "--jobs",
 				      jobs_str,
 				      NULL};
-		if (repo_run_git(base, argv) != 0)
+		if (git_run(base, argv) != 0)
 			warn("some submodules failed to update");
 	}
 

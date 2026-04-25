@@ -192,7 +192,7 @@ static int ref_exists(const char *base, const char *ref)
 	{
 		const char *argv[] = {"git",	 "rev-parse", "--verify",
 				      "--quiet", spec.buf,    NULL};
-		rc = repo_run_git_capture(base, argv, &out);
+		rc = git_capture(base, argv, &out);
 	}
 	sbuf_release(&spec);
 	sbuf_release(&out);
@@ -220,18 +220,18 @@ static void prepare_reference(const char *ref, int jobs)
 
 	{
 		const char *argv[] = {"git", "clean", "-ffdx", NULL};
-		repo_run_git(base, argv);
+		git_run(base, argv);
 	}
 
 	if (!ref_exists(base, ref)) {
 		const char *argv[] = {"git", "fetch", "origin", ref, NULL};
-		if (repo_run_git(base, argv) != 0)
+		if (git_run(base, argv) != 0)
 			die("git fetch '%s' failed", ref);
 	}
 
 	{
 		const char *argv[] = {"git", "checkout", "--force", ref, NULL};
-		if (repo_run_git(base, argv) != 0)
+		if (git_run(base, argv) != 0)
 			die("git checkout '%s' failed", ref);
 	}
 
@@ -246,7 +246,7 @@ static void prepare_reference(const char *ref, int jobs)
 				      "--jobs",
 				      jobs_str,
 				      NULL};
-		if (repo_run_git(base, argv) != 0)
+		if (git_run(base, argv) != 0)
 			warn("some submodules failed to update");
 	}
 }
@@ -276,7 +276,7 @@ static void complete_refs(void)
 				      "origin/release/*",
 				      NULL};
 
-		if (repo_run_git_capture(base, argv, &out) == 0) {
+		if (git_capture(base, argv, &out) == 0) {
 			pos = 0;
 			while ((line = sbuf_getline(out.buf, out.len, &pos))) {
 				if (!strncmp(line, "origin/", 7))
@@ -295,7 +295,7 @@ static void complete_refs(void)
 		const char *argv[] = {"git", "tag", "--sort=-version:refname",
 				      "-l",  "v*",  NULL};
 
-		if (repo_run_git_capture(base, argv, &out) == 0) {
+		if (git_capture(base, argv, &out) == 0) {
 			pos = 0;
 			while ((line = sbuf_getline(out.buf, out.len, &pos))) {
 				if (repo_version_supported(line) &&
@@ -476,7 +476,7 @@ int cmd_repo___checkout(int argc, const char **argv)
 	{
 		const char *git_argv[] = {"git", "config", "--get",
 					  "remote.origin.url", NULL};
-		if (repo_run_git_capture(base, git_argv, &origin_url) != 0 ||
+		if (git_capture(base, git_argv, &origin_url) != 0 ||
 		    !origin_url.len)
 			die("could not read origin URL from reference");
 		sbuf_rtrim(&origin_url);
@@ -499,14 +499,14 @@ int cmd_repo___checkout(int argc, const char **argv)
 		const char *argv[] = {
 		    "git", "clone", "--local", "--no-checkout",
 		    base,  dest,    NULL};
-		if (repo_run_git(NULL, argv) != 0)
+		if (git_run(NULL, argv) != 0)
 			die("git clone --local failed");
 	}
 
 	{
 		const char *argv[] = {"git",	"remote",	"set-url",
 				      "origin", origin_url.buf, NULL};
-		if (repo_run_git(dest, argv) != 0)
+		if (git_run(dest, argv) != 0)
 			warn("could not retarget origin at '%s'",
 			     origin_url.buf);
 	}
@@ -543,7 +543,7 @@ int cmd_repo___checkout(int argc, const char **argv)
 
 	{
 		const char *argv[] = {"git", "checkout", "--force", ref, NULL};
-		if (repo_run_git(dest, argv) != 0)
+		if (git_run(dest, argv) != 0)
 			die("git checkout '%s' in '%s' failed", ref, dest);
 	}
 
@@ -551,7 +551,7 @@ int cmd_repo___checkout(int argc, const char **argv)
 		const char *argv[] = {
 		    "git",     "submodule",  "update", "--init", "--recursive",
 		    "--force", "--no-fetch", "--jobs", jobs_str, NULL};
-		if (repo_run_git(dest, argv) != 0)
+		if (git_run(dest, argv) != 0)
 			warn("some submodules failed to update");
 	}
 
@@ -567,7 +567,7 @@ int cmd_repo___checkout(int argc, const char **argv)
 	{
 		const char *argv[] = {"git", "checkout", "--force", "master",
 				      NULL};
-		if (repo_run_git(base, argv) != 0)
+		if (git_run(base, argv) != 0)
 			warn("could not restore reference to master");
 	}
 

@@ -56,7 +56,7 @@ int cmd_repo_info(int argc, const char **argv)
 	{
 		const char *git_argv[] = {"git", "describe", "--tags",
 					  "--always", NULL};
-		if (repo_run_git_capture(base, git_argv, &head) == 0) {
+		if (git_capture(base, git_argv, &head) == 0) {
 			sbuf_rtrim(&head);
 			printf("HEAD:      %s\n", head.buf);
 		}
@@ -76,8 +76,7 @@ int cmd_repo_info(int argc, const char **argv)
 
 			sbuf_addf(&full, "%s/%s", repo_checkouts_path(),
 				  names.v[i]);
-			if (repo_run_git_capture(full.buf, git_argv, &ver) ==
-			    0) {
+			if (git_capture(full.buf, git_argv, &ver) == 0) {
 				sbuf_rtrim(&ver);
 				printf("  %-20s %s\n", names.v[i], ver.buf);
 			} else {

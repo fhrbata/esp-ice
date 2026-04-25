@@ -16,6 +16,7 @@
 #ifndef CMD_REPO_REPO_H
 #define CMD_REPO_REPO_H
 
+#include "git.h"
 #include "ice.h"
 
 /** Upstream ESP-IDF URL used by @c ice repo clone when no URL is given. */
@@ -33,12 +34,6 @@ const char *repo_reference_path(void);
 
 /** Return ~/.ice/checkouts (parent of named checkouts). */
 const char *repo_checkouts_path(void);
-
-/** Run a git command in @p dir.  Returns the exit code. */
-int repo_run_git(const char *dir, const char **argv);
-
-/** Run a git command and capture stdout into @p out. */
-int repo_run_git_capture(const char *dir, const char **argv, struct sbuf *out);
 
 /**
  * die() with a helpful hint if ~/.ice/esp-idf does not exist; used by

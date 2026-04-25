@@ -144,7 +144,7 @@ int cmd_repo___clone(int argc, const char **argv)
 	svec_push(&args, url);
 	svec_push(&args, repo_reference_path());
 
-	if (repo_run_git(NULL, args.v) != 0)
+	if (git_run(NULL, args.v) != 0)
 		die("git clone failed");
 	svec_clear(&args);
 
@@ -162,7 +162,7 @@ int cmd_repo___clone(int argc, const char **argv)
 		    "git",    "submodule",   "update",
 		    "--init", "--recursive", "--no-recommend-shallow",
 		    "--jobs", jobs_str,	     NULL};
-		if (repo_run_git(repo_reference_path(), argv) != 0)
+		if (git_run(repo_reference_path(), argv) != 0)
 			die("git submodule update failed");
 	}
 

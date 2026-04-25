@@ -197,6 +197,7 @@ LIB_SRCS := \
 	smap.c \
 	svec.c \
 	http.c \
+	git.c \
 	gzip.c \
 	xz.c \
 	reader.c \
