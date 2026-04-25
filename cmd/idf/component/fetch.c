@@ -251,6 +251,15 @@ static int fetch_service(const struct lockfile_entry *entry,
 	if (fetch_download(dl_url.buf, tmp_zip.buf) < 0)
 		goto out;
 
+	/* Pin to the digest carried in the lockfile -- without this
+	 * the lockfile only pins the version number, not the bytes. */
+	if (entry->component_hash &&
+	    fetch_verify_sha256(tmp_zip.buf, entry->component_hash) != 0) {
+		warn("%s@%s: archive sha256 mismatch (expected %s)",
+		     entry->name, entry->version, entry->component_hash);
+		goto out;
+	}
+
 	sbuf_addf(&dest, "%s/%s", managed_components_dir, build_name.buf);
 	if (access(dest.buf, F_OK) == 0)
 		(void)rmtree(dest.buf, 0); /* idempotent: replace existing */
