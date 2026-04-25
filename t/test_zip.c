@@ -63,6 +63,15 @@ int main(void)
 		tap_done("reject zip-slip '..' entry");
 	}
 
+	/* Path traversal guard: backslash separators (Windows fopen
+	 * accepts them) must also be refused.  The attacker file name
+	 * was "..\\escape_bs". */
+	{
+		tap_check(zip_extract_all("slip_bs.zip", "out_slip_bs") == -1);
+		tap_check(!file_exists("escape_bs"));
+		tap_done("reject zip-slip backslash entry");
+	}
+
 	/* Corrupt (truncated) archive: yaml-like garbage and truncated
 	 * data both fail cleanly without a crash. */
 	{

@@ -52,13 +52,16 @@ PY
 			"sub/nested.txt:src/sub/nested.txt"
 	fi
 
-	# Zip-slip fixture: an entry whose name contains "../".  `zip`
-	# itself won't write such an entry, so we always use Python here.
+	# Zip-slip fixtures: entries whose names contain "../" or a
+	# backslash component.  `zip` itself won't write such entries,
+	# so we always use Python here.
 	printf 'do-not-extract\n' >escape
 	python3 - <<'PY'
 import zipfile
 with zipfile.ZipFile('slip.zip', 'w', zipfile.ZIP_DEFLATED) as z:
     z.write('escape', '../escape')
+with zipfile.ZipFile('slip_bs.zip', 'w', zipfile.ZIP_DEFLATED) as z:
+    z.writestr('..\\escape_bs', 'do-not-extract\n')
 PY
 	rm -f escape
 

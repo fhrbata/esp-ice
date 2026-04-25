@@ -79,9 +79,10 @@ static ssize_t find_eocd(const unsigned char *buf, size_t len)
 /*
  * Reject filenames that would escape the destination directory.
  * Allows normal forward-slash components but refuses "..", leading
- * "/", and embedded "/../" segments.  Windows-style "\" separators
- * and drive letters are not in scope -- component archives use POSIX
- * paths only.
+ * "/", and embedded "/../" segments.  Backslashes and ':' (drive
+ * prefixes) are also rejected: Windows fopen() honours '\\' as a
+ * separator, so an entry named "..\\evil" must not slip past the
+ * "/"-only scan.
  */
 static int safe_path(const unsigned char *name, size_t len)
 {
@@ -91,6 +92,11 @@ static int safe_path(const unsigned char *name, size_t len)
 		return 0;
 	if (name[0] == '/')
 		return 0;
+
+	for (size_t k = 0; k < len; k++) {
+		if (name[k] == '\\' || name[k] == ':')
+			return 0;
+	}
 
 	while (i < len) {
 		size_t j = i;
