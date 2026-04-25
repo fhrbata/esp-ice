@@ -79,6 +79,9 @@ struct e2i_config {
 	uint16_t min_rev_full;	    /**< 0 = any (default) */
 	uint16_t max_rev_full;	    /**< 0xFFFF = any (default) */
 	bool append_sha256;	    /**< write 32-byte digest after checksum */
+	bool use_segments;	    /**< walk PT_LOAD program headers instead of
+				     *   sections; default is sections, matching
+				     *   esptool's default behaviour. */
 	uint32_t elf_sha256_offset; /**< patch app_elf_sha256 field; 0 = skip */
 };
 
@@ -103,6 +106,7 @@ struct e2i_config {
 	    .min_rev_full = 0,                                                 \
 	    .max_rev_full = 0xFFFF,                                            \
 	    .append_sha256 = true,                                             \
+	    .use_segments = false,                                             \
 	    .elf_sha256_offset = 0,                                            \
 	}
 

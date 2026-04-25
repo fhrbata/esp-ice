@@ -224,13 +224,17 @@ void elf_read_sections(const void *buf, size_t len, struct elf_sections *out)
 		size_t hoff = (size_t)(shoff + (uint64_t)i * shentsize);
 		uint32_t sh_name = rd32(&r, hoff);
 		uint32_t sh_type = rd32(&r, hoff + 4);
-		uint64_t sh_flags, sh_size;
+		uint64_t sh_flags, sh_addr, sh_offset, sh_size;
 
 		if (r.ei_class == ELFCLASS32) {
 			sh_flags = rd32(&r, hoff + 8);
+			sh_addr = rd32(&r, hoff + 12);
+			sh_offset = rd32(&r, hoff + 16);
 			sh_size = rd32(&r, hoff + 20);
 		} else {
 			sh_flags = rd64(&r, hoff + 8);
+			sh_addr = rd64(&r, hoff + 16);
+			sh_offset = rd64(&r, hoff + 24);
 			sh_size = rd64(&r, hoff + 32);
 		}
 
@@ -239,6 +243,8 @@ void elf_read_sections(const void *buf, size_t len, struct elf_sections *out)
 		    (sh_name < str_size) ? strtab + sh_name : "";
 		out->s[out->nr].type = sh_type;
 		out->s[out->nr].flags = sh_flags;
+		out->s[out->nr].addr = sh_addr;
+		out->s[out->nr].offset = sh_offset;
 		out->s[out->nr].size = sh_size;
 		out->nr++;
 	}

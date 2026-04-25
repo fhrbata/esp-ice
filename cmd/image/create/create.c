@@ -113,7 +113,8 @@ static const struct option cmd_image_create_opts[] = {
     OPT_BOOL(0, "secure-pad-v2", &opt_secure_pad_v2,
 	     "(accepted, no-op in this release)"),
     OPT_BOOL(0, "use-segments", &opt_use_segments,
-	     "(accepted; segments are always used)"),
+	     "walk ELF PT_LOAD program headers instead of section "
+	     "headers (esptool compatibility; default is sections)"),
     OPT_BOOL(0, "ram-only-header", &opt_ram_only_header,
 	     "(accepted, no-op in this release)"),
     OPT_INT(0, "min-rev", &opt_min_rev_legacy, "n",
@@ -233,6 +234,7 @@ int cmd_image_create(int argc, const char **argv)
 	cfg.min_rev_full = (uint16_t)opt_min_rev_full;
 	cfg.max_rev_full = (uint16_t)opt_max_rev_full;
 	cfg.append_sha256 = !opt_no_append_digest;
+	cfg.use_segments = opt_use_segments;
 	cfg.elf_sha256_offset =
 	    opt_elf_sha256_offset
 		? parse_hex(opt_elf_sha256_offset, "--elf-sha256-offset")

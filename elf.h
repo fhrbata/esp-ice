@@ -94,6 +94,8 @@ struct elf_section {
 	const char *name; /**< Section name (points into buffer). */
 	uint32_t type;	  /**< Section type (SHT_*). */
 	uint64_t flags;	  /**< Section flags (SHF_*). */
+	uint64_t addr;	  /**< Virtual address at runtime (sh_addr). */
+	uint64_t offset;  /**< Byte offset of section data in the file. */
 	uint64_t size;	  /**< Section size in bytes. */
 };
 

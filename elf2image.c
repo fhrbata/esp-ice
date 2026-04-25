@@ -16,22 +16,26 @@
  * collection, IROM_ALIGN layout with RAM gap-fill, image emission,
  * optional ELF-SHA256 patching).
  *
- * The goal is a functional, bootable image -- not necessarily
- * byte-identical to @c esptool @c elf2image output, because esptool
- * uses ELF sections by default while this engine uses PT_LOAD
- * program headers (a.k.a. esptool's @c --use-segments mode).  Both
- * forms are accepted by the ROM bootloader and produce the same
- * end-to-end behaviour.
+ * Two collection modes are supported, matching esptool:
  *
- * Known simplifications vs full esptool parity:
- *   - PT_LOAD segments only (no per-ELF-section granularity).
- *   - MMU page size fixed at 64 KB (BIN_IROM_ALIGN).
- *   - No bootloader-image specials (ram_only_header, secure_pad,
- *     bootdesc reordering).
- *   - No ESP8266 (different image format).
- *   - ELF-SHA256 patching requires an explicit offset; the app-desc
- *     auto-detect path is not implemented (IDF passes
- *     --elf-sha256-offset 0xb0 explicitly anyway).
+ *   - @b sections (default) walks the ELF section headers and keeps
+ *     SHT_PROGBITS / SHT_INIT_ARRAY / SHT_FINI_ARRAY /
+ *     SHT_PREINIT_ARRAY entries with sh_addr != 0 and sh_size != 0.
+ *     SHT_NOBITS sections (.bss, leading .dram0.dummy padding) are
+ *     naturally excluded.  Adjacent same-class sections are merged
+ *     before layout.  Equivalent to esptool's default behaviour.
+ *
+ *   - @b segments walks PT_LOAD program headers (esptool's
+ *     @c --use-segments mode).  IDF linker scripts coalesce a
+ *     leading NOBITS @c .dram0.dummy with the real DRAM data into
+ *     one PT_LOAD whose @c p_filesz includes the dummy padding;
+ *     the section table is consulted to trim the leading/trailing
+ *     NOBITS ranges and emit only the PROGBITS sub-range.
+ *
+ * Layout, BIN_IROM_ALIGN flash placement, ESP32-specific 0x24-byte
+ * trailing pad, @c .flash.appdesc front-loading, checksum and
+ * digest emission all match esptool exactly so the resulting bin is
+ * byte-identical for IDF inputs.
  */
 #include <stdbool.h>
 #include <stddef.h>
@@ -42,6 +46,21 @@
 #include "elf2image.h"
 #include "ice.h"
 #include "vendor/sha256/sha256.h"
+
+/* ELF section type values from the ELF spec. */
+#define SHT_PROGBITS 1
+#define SHT_NOBITS 8
+#define SHT_INIT_ARRAY 14
+#define SHT_FINI_ARRAY 15
+#define SHT_PREINIT_ARRAY 16
+
+/* esptool keeps these section types as image content (NOBITS goes to
+ * a separate list it does not emit).  We match the same set. */
+static bool is_progbits_loadable(uint32_t sh_type)
+{
+	return sh_type == SHT_PROGBITS || sh_type == SHT_INIT_ARRAY ||
+	       sh_type == SHT_FINI_ARRAY || sh_type == SHT_PREINIT_ARRAY;
+}
 
 /* ------------------------------------------------------------------ */
 /* LE helpers and zero-fill                                           */
@@ -85,9 +104,12 @@ static bool is_flash_type(enum bin_seg_type t)
 /* ------------------------------------------------------------------ */
 
 /*
- * Backed either by the original ELF PT_LOAD data (via @c data) or by
- * a heap-allocated zero-pad buffer (via @c owned).  Set @c owned so
+ * Backed either by the original ELF data (via @c data) or by a
+ * heap-allocated zero-pad buffer (via @c owned).  Set @c owned so
  * layout() can free synthesised padding segments when we are done.
+ *
+ * @c name points into the ELF section header string table for
+ * section-mode collection; NULL for segment-mode and synthetic pads.
  */
 struct img_seg {
 	uint32_t vaddr;
@@ -96,57 +118,296 @@ struct img_seg {
 	uint32_t padded_size; /* size rounded up to 4 bytes */
 	bool is_flash;
 	uint8_t *owned; /* NULL for ELF-backed; non-NULL for pads */
+	const char *name;
 };
 
-static void collect_loads(const void *elf_data, size_t elf_len,
-			  enum bin_chip chip, struct img_seg **segs, size_t *n)
+/* ------------------------------------------------------------------ */
+/* Collection: sections (default) and segments (--use-segments)       */
+/* ------------------------------------------------------------------ */
+
+static void append_seg(struct img_seg **segs, size_t *n, size_t *cap,
+		       struct img_seg s)
 {
-	struct elf_segments ph;
+	ALLOC_GROW(*segs, *n + 1, *cap);
+	(*segs)[(*n)++] = s;
+}
+
+/*
+ * esptool _read_sections: include sh_type in {PROGBITS, *_ARRAY},
+ * skip sh_addr == 0 or sh_size == 0.  No SHF_ALLOC check -- the
+ * sh_addr == 0 filter is what excludes .debug_*, .symtab, .strtab,
+ * etc. on ESP since real load addresses never start at 0.
+ */
+static void collect_sections(const void *elf_data, size_t elf_len,
+			     enum bin_chip chip, struct img_seg **segs,
+			     size_t *n_io)
+{
+	struct elf_sections sec;
 	size_t cap = 0;
 
 	*segs = NULL;
-	*n = 0;
+	*n_io = 0;
+
+	elf_read_sections(elf_data, elf_len, &sec);
+
+	for (int i = 0; i < sec.nr; i++) {
+		const struct elf_section *s = &sec.s[i];
+
+		if (!is_progbits_loadable(s->type))
+			continue;
+		if (s->addr == 0 || s->size == 0)
+			continue;
+		if (s->offset + s->size > elf_len)
+			die("e2i: section '%s' extends past end of ELF",
+			    s->name);
+		if (s->addr > UINT32_MAX || s->size > UINT32_MAX)
+			die("e2i: section '%s' size/addr > 32 bits", s->name);
+
+		enum bin_seg_type t = bin_classify(chip, (uint32_t)s->addr);
+
+		if (t == BIN_SEG_UNKNOWN)
+			die("e2i: section '%s' at 0x%08x is not mapped "
+			    "by chip %s",
+			    s->name, (unsigned)s->addr, bin_chip_name(chip));
+
+		struct img_seg im = {
+		    .vaddr = (uint32_t)s->addr,
+		    .data = (const uint8_t *)elf_data + s->offset,
+		    .size = (uint32_t)s->size,
+		    .padded_size = ((uint32_t)s->size + 3u) & ~3u,
+		    .is_flash = is_flash_type(t),
+		    .owned = NULL,
+		    .name = s->name,
+		};
+
+		append_seg(segs, n_io, &cap, im);
+	}
+
+	elf_sections_release(&sec);
+}
+
+/*
+ * Within a PT_LOAD covering [seg_addr, seg_addr+seg_filesz), find the
+ * lowest and highest PROGBITS-class section so we can trim leading
+ * NOBITS padding (e.g. .dram0.dummy) that the linker materialises as
+ * zero bytes inside p_filesz.  If no PROGBITS sections fall inside,
+ * out_addr is set to 0 and out_size to 0 -- caller drops the segment.
+ */
+static void progbits_extent(const struct elf_sections *secs, uint64_t seg_addr,
+			    uint64_t seg_filesz, uint64_t *out_addr,
+			    uint64_t *out_offset, uint64_t *out_size)
+{
+	const struct elf_section *first = NULL, *last = NULL;
+	uint64_t seg_end = seg_addr + seg_filesz;
+
+	for (int i = 0; i < secs->nr; i++) {
+		const struct elf_section *s = &secs->s[i];
+
+		if (!is_progbits_loadable(s->type))
+			continue;
+		if (s->size == 0)
+			continue;
+		if (s->addr < seg_addr || s->addr + s->size > seg_end)
+			continue;
+
+		if (first == NULL || s->addr < first->addr)
+			first = s;
+		if (last == NULL || s->addr + s->size > last->addr + last->size)
+			last = s;
+	}
+
+	if (first == NULL) {
+		*out_addr = 0;
+		*out_offset = 0;
+		*out_size = 0;
+		return;
+	}
+
+	*out_addr = first->addr;
+	*out_offset = first->offset;
+	*out_size = (last->addr + last->size) - first->addr;
+}
+
+/*
+ * esptool _read_segments: walk PT_LOADs, keep p_paddr != 0 and
+ * p_filesz > 0.  Note esptool uses p_paddr (LMA), not p_vaddr;
+ * IDF builds set them equal, but other toolchains may not.
+ *
+ * Then, if the ELF carries a section table, intersect each PT_LOAD
+ * with PROGBITS sections to trim NOBITS sub-ranges.  Without a
+ * section table (synthetic test ELFs) the PT_LOAD is taken whole.
+ */
+static void collect_segments(const void *elf_data, size_t elf_len,
+			     enum bin_chip chip, struct img_seg **segs,
+			     size_t *n_io)
+{
+	struct elf_segments ph;
+	struct elf_sections sec;
+	size_t cap = 0;
+
+	*segs = NULL;
+	*n_io = 0;
 
 	elf_read_segments(elf_data, elf_len, &ph);
+	elf_read_sections(elf_data, elf_len, &sec);
 
 	for (int i = 0; i < ph.nr; i++) {
 		const struct elf_segment *p = &ph.s[i];
 
 		if (p->type != 1) /* PT_LOAD */
 			continue;
+		if (p->paddr == 0)
+			continue;
 		if (p->filesz == 0)
 			continue;
-
 		if ((uint64_t)p->offset + p->filesz > elf_len)
 			die("e2i: PT_LOAD segment extends past end of ELF");
 
-		if (p->vaddr > UINT32_MAX)
-			die("e2i: PT_LOAD vaddr > 32 bits (chip=%s)",
+		uint64_t addr = p->paddr;
+		uint64_t offset = p->offset;
+		uint64_t size = p->filesz;
+
+		if (sec.nr > 0) {
+			uint64_t a, off, sz;
+
+			progbits_extent(&sec, p->paddr, p->filesz, &a, &off,
+					&sz);
+			if (sz == 0)
+				continue;
+			addr = a;
+			offset = off;
+			size = sz;
+		}
+
+		if (addr > UINT32_MAX)
+			die("e2i: PT_LOAD addr > 32 bits (chip=%s)",
 			    bin_chip_name(chip));
 
-		enum bin_seg_type t = bin_classify(chip, (uint32_t)p->vaddr);
+		enum bin_seg_type t = bin_classify(chip, (uint32_t)addr);
 
 		if (t == BIN_SEG_UNKNOWN)
-			die("e2i: PT_LOAD at vaddr 0x%08x is not mapped "
+			die("e2i: PT_LOAD at addr 0x%08x is not mapped "
 			    "by chip %s",
-			    (unsigned)p->vaddr, bin_chip_name(chip));
+			    (unsigned)addr, bin_chip_name(chip));
 
-		ALLOC_GROW(*segs, *n + 1, cap);
-		struct img_seg *s = &(*segs)[(*n)++];
+		struct img_seg im = {
+		    .vaddr = (uint32_t)addr,
+		    .data = (const uint8_t *)elf_data + offset,
+		    .size = (uint32_t)size,
+		    .padded_size = ((uint32_t)size + 3u) & ~3u,
+		    .is_flash = is_flash_type(t),
+		    .owned = NULL,
+		    .name = NULL,
+		};
 
-		s->vaddr = (uint32_t)p->vaddr;
-		s->data = (const uint8_t *)elf_data + p->offset;
-		s->size = (uint32_t)p->filesz;
-		s->padded_size = (s->size + 3u) & ~3u;
-		s->is_flash = is_flash_type(t);
-		s->owned = NULL;
-
-		if (*n > BIN_MAX_SEGS)
-			die("e2i: too many PT_LOAD segments (%zu, max %u)", *n,
-			    BIN_MAX_SEGS);
+		append_seg(segs, n_io, &cap, im);
 	}
 
 	elf_segments_release(&ph);
+	elf_sections_release(&sec);
+}
+
+/* ------------------------------------------------------------------ */
+/* Sort, merge, reorder: match esptool ordering for byte equality     */
+/* ------------------------------------------------------------------ */
+
+/*
+ * Stable insertion sort by vaddr.  Lists are tiny (< 20 segments
+ * for IDF builds), so O(n^2) is fine and avoids pulling in qsort
+ * comparator boilerplate.
+ */
+static void sort_by_vaddr(struct img_seg *segs, size_t n)
+{
+	for (size_t i = 1; i < n; i++) {
+		struct img_seg key = segs[i];
+		size_t j = i;
+
+		while (j > 0 && segs[j - 1].vaddr > key.vaddr) {
+			segs[j] = segs[j - 1];
+			j--;
+		}
+		segs[j] = key;
+	}
+}
+
+/*
+ * esptool merge_adjacent_segments: collapse same-class entries that
+ * are contiguous in vaddr (and, here, also contiguous in the source
+ * file -- if not, we can't memcpy them as one block).  Names follow
+ * the first segment, mirroring esptool's "elem.data += next.data"
+ * which keeps elem's name field.
+ */
+static void merge_adjacent(struct img_seg *segs, size_t *n_io)
+{
+	size_t n = *n_io;
+
+	if (n < 2)
+		return;
+
+	size_t out = 0;
+
+	for (size_t i = 1; i < n; i++) {
+		struct img_seg *prev = &segs[out];
+		struct img_seg *cur = &segs[i];
+
+		bool can_merge = prev->is_flash == cur->is_flash &&
+				 prev->vaddr + prev->size == cur->vaddr &&
+				 prev->owned == NULL && cur->owned == NULL &&
+				 prev->data + prev->size == cur->data;
+
+		if (can_merge) {
+			prev->size += cur->size;
+			prev->padded_size = (prev->size + 3u) & ~3u;
+		} else {
+			out++;
+			segs[out] = *cur;
+		}
+	}
+
+	*n_io = out + 1;
+}
+
+/*
+ * esptool moves any segment whose name contains ".flash.appdesc"
+ * to the front of flash_segments after sorting.  For typical IDF
+ * builds the appdesc is already at the lowest flash address, so this
+ * is a no-op; we mirror the logic for parity with esptool on
+ * unusual link configurations.
+ */
+static bool is_appdesc(const struct img_seg *s)
+{
+	return s->name && strstr(s->name, ".flash.appdesc") != NULL;
+}
+
+static void appdesc_to_front(struct img_seg *segs, size_t n)
+{
+	size_t first_flash = SIZE_MAX;
+
+	for (size_t i = 0; i < n; i++) {
+		if (segs[i].is_flash) {
+			first_flash = i;
+			break;
+		}
+	}
+	if (first_flash == SIZE_MAX)
+		return;
+
+	size_t hit = SIZE_MAX;
+
+	for (size_t i = first_flash; i < n; i++) {
+		if (segs[i].is_flash && is_appdesc(&segs[i])) {
+			hit = i;
+			break;
+		}
+	}
+	if (hit == SIZE_MAX || hit == first_flash)
+		return;
+
+	struct img_seg tmp = segs[hit];
+
+	for (size_t i = hit; i > first_flash; i--)
+		segs[i] = segs[i - 1];
+	segs[first_flash] = tmp;
 }
 
 /* ------------------------------------------------------------------ */
@@ -285,29 +546,54 @@ static void layout(struct img_seg **segs_io, size_t *n_io, uint32_t header_size)
 /* Write pass + checksum + digest                                     */
 /* ------------------------------------------------------------------ */
 
+/*
+ * ESP32-only: the IDF 2nd-stage bootloader fails to map the final MMU
+ * page if a flash segment ends within the first 0x24 bytes of an
+ * IROM_ALIGN page.  esptool save_flash_segment pads the data out to
+ * byte 0x24 of the page in that case; we replicate the same fix-up
+ * before writing the segment header so the size field is accurate.
+ */
+static uint32_t esp32_flash_pad(enum bin_chip chip, bool is_flash,
+				uint32_t pos_after_header_and_data)
+{
+	if (chip != BIN_CHIP_ESP32 || !is_flash)
+		return 0;
+
+	uint32_t rem = pos_after_header_and_data % BIN_IROM_ALIGN;
+
+	if (rem >= 0x24)
+		return 0;
+	return 0x24 - rem;
+}
+
 static void write_segs(struct sbuf *out, struct img_seg *segs, size_t n,
-		       uint32_t *checksum_io, const uint8_t *elf_hash,
-		       uint32_t elf_sha256_offset)
+		       enum bin_chip chip, uint32_t *checksum_io,
+		       const uint8_t *elf_hash, uint32_t elf_sha256_offset)
 {
 	uint32_t cksum = *checksum_io;
 
 	for (size_t i = 0; i < n; i++) {
 		struct img_seg *s = &segs[i];
 		uint32_t start_off = (uint32_t)out->len;
+		uint32_t pos_end = start_off + BIN_SEG_HDR_LEN + s->padded_size;
+		uint32_t extra = esp32_flash_pad(chip, s->is_flash, pos_end);
+		uint32_t total_size = s->padded_size + extra;
 
 		put_le32(out, s->vaddr);
-		put_le32(out, s->padded_size);
+		put_le32(out, total_size);
 
 		if (s->size > 0)
 			sbuf_add(out, s->data, s->size);
 		if (s->padded_size > s->size)
 			put_zeros(out, s->padded_size - s->size);
+		if (extra > 0)
+			put_zeros(out, extra);
 
 		/* Patch app_elf_sha256 in-place if the 32-byte field
 		 * lives inside this segment's data. */
 		if (elf_sha256_offset != 0 && elf_hash != NULL) {
 			uint32_t data_start = start_off + BIN_SEG_HDR_LEN;
-			uint32_t data_end = data_start + s->padded_size;
+			uint32_t data_end = data_start + total_size;
 
 			if (elf_sha256_offset + BIN_DIGEST_LEN <= data_end &&
 			    elf_sha256_offset >= data_start) {
@@ -317,7 +603,7 @@ static void write_segs(struct sbuf *out, struct img_seg *segs, size_t n,
 		}
 
 		/* XOR over this segment's data (post-patch). */
-		for (uint32_t j = 0; j < s->padded_size; j++)
+		for (uint32_t j = 0; j < total_size; j++)
 			cksum ^=
 			    (uint8_t)out->buf[start_off + BIN_SEG_HDR_LEN + j];
 	}
@@ -352,7 +638,7 @@ void e2i_build(const void *elf, size_t elf_len, enum bin_chip chip,
 	uint8_t fs_byte = bin_flash_size_byte(cfg->flash_size);
 	uint8_t ff_byte = bin_flash_freq_byte(chip, cfg->flash_freq);
 
-	/* Read entry point from ELF Ehdr and collect PT_LOAD segments. */
+	/* Read entry point from ELF Ehdr. */
 	struct elf_segments ph;
 
 	elf_read_segments(elf, elf_len, &ph);
@@ -360,12 +646,33 @@ void e2i_build(const void *elf, size_t elf_len, enum bin_chip chip,
 
 	elf_segments_release(&ph);
 
-	struct img_seg *segs;
-	size_t n_segs;
+	struct img_seg *segs = NULL;
+	size_t n_segs = 0;
 
-	collect_loads(elf, elf_len, chip, &segs, &n_segs);
+	if (cfg->use_segments) {
+		collect_segments(elf, elf_len, chip, &segs, &n_segs);
+	} else {
+		collect_sections(elf, elf_len, chip, &segs, &n_segs);
+		/* Fall back to PT_LOAD walk if the ELF has no usable
+		 * sections (e.g. synthetic tests, or a stripped ELF). */
+		if (n_segs == 0) {
+			free(segs);
+			collect_segments(elf, elf_len, chip, &segs, &n_segs);
+		}
+	}
+
 	if (n_segs == 0)
-		die("e2i: ELF has no PT_LOAD segments with data");
+		die("e2i: ELF has no loadable PROGBITS sections or "
+		    "PT_LOAD segments");
+
+	sort_by_vaddr(segs, n_segs);
+	merge_adjacent(segs, &n_segs);
+	appdesc_to_front(segs, n_segs);
+
+	if (n_segs > BIN_MAX_SEGS)
+		die("e2i: %zu image segments before layout (max %u); "
+		    "linker script likely produces too many regions",
+		    n_segs, BIN_MAX_SEGS);
 
 	uint8_t elf_hash[BIN_DIGEST_LEN];
 	bool want_elf_patch = cfg->elf_sha256_offset != 0;
@@ -401,8 +708,8 @@ void e2i_build(const void *elf, size_t elf_len, enum bin_chip chip,
 	/* --- Segments + running checksum --- */
 	uint32_t cksum = BIN_CHECKSUM_MAGIC;
 
-	write_segs(out, segs, n_segs, &cksum, want_elf_patch ? elf_hash : NULL,
-		   cfg->elf_sha256_offset);
+	write_segs(out, segs, n_segs, chip, &cksum,
+		   want_elf_patch ? elf_hash : NULL, cfg->elf_sha256_offset);
 
 	/*
 	 * Checksum trailer: pad zeros until the next byte position is
