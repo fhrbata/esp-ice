@@ -191,6 +191,7 @@ LIB_SRCS := \
 	elf2image.c \
 	progress.c \
 	sbuf.c \
+	semver.c \
 	slip.c \
 	smap.c \
 	svec.c \
