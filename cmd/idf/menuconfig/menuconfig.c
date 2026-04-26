@@ -399,7 +399,33 @@ static void resync_size(struct view *v)
 	tui_list_resize(&v->list, cols, rows);
 }
 
-static void redraw(struct view *v) { tui_list_render(&v->list); }
+static void redraw(struct view *v)
+{
+	struct sbuf frame = SBUF_INIT;
+	tui_list_render(&frame, &v->list);
+	tui_flush(&frame);
+}
+
+/*
+ * Single-widget render-and-flush helpers.  The widget API takes a
+ * caller-owned @c sbuf so consumers that want to compose multiple
+ * widgets in one frame (the monitor) can do so atomically; menuconfig
+ * only ever shows one widget at a time, so a thin wrapper that
+ * builds + flushes in three lines keeps the call sites readable.
+ */
+static void render_info(const struct tui_info *I)
+{
+	struct sbuf frame = SBUF_INIT;
+	tui_info_render(&frame, I);
+	tui_flush(&frame);
+}
+
+static void render_prompt(const struct tui_prompt *P)
+{
+	struct sbuf frame = SBUF_INIT;
+	tui_prompt_render(&frame, P);
+	tui_flush(&frame);
+}
 
 /*
  * Clear user_set on every member of the choice @p s belongs to,
@@ -619,7 +645,7 @@ static void run_info_modal(struct view *v, const char *title, const char *body)
 	struct tui_info info;
 	tui_info_init(&info, title, body);
 	tui_info_resize(&info, cols, rows);
-	tui_info_render(&info);
+	render_info(&info);
 
 	for (;;) {
 		struct term_event ev;
@@ -631,12 +657,12 @@ static void run_info_modal(struct view *v, const char *title, const char *body)
 		if (ev.key == TK_RESIZE) {
 			tui_info_resize(&info, ev.cols, ev.rows);
 			redraw(v);
-			tui_info_render(&info);
+			render_info(&info);
 			continue;
 		}
 		if (tui_info_on_event(&info, &ev))
 			break;
-		tui_info_render(&info);
+		render_info(&info);
 	}
 
 	tui_info_release(&info);
@@ -730,7 +756,7 @@ static void edit_value(struct view *v, struct ksym *s)
 	struct tui_prompt p;
 	tui_prompt_init(&p, title, s->cur_val ? s->cur_val : "");
 	tui_prompt_resize(&p, cols, rows);
-	tui_prompt_render(&p);
+	render_prompt(&p);
 
 	for (;;) {
 		struct term_event ev;
@@ -743,7 +769,7 @@ static void edit_value(struct view *v, struct ksym *s)
 		if (ev.key == TK_RESIZE) {
 			tui_prompt_resize(&p, ev.cols, ev.rows);
 			redraw(v);
-			tui_prompt_render(&p);
+			render_prompt(&p);
 			continue;
 		}
 
@@ -760,7 +786,7 @@ static void edit_value(struct view *v, struct ksym *s)
 				 * the user can fix their input.  No visible
 				 * error indicator in v1; the fact that Enter
 				 * didn't close is the signal. */
-				tui_prompt_render(&p);
+				render_prompt(&p);
 				continue;
 			}
 			kc_sym_set_user(v->kc, s->name, p.buf);
@@ -770,7 +796,7 @@ static void edit_value(struct view *v, struct ksym *s)
 			redraw(v);
 			return;
 		}
-		tui_prompt_render(&p);
+		render_prompt(&p);
 	}
 }
 
@@ -874,7 +900,7 @@ static int yn_prompt(struct view *v, const char *title)
 	term_size(&cols, &rows);
 	tui_prompt_init(&p, title, "y");
 	tui_prompt_resize(&p, cols, rows);
-	tui_prompt_render(&p);
+	render_prompt(&p);
 	for (;;) {
 		struct term_event ev;
 		/*
@@ -892,7 +918,7 @@ static int yn_prompt(struct view *v, const char *title)
 		if (ev.key == TK_RESIZE) {
 			tui_prompt_resize(&p, ev.cols, ev.rows);
 			redraw(v); /* repaint list behind the modal */
-			tui_prompt_render(&p);
+			render_prompt(&p);
 			continue;
 		}
 		if (ev.key == TK_ENTER) {
@@ -905,7 +931,7 @@ static int yn_prompt(struct view *v, const char *title)
 		if (ev.key == TK_ESC)
 			return -1;
 		tui_prompt_on_event(&p, &ev);
-		tui_prompt_render(&p);
+		render_prompt(&p);
 	}
 }
 
