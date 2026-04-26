@@ -9,15 +9,41 @@
  * @brief Scrollable list, modal prompt, info modal, and scrolling log
  *        pane widgets built on term_*.
  *
- * Every widget builds its frame into an @c sbuf and writes it to
- * stdout in one go, so a redraw is a single syscall regardless of
- * how many cells change.
+ * Render functions append into a caller-owned @c sbuf so multiple
+ * widgets (log + help modal, list + prompt) can be composed into one
+ * frame; @ref tui_flush wraps that frame in DEC mode 2026
+ * (synchronized output) so the terminal applies it atomically and
+ * background log churn doesn't cause overlays to flicker.
  */
 #include "tui.h"
 #include "ice.h"
 
 #define PCRE2_CODE_UNIT_WIDTH 8
 #include <pcre2.h>
+
+void tui_flush(struct sbuf *out)
+{
+	/*
+	 * Wrap the frame in DEC private mode 2026 (synchronized output):
+	 * the terminal buffers everything between BSU and ESU, then
+	 * applies it as one atomic update.  A plain single @c fputs is
+	 * not enough -- a multi-KB frame is split across multiple
+	 * @c write(2) calls by stdio and across multiple terminal
+	 * refresh cycles by the renderer, so the user can briefly see
+	 * the log paint where the help modal is about to land before
+	 * the modal repaints on top.  Mode 2026 closes that window.
+	 *
+	 * Modern terminals (kitty, alacritty, foot, wezterm, iTerm2,
+	 * mintty, contour, vte, konsole) honour the sequence; older
+	 * terminals ignore the unknown private mode -- worst case the
+	 * residual flicker comes back, never anything visibly broken.
+	 */
+	fputs("\x1b[?2026h", stdout);
+	fputs(out->buf, stdout);
+	fputs("\x1b[?2026l", stdout);
+	fflush(stdout);
+	sbuf_release(out);
+}
 
 /*
  * Active search state, lazily allocated when a pattern is set and
@@ -311,10 +337,8 @@ static void render_item_row(struct sbuf *sb, const struct tui_list *L, int idx)
 	sbuf_addstr(sb, "\x1b[0m");
 }
 
-void tui_list_render(const struct tui_list *L)
+void tui_list_render(struct sbuf *out, const struct tui_list *L)
 {
-	struct sbuf sb = SBUF_INIT;
-
 	/*
 	 * Full repaint.  Every row rewrites its full width, so we don't
 	 * need a screen clear -- which was the source of the visible
@@ -323,33 +347,29 @@ void tui_list_render(const struct tui_list *L)
 	 * the screen); a modal prompt layered on top re-enables it at
 	 * its input position.
 	 */
-	sbuf_addstr(&sb, "\x1b[?25l");
+	sbuf_addstr(out, "\x1b[?25l");
 
 	/* Title bar: bold white on blue (classic menuconfig palette).
 	 * Includes a one-space left margin so the text doesn't crowd
 	 * the terminal edge. */
-	sbuf_addstr(&sb, "\x1b[1;1H\x1b[1;37;44m");
-	sbuf_addch(&sb, ' ');
-	sbuf_pad(&sb, L->title, L->width - 1);
-	sbuf_addstr(&sb, "\x1b[0m");
+	sbuf_addstr(out, "\x1b[1;1H\x1b[1;37;44m");
+	sbuf_addch(out, ' ');
+	sbuf_pad(out, L->title, L->width - 1);
+	sbuf_addstr(out, "\x1b[0m");
 
 	/* Body rows. */
 	int rows = body_rows(L);
 	for (int i = 0; i < rows; i++)
-		render_item_row(&sb, L, i);
+		render_item_row(out, L, i);
 
 	/* Footer: white on blue (no bold) -- matches the title palette
 	 * but reads as a secondary band. */
 	if (L->height >= 2) {
-		sbuf_addf(&sb, "\x1b[%d;1H\x1b[37;44m", L->height);
-		sbuf_addch(&sb, ' ');
-		sbuf_pad(&sb, L->footer, L->width - 1);
-		sbuf_addstr(&sb, "\x1b[0m");
+		sbuf_addf(out, "\x1b[%d;1H\x1b[37;44m", L->height);
+		sbuf_addch(out, ' ');
+		sbuf_pad(out, L->footer, L->width - 1);
+		sbuf_addstr(out, "\x1b[0m");
 	}
-
-	fputs(sb.buf, stdout);
-	fflush(stdout);
-	sbuf_release(&sb);
 }
 
 /* ================================================================== */
@@ -466,9 +486,8 @@ static int prompt_box_cols(const struct tui_prompt *P)
 	return cols > 4 ? cols : 4;
 }
 
-void tui_prompt_render(const struct tui_prompt *P)
+void tui_prompt_render(struct sbuf *out, const struct tui_prompt *P)
 {
-	struct sbuf sb = SBUF_INIT;
 	int cols = prompt_box_cols(P);
 	int left = (P->width - cols) / 2 + 1; /* 1-based column */
 	int top = (P->height - PROMPT_BOX_ROWS) / 2 + 1;
@@ -481,7 +500,7 @@ void tui_prompt_render(const struct tui_prompt *P)
 	 * around the screen" flicker users see when the modal pops up.
 	 * Re-enabled at the final cursor placement below.
 	 */
-	sbuf_addstr(&sb, "\x1b[?25l");
+	sbuf_addstr(out, "\x1b[?25l");
 
 	/*
 	 * Modal palette.  Cyan borders frame the dialog so it reads as
@@ -498,53 +517,53 @@ void tui_prompt_render(const struct tui_prompt *P)
 #define MODAL_RESET "\x1b[0m"
 
 	/* Top border. */
-	sbuf_addf(&sb, "\x1b[%d;%dH%s", top, left, MODAL_BORDER);
-	sbuf_addstr(&sb, "\xe2\x94\x8c"); /* U+250C ┌ */
+	sbuf_addf(out, "\x1b[%d;%dH%s", top, left, MODAL_BORDER);
+	sbuf_addstr(out, "\xe2\x94\x8c"); /* U+250C ┌ */
 	for (int i = 0; i < inner; i++)
-		sbuf_addstr(&sb, HL);
-	sbuf_addstr(&sb, "\xe2\x94\x90"); /* U+2510 ┐ */
+		sbuf_addstr(out, HL);
+	sbuf_addstr(out, "\xe2\x94\x90"); /* U+2510 ┐ */
 
 	/* Title row. */
-	sbuf_addf(&sb, "\x1b[%d;%dH%s", top + 1, left, MODAL_BORDER);
-	sbuf_addstr(&sb, VL);
-	sbuf_addstr(&sb, MODAL_TITLE);
-	sbuf_addch(&sb, ' ');
-	sbuf_pad(&sb, P->title, inner - 1);
-	sbuf_addstr(&sb, MODAL_BORDER);
-	sbuf_addstr(&sb, VL);
+	sbuf_addf(out, "\x1b[%d;%dH%s", top + 1, left, MODAL_BORDER);
+	sbuf_addstr(out, VL);
+	sbuf_addstr(out, MODAL_TITLE);
+	sbuf_addch(out, ' ');
+	sbuf_pad(out, P->title, inner - 1);
+	sbuf_addstr(out, MODAL_BORDER);
+	sbuf_addstr(out, VL);
 
 	/* Separator. */
-	sbuf_addf(&sb, "\x1b[%d;%dH%s", top + 2, left, MODAL_BORDER);
-	sbuf_addstr(&sb, "\xe2\x94\x9c"); /* U+251C ├ */
+	sbuf_addf(out, "\x1b[%d;%dH%s", top + 2, left, MODAL_BORDER);
+	sbuf_addstr(out, "\xe2\x94\x9c"); /* U+251C ├ */
 	for (int i = 0; i < inner; i++)
-		sbuf_addstr(&sb, HL);
-	sbuf_addstr(&sb, "\xe2\x94\xa4"); /* U+2524 ┤ */
+		sbuf_addstr(out, HL);
+	sbuf_addstr(out, "\xe2\x94\xa4"); /* U+2524 ┤ */
 
 	/* Input row.  Scroll the visible window so the cursor stays
 	 * inside the inner area even for long buffers. */
-	sbuf_addf(&sb, "\x1b[%d;%dH%s", top + 3, left, MODAL_BORDER);
-	sbuf_addstr(&sb, VL);
-	sbuf_addstr(&sb, MODAL_INPUT);
-	sbuf_addch(&sb, ' ');
+	sbuf_addf(out, "\x1b[%d;%dH%s", top + 3, left, MODAL_BORDER);
+	sbuf_addstr(out, VL);
+	sbuf_addstr(out, MODAL_INPUT);
+	sbuf_addch(out, ' ');
 	int view_w = inner - 1;
 	int view_start = P->cursor > view_w - 1 ? P->cursor - (view_w - 1) : 0;
 	int view_len = P->len - view_start;
 	if (view_len > view_w)
 		view_len = view_w;
 	if (view_len > 0)
-		sbuf_add(&sb, P->buf + view_start, (size_t)view_len);
+		sbuf_add(out, P->buf + view_start, (size_t)view_len);
 	for (int i = view_len; i < view_w; i++)
-		sbuf_addch(&sb, ' ');
-	sbuf_addstr(&sb, MODAL_BORDER);
-	sbuf_addstr(&sb, VL);
+		sbuf_addch(out, ' ');
+	sbuf_addstr(out, MODAL_BORDER);
+	sbuf_addstr(out, VL);
 
 	/* Bottom border. */
-	sbuf_addf(&sb, "\x1b[%d;%dH%s", top + 4, left, MODAL_BORDER);
-	sbuf_addstr(&sb, "\xe2\x94\x94"); /* U+2514 └ */
+	sbuf_addf(out, "\x1b[%d;%dH%s", top + 4, left, MODAL_BORDER);
+	sbuf_addstr(out, "\xe2\x94\x94"); /* U+2514 └ */
 	for (int i = 0; i < inner; i++)
-		sbuf_addstr(&sb, HL);
-	sbuf_addstr(&sb, "\xe2\x94\x98"); /* U+2518 ┘ */
-	sbuf_addstr(&sb, MODAL_RESET);
+		sbuf_addstr(out, HL);
+	sbuf_addstr(out, "\xe2\x94\x98"); /* U+2518 ┘ */
+	sbuf_addstr(out, MODAL_RESET);
 
 	/*
 	 * Dim hint line just below the box advertising the key bindings.
@@ -554,19 +573,19 @@ void tui_prompt_render(const struct tui_prompt *P)
 	 */
 	if (top + PROMPT_BOX_ROWS <= P->height) {
 		const char *hint = "Enter accept  \xe2\x80\xa2  Esc cancel";
-		sbuf_addf(&sb, "\x1b[%d;%dH%s", top + PROMPT_BOX_ROWS, left,
+		sbuf_addf(out, "\x1b[%d;%dH%s", top + PROMPT_BOX_ROWS, left,
 			  MODAL_HINT);
 		/* Left-pad one space so the hint lines up with the box
 		 * content rather than the border. */
-		sbuf_addch(&sb, ' ');
-		sbuf_pad(&sb, hint, cols - 1);
-		sbuf_addstr(&sb, MODAL_RESET);
+		sbuf_addch(out, ' ');
+		sbuf_pad(out, hint, cols - 1);
+		sbuf_addstr(out, MODAL_RESET);
 	}
 
 	/* Put the cursor at the edit position.  Column: left border + 1
 	 * gap + (cursor - view_start).  The +1 for 1-based columns is
 	 * already in @c left. */
-	sbuf_addf(&sb, "\x1b[%d;%dH", top + 3,
+	sbuf_addf(out, "\x1b[%d;%dH", top + 3,
 		  left + 2 + (P->cursor - view_start));
 	/*
 	 * Re-show the cursor at its final edit position.  The alt-screen
@@ -574,17 +593,13 @@ void tui_prompt_render(const struct tui_prompt *P)
 	 * every frame, so this is the one place a visible cursor is
 	 * wanted while the TUI is active.
 	 */
-	sbuf_addstr(&sb, "\x1b[?25h");
+	sbuf_addstr(out, "\x1b[?25h");
 
 #undef MODAL_BORDER
 #undef MODAL_TITLE
 #undef MODAL_INPUT
 #undef MODAL_HINT
 #undef MODAL_RESET
-
-	fputs(sb.buf, stdout);
-	fflush(stdout);
-	sbuf_release(&sb);
 }
 
 /* ================================================================== */
@@ -708,10 +723,8 @@ int tui_info_on_event(struct tui_info *I, const struct term_event *ev)
 	}
 }
 
-void tui_info_render(const struct tui_info *I)
+void tui_info_render(struct sbuf *out, const struct tui_info *I)
 {
-	struct sbuf sb = SBUF_INIT;
-
 	/*
 	 * Modal palette re-used from tui_prompt so help boxes look like
 	 * peers of the input prompt.
@@ -738,60 +751,60 @@ void tui_info_render(const struct tui_info *I)
 	int inner = cols - 2;
 	int body_rows = box_rows - 4;
 
-	sbuf_addstr(&sb, "\x1b[?25l");
+	sbuf_addstr(out, "\x1b[?25l");
 
 	/* Top border. */
-	sbuf_addf(&sb, "\x1b[%d;%dH%s", top, left, INFO_BORDER);
-	sbuf_addstr(&sb, "\xe2\x94\x8c");
+	sbuf_addf(out, "\x1b[%d;%dH%s", top, left, INFO_BORDER);
+	sbuf_addstr(out, "\xe2\x94\x8c");
 	for (int i = 0; i < inner; i++)
-		sbuf_addstr(&sb, HL);
-	sbuf_addstr(&sb, "\xe2\x94\x90");
+		sbuf_addstr(out, HL);
+	sbuf_addstr(out, "\xe2\x94\x90");
 
 	/* Title row. */
-	sbuf_addf(&sb, "\x1b[%d;%dH%s", top + 1, left, INFO_BORDER);
-	sbuf_addstr(&sb, VL);
-	sbuf_addstr(&sb, INFO_TITLE);
-	sbuf_addch(&sb, ' ');
-	sbuf_pad(&sb, I->title, inner - 1);
-	sbuf_addstr(&sb, INFO_BORDER);
-	sbuf_addstr(&sb, VL);
+	sbuf_addf(out, "\x1b[%d;%dH%s", top + 1, left, INFO_BORDER);
+	sbuf_addstr(out, VL);
+	sbuf_addstr(out, INFO_TITLE);
+	sbuf_addch(out, ' ');
+	sbuf_pad(out, I->title, inner - 1);
+	sbuf_addstr(out, INFO_BORDER);
+	sbuf_addstr(out, VL);
 
 	/* Separator. */
-	sbuf_addf(&sb, "\x1b[%d;%dH%s", top + 2, left, INFO_BORDER);
-	sbuf_addstr(&sb, "\xe2\x94\x9c");
+	sbuf_addf(out, "\x1b[%d;%dH%s", top + 2, left, INFO_BORDER);
+	sbuf_addstr(out, "\xe2\x94\x9c");
 	for (int i = 0; i < inner; i++)
-		sbuf_addstr(&sb, HL);
-	sbuf_addstr(&sb, "\xe2\x94\xa4");
+		sbuf_addstr(out, HL);
+	sbuf_addstr(out, "\xe2\x94\xa4");
 
 	/* Body rows. */
 	for (int r = 0; r < body_rows; r++) {
 		int line_idx = I->top_line + r;
-		sbuf_addf(&sb, "\x1b[%d;%dH%s", top + 3 + r, left, INFO_BORDER);
-		sbuf_addstr(&sb, VL);
-		sbuf_addstr(&sb, INFO_BODY);
-		sbuf_addch(&sb, ' ');
+		sbuf_addf(out, "\x1b[%d;%dH%s", top + 3 + r, left, INFO_BORDER);
+		sbuf_addstr(out, VL);
+		sbuf_addstr(out, INFO_BODY);
+		sbuf_addch(out, ' ');
 		if (line_idx < I->n_lines) {
 			int len = I->line_lens[line_idx];
 			if (len > inner - 1)
 				len = inner - 1;
-			sbuf_add(&sb, I->lines[line_idx], (size_t)len);
+			sbuf_add(out, I->lines[line_idx], (size_t)len);
 			for (int i = len; i < inner - 1; i++)
-				sbuf_addch(&sb, ' ');
+				sbuf_addch(out, ' ');
 		} else {
 			for (int i = 0; i < inner - 1; i++)
-				sbuf_addch(&sb, ' ');
+				sbuf_addch(out, ' ');
 		}
-		sbuf_addstr(&sb, INFO_BORDER);
-		sbuf_addstr(&sb, VL);
+		sbuf_addstr(out, INFO_BORDER);
+		sbuf_addstr(out, VL);
 	}
 
 	/* Bottom border. */
-	sbuf_addf(&sb, "\x1b[%d;%dH%s", top + box_rows - 1, left, INFO_BORDER);
-	sbuf_addstr(&sb, "\xe2\x94\x94");
+	sbuf_addf(out, "\x1b[%d;%dH%s", top + box_rows - 1, left, INFO_BORDER);
+	sbuf_addstr(out, "\xe2\x94\x94");
 	for (int i = 0; i < inner; i++)
-		sbuf_addstr(&sb, HL);
-	sbuf_addstr(&sb, "\xe2\x94\x98");
-	sbuf_addstr(&sb, INFO_RESET);
+		sbuf_addstr(out, HL);
+	sbuf_addstr(out, "\xe2\x94\x98");
+	sbuf_addstr(out, INFO_RESET);
 
 	/* Hint line below the box.  Scroll indicator when there's more
 	 * content than fits. */
@@ -806,17 +819,17 @@ void tui_info_render(const struct tui_info *I)
 				more = "  \xe2\x96\xb2\xe2\x96\xbc more "
 				       "above/below";
 		}
-		sbuf_addf(&sb, "\x1b[%d;%dH%s", top + box_rows, left,
+		sbuf_addf(out, "\x1b[%d;%dH%s", top + box_rows, left,
 			  INFO_HINT);
-		sbuf_addch(&sb, ' ');
+		sbuf_addch(out, ' ');
 		struct sbuf hint = SBUF_INIT;
 		sbuf_addstr(&hint,
 			    "\xe2\x86\x91\xe2\x86\x93 scroll  \xe2\x80\xa2"
 			    "  Esc / q / Enter close");
 		sbuf_addstr(&hint, more);
-		sbuf_pad(&sb, hint.buf, cols - 1);
+		sbuf_pad(out, hint.buf, cols - 1);
 		sbuf_release(&hint);
-		sbuf_addstr(&sb, INFO_RESET);
+		sbuf_addstr(out, INFO_RESET);
 	}
 
 #undef INFO_BORDER
@@ -824,10 +837,6 @@ void tui_info_render(const struct tui_info *I)
 #undef INFO_BODY
 #undef INFO_HINT
 #undef INFO_RESET
-
-	fputs(sb.buf, stdout);
-	fflush(stdout);
-	sbuf_release(&sb);
 }
 
 /* ================================================================== */
@@ -1562,21 +1571,19 @@ static void render_scrollbar(struct sbuf *sb, const struct tui_log *L,
 	}
 }
 
-void tui_log_render(const struct tui_log *L)
+void tui_log_render(struct sbuf *out, const struct tui_log *L)
 {
-	struct sbuf sb = SBUF_INIT;
-
-	sbuf_addstr(&sb, "\x1b[?25l");
+	sbuf_addstr(out, "\x1b[?25l");
 
 	int body_top = 1;
 	int body_bottom = L->height;
 
 	/* Status bar at row 1 (matches tui_list title palette). */
 	if (L->status && L->height >= 1) {
-		sbuf_addstr(&sb, "\x1b[1;1H\x1b[1;37;44m");
-		sbuf_addch(&sb, ' ');
-		sbuf_pad(&sb, L->status, L->width - 1);
-		sbuf_addstr(&sb, "\x1b[0m");
+		sbuf_addstr(out, "\x1b[1;1H\x1b[1;37;44m");
+		sbuf_addch(out, ' ');
+		sbuf_pad(out, L->status, L->width - 1);
+		sbuf_addstr(out, "\x1b[0m");
 		body_top = 2;
 	}
 
@@ -1607,7 +1614,7 @@ void tui_log_render(const struct tui_log *L)
 		/* Blank rows above the first rendered line (history shorter
 		 * than the body, or scroll has cleared past the top). */
 		for (int r = 0; r < leading_blanks; r++)
-			sbuf_addf(&sb, "\x1b[%d;1H\x1b[0m\x1b[K", body_top + r);
+			sbuf_addf(out, "\x1b[%d;1H\x1b[0m\x1b[K", body_top + r);
 
 		int term_row = body_top + leading_blanks;
 		for (int i = first_line;
@@ -1691,29 +1698,25 @@ void tui_log_render(const struct tui_log *L)
 				qsort(ov, n_ov, sizeof(ov[0]), overlay_cmp);
 
 			int drew =
-			    render_log_line(&sb, s, slen, body_w, term_row,
+			    render_log_line(out, s, slen, body_w, term_row,
 					    skip, avail, ov, n_ov);
 			term_row += drew;
 		}
 	} else if (body_rows > 0) {
 		/* Empty buffer: still wipe stale body content. */
 		for (int r = 0; r < body_rows; r++)
-			sbuf_addf(&sb, "\x1b[%d;1H\x1b[0m\x1b[K", body_top + r);
+			sbuf_addf(out, "\x1b[%d;1H\x1b[0m\x1b[K", body_top + r);
 	}
 
 	if (body_rows > 0 && L->width >= 1)
-		render_scrollbar(&sb, L, body_top, body_rows, bottom_idx);
+		render_scrollbar(out, L, body_top, body_rows, bottom_idx);
 
 	if (L->footer && body_bottom < L->height) {
-		sbuf_addf(&sb, "\x1b[%d;1H\x1b[37;44m", L->height);
-		sbuf_addch(&sb, ' ');
-		sbuf_pad(&sb, L->footer, L->width - 1);
-		sbuf_addstr(&sb, "\x1b[0m");
+		sbuf_addf(out, "\x1b[%d;1H\x1b[37;44m", L->height);
+		sbuf_addch(out, ' ');
+		sbuf_pad(out, L->footer, L->width - 1);
+		sbuf_addstr(out, "\x1b[0m");
 	}
-
-	fputs(sb.buf, stdout);
-	fflush(stdout);
-	sbuf_release(&sb);
 }
 
 /* ================================================================== */

@@ -394,6 +394,14 @@ static int dispatch_normal_prefix(unsigned char k, struct serial *s,
 		tui_info_init(help_info, "ice monitor - normal mode keys",
 			      NORMAL_HELP_TEXT);
 		tui_info_resize(help_info, cols, rows);
+		/* Freeze the log so the visible content stops changing
+		 * while help is up.  Each redraw produces an identical
+		 * frame (log + modal), so the terminal has nothing to
+		 * flicker -- without this, fresh serial bytes would
+		 * scroll the log behind the modal and the user sees a
+		 * brief blink as the log paints before the modal
+		 * repaints over it. */
+		tui_log_freeze(L);
 		*mode = MON_NORMAL_HELP;
 		break;
 	case 'i':
@@ -594,14 +602,17 @@ int cmd_target_monitor(int argc, const char **argv)
 	memset(&help_info, 0, sizeof(help_info));
 
 	update_status(&status, &L, opt_port, baud, mode);
-	tui_log_render(&L);
+	{
+		struct sbuf frame = SBUF_INIT;
+		tui_log_render(&frame, &L);
+		tui_flush(&frame);
+	}
 
 	serial_flush_input(s);
 
 	for (;;) {
 		ssize_t n;
 		int dirty = 0;
-		int mode_at_loop_start = mode;
 
 		if (term_resize_pending()) {
 			term_size(&cols, &rows);
@@ -615,7 +626,12 @@ int cmd_target_monitor(int argc, const char **argv)
 
 		/* Drain serial regardless of mode so the device-side
 		 * buffer doesn't overflow while the user is reading help,
-		 * typing into the search prompt, or paused in inspect. */
+		 * typing into the search prompt, or paused in inspect.
+		 * Modal modes (help, inspect, search) all freeze the log
+		 * via @ref tui_log_freeze before transitioning, so these
+		 * bytes accumulate in the ring without changing the
+		 * visible frame -- the redraw below paints an identical
+		 * picture and the terminal has nothing to flicker. */
 		n = serial_read(s, buf, sizeof(buf), 30);
 		if (n < 0)
 			break;
@@ -713,6 +729,12 @@ int cmd_target_monitor(int argc, const char **argv)
 					goto done;
 				} else if (tui_info_on_event(&help_info, &ev)) {
 					tui_info_release(&help_info);
+					/* Pair with the freeze in
+					 * dispatch_normal_prefix -- snap
+					 * back to live tail so the user
+					 * sees whatever streamed in while
+					 * help was up. */
+					tui_log_unfreeze(&L);
 					mode = MON_NORMAL;
 					dirty = 1;
 				} else {
@@ -809,31 +831,24 @@ int cmd_target_monitor(int argc, const char **argv)
 		if (dirty) {
 			update_status(&status, &L, opt_port, baud, mode);
 			/*
-			 * Skip the log repaint when we're staying inside a
-			 * modal (help / search prompt) -- the log behind the
-			 * box is mostly hidden, and re-rendering it before
-			 * the modal repaints causes a visible flicker as
-			 * each widget does its own @c fputs.  We do still
-			 * render the log when the mode changed (entering or
-			 * leaving the modal) so the area under the modal is
-			 * fresh before the modal lands and clean after the
-			 * modal lifts.
+			 * Compose log + any active modal into a single
+			 * frame and flush once.  The log is frozen for
+			 * every mode that shows a modal (inspect freezes
+			 * on entry; normal-mode help freezes via the
+			 * Ctrl-T+? dispatch and unfreezes on dismiss),
+			 * so consecutive frames are byte-identical and
+			 * the terminal has nothing to flicker even when
+			 * serial bytes are streaming into the ring
+			 * behind the modal.
 			 */
-			int now_modal = mode == MON_INSPECT_SEARCH ||
-					mode == MON_NORMAL_HELP ||
-					mode == MON_INSPECT_HELP;
-			int was_modal =
-			    mode_at_loop_start == MON_INSPECT_SEARCH ||
-			    mode_at_loop_start == MON_NORMAL_HELP ||
-			    mode_at_loop_start == MON_INSPECT_HELP;
-			if (!now_modal || mode != mode_at_loop_start ||
-			    was_modal != now_modal)
-				tui_log_render(&L);
+			struct sbuf frame = SBUF_INIT;
+			tui_log_render(&frame, &L);
 			if (mode == MON_INSPECT_SEARCH)
-				tui_prompt_render(&search_prompt);
+				tui_prompt_render(&frame, &search_prompt);
 			else if (mode == MON_NORMAL_HELP ||
 				 mode == MON_INSPECT_HELP)
-				tui_info_render(&help_info);
+				tui_info_render(&frame, &help_info);
+			tui_flush(&frame);
 		}
 	}
 break_loop:;

@@ -16,9 +16,14 @@
  * drive redraws in response to @ref term_read_event events (or, for
  * @ref tui_log, in response to incoming streaming bytes).
  *
- * Frames are built into an @c sbuf and flushed with a single @c fputs
- * so a full redraw costs one write, independent of how many cells
- * change.
+ * Render functions write the frame into a caller-owned @c sbuf rather
+ * than flushing to stdout themselves.  This lets the caller compose
+ * multiple widgets (log + help modal, list + prompt) into one buffer;
+ * @ref tui_flush then emits the buffer wrapped in DEC private mode
+ * 2026 (synchronized output) so the terminal applies the whole frame
+ * atomically.  Without that wrap a single @c fputs is still split
+ * across syscalls and refresh cycles, so help / search overlays would
+ * briefly flicker as background log content streams in behind them.
  */
 #ifndef TUI_H
 #define TUI_H
@@ -26,6 +31,17 @@
 #include "sbuf.h"
 
 struct term_event;
+
+/**
+ * @brief Flush a composed frame to stdout and release the buffer.
+ *
+ * Caller convenience around the @c fputs + @c fflush + @ref sbuf_release
+ * triple that closes every render path.  The render functions write
+ * into a caller-owned @c sbuf rather than flushing themselves so
+ * multiple widgets (log + help modal, list + prompt) can be composed
+ * into one buffer; this helper does the final flush in one place.
+ */
+void tui_flush(struct sbuf *out);
 
 /* ================================================================== */
 /*  Scrollable list                                                   */
@@ -92,8 +108,8 @@ void tui_list_resize(struct tui_list *L, int width, int height);
  */
 int tui_list_on_event(struct tui_list *L, const struct term_event *ev);
 
-/** @brief Render the full frame to stdout (alt-screen). */
-void tui_list_render(const struct tui_list *L);
+/** @brief Append the full frame to @p out (caller flushes). */
+void tui_list_render(struct sbuf *out, const struct tui_list *L);
 
 /** @brief Item under the cursor, or NULL when the list is empty. */
 const struct tui_list_item *tui_list_current(const struct tui_list *L);
@@ -133,8 +149,8 @@ void tui_prompt_resize(struct tui_prompt *P, int width, int height);
  */
 int tui_prompt_on_event(struct tui_prompt *P, const struct term_event *ev);
 
-/** @brief Render the prompt as a centred modal box. */
-void tui_prompt_render(const struct tui_prompt *P);
+/** @brief Append the prompt frame to @p out (caller flushes). */
+void tui_prompt_render(struct sbuf *out, const struct tui_prompt *P);
 
 /* ================================================================== */
 /*  Read-only scrollable info box                                     */
@@ -185,8 +201,8 @@ void tui_info_resize(struct tui_info *I, int width, int height);
  */
 int tui_info_on_event(struct tui_info *I, const struct term_event *ev);
 
-/** @brief Render as a centred modal box covering most of the screen. */
-void tui_info_render(const struct tui_info *I);
+/** @brief Append the info-modal frame to @p out (caller flushes). */
+void tui_info_render(struct sbuf *out, const struct tui_info *I);
 
 /* ================================================================== */
 /*  Scrolling log pane                                                */
@@ -418,7 +434,7 @@ int tui_log_on_event(struct tui_log *L, const struct term_event *ev);
 int tui_log_is_tailing(const struct tui_log *L);
 
 /**
- * @brief Render the full pane to stdout.
+ * @brief Append the full pane frame to @p out (caller flushes).
  *
  * Body fills with the most recent visual rows that fit (when tailing)
  * or with the rows around the current anchor (when scrolled).  The
@@ -426,7 +442,7 @@ int tui_log_is_tailing(const struct tui_log *L);
  * search is active every visible match is highlighted with a reverse-
  * video overlay layered on top of any decorator-supplied colours.
  */
-void tui_log_render(const struct tui_log *L);
+void tui_log_render(struct sbuf *out, const struct tui_log *L);
 
 /* ------------------------------------------------------------------ */
 /*  Search                                                            */
