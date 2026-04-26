@@ -19,12 +19,77 @@
  * CONFIG_* names are silently dropped so stale or forward-compatible
  * defaults don't block the build.  Load-time type validation rejects
  * malformed values with a deferred warning rather than failing hard.
+ *
+ * @c kc_load_env_file (JSON object or Makefile-style lines) lives here
+ * with the other loaders; it is declared in @c kc_io.h for callers.
  */
 #include "ice.h"
 #include "kc_ast.h"
 #include "kc_eval.h"
 #include "kc_io.h"
 #include "kc_private.h"
+
+/* ================================================================== */
+/*  Env file loader                                                   */
+/* ================================================================== */
+
+void kc_load_env_file(struct svec *env, const char *path)
+{
+	struct sbuf sb = SBUF_INIT;
+	if (sbuf_read_file(&sb, path) < 0)
+		die_errno("cannot read env-file '%s'", path);
+
+	const char *p = sb.buf;
+	while (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r')
+		p++;
+
+	if (*p == '{') {
+		struct json_value *root = json_parse(sb.buf, sb.len);
+		if (!root || json_type(root) != JSON_OBJECT)
+			die("env-file '%s' is not a JSON object", path);
+		for (int i = 0; i < root->u.object.nr; i++) {
+			const struct json_member *m =
+			    &root->u.object.members[i];
+			const char *val;
+			struct sbuf tmp = SBUF_INIT;
+			switch (json_type(m->value)) {
+			case JSON_STRING:
+				val = json_as_string(m->value);
+				sbuf_addf(&tmp, "%s=%s", m->key,
+					  val ? val : "");
+				break;
+			case JSON_BOOL:
+				sbuf_addf(&tmp, "%s=%s", m->key,
+					  json_as_bool(m->value) ? "y" : "n");
+				break;
+			case JSON_NUMBER:
+				sbuf_addf(&tmp, "%s=%lld", m->key,
+					  (long long)json_as_number(m->value));
+				break;
+			case JSON_NULL:
+				sbuf_addf(&tmp, "%s=", m->key);
+				break;
+			default:
+				sbuf_release(&tmp);
+				continue; /* arrays / objects -- skip */
+			}
+			svec_push(env, tmp.buf);
+			sbuf_release(&tmp);
+		}
+		json_free(root);
+	} else {
+		size_t pos = 0;
+		char *line;
+		while ((line = sbuf_getline(sb.buf, sb.len, &pos)) != NULL) {
+			while (*line == ' ' || *line == '\t')
+				line++;
+			if (!*line || *line == '#')
+				continue;
+			svec_push(env, line);
+		}
+	}
+	sbuf_release(&sb);
+}
 
 /*
  * Decode backslash escapes and strip surrounding quotes from a
