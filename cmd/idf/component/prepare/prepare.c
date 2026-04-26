@@ -95,6 +95,63 @@ const struct cmd_desc cmd_idf_component_prepare_desc = {
     .manual = &idf_component_prepare_manual,
 };
 
+/*
+ * Expand @c ${VAR} references in @p raw using @c getenv().  Mirrors
+ * the Python @c idf_component_tools subst_vars_in_str helper used by
+ * @c LocalSource, so manifests can write paths like
+ * @c "${IDF_PATH}/examples/...".  Dies if a referenced variable is
+ * unset -- silent fallback would surface as a confusing "directory
+ * does not exist" later.  Caller frees the returned heap string.
+ */
+static char *expand_vars(const char *raw)
+{
+	struct sbuf out = SBUF_INIT;
+	const char *p = raw;
+
+	while (*p) {
+		if (p[0] == '$' && p[1] == '{') {
+			const char *end = strchr(p + 2, '}');
+			char *name;
+			const char *val;
+
+			if (!end)
+				die("unterminated ${...} in '%s'", raw);
+			name = sbuf_strndup(p + 2, (size_t)(end - p - 2));
+			val = getenv(name);
+			if (!val)
+				die("env var '%s' referenced by '%s' is not "
+				    "set",
+				    name, raw);
+			sbuf_addstr(&out, val);
+			free(name);
+			p = end + 1;
+		} else {
+			sbuf_addch(&out, *p++);
+		}
+	}
+	return sbuf_detach(&out);
+}
+
+/*
+ * Resolve a @c path: dep value to an absolute path.  Expands @c ${VAR}
+ * references first, then -- if the result is still relative -- joins
+ * it onto @p manifest_dir (the directory containing the manifest the
+ * dep was declared in), matching Python @c LocalSource._get_raw_path.
+ * Caller frees.
+ */
+static char *resolve_path_dep(const char *manifest_dir, const char *raw)
+{
+	char *expanded = expand_vars(raw);
+	struct sbuf out = SBUF_INIT;
+
+	if (expanded[0] == '/') {
+		return expanded;
+	}
+	sbuf_addf(&out, "%s/%s", manifest_dir, expanded);
+	free(expanded);
+	return sbuf_detach(&out);
+}
+
 /* One @c local_components_list_file entry: a project-local component
  * with a manifest CMake found during component discovery. */
 struct local_entry {
@@ -180,6 +237,40 @@ static void load_local_components(const char *path, struct local_entry **out,
  * arrays' @c const char * pointers stay valid until the caller
  * @c sbuf_release()s the arena.
  */
+/*
+ * String table built on top of @p sb_arena.  Pointers into the arena
+ * are unstable -- @c sbuf_grow reallocates the buffer and silently
+ * invalidates anything captured before the next append.  Callers
+ * therefore stash byte offsets while writing and resolve them all
+ * at once at the end via @c arena_at(), once the arena has stopped
+ * growing.
+ */
+static size_t arena_intern(struct sbuf *sb_arena, const char *s)
+{
+	size_t off = sb_arena->len;
+	sbuf_addstr(sb_arena, s);
+	sbuf_addch(sb_arena, '\0');
+	return off;
+}
+
+static const char *arena_at(const struct sbuf *sb_arena, size_t off)
+{
+	return sb_arena->buf + off;
+}
+
+/* Per-entry offset bundles populated during the write phase and
+ * resolved to @c const char * pointers at the end. */
+struct local_off {
+	size_t name;
+	size_t version; /**< 0 if no version; otherwise stored offset + 1. */
+};
+
+struct dl_off {
+	size_t name;
+	size_t abs_path;
+	size_t version;
+};
+
 static void
 build_cmake_inputs(const struct lockfile *lf, const struct local_entry *locals,
 		   size_t locals_nr, const char *managed_components_dir,
@@ -190,64 +281,122 @@ build_cmake_inputs(const struct lockfile *lf, const struct local_entry *locals,
 {
 	struct cmake_local_component *lcomps = NULL;
 	struct cmake_dl_component *dcomps = NULL;
+	struct local_off *loff = NULL;
+	struct dl_off *doff = NULL;
+	size_t *path_off = NULL;
+	size_t nr_dl = 0, cap_dcomps = 0, cap_doff = 0;
+	size_t nr_paths = 0, cap_paths = 0;
 	const char **paths = NULL;
-	size_t nr_paths = 0;
-	size_t cap_paths = 0;
-	struct sbuf scratch = SBUF_INIT;
 
-	/* Local components: load each manifest for its version (if any). */
+	/*
+	 * Local components: load each manifest for its version (if any),
+	 * and add the component's path to the sidecar so the later
+	 * @c inject step can read its dep list.
+	 */
 	if (locals_nr) {
 		lcomps = calloc(locals_nr, sizeof(*lcomps));
-		if (!lcomps)
+		loff = calloc(locals_nr, sizeof(*loff));
+		if (!lcomps || !loff)
 			die_errno("calloc");
 	}
 	for (size_t i = 0; i < locals_nr; i++) {
 		struct manifest m = MANIFEST_INIT;
 		struct sbuf manifest_path = SBUF_INIT;
-		size_t arena_off_name, arena_off_ver = 0;
+		int have_manifest;
 
-		/* Stash name into the arena. */
-		arena_off_name = sb_arena->len;
-		sbuf_addstr(sb_arena, locals[i].name);
-		sbuf_addch(sb_arena, '\0');
+		loff[i].name = arena_intern(sb_arena, locals[i].name);
 
 		sbuf_addf(&manifest_path, "%s/idf_component.yml",
 			  locals[i].path);
-		if (access(manifest_path.buf, F_OK) == 0 &&
-		    manifest_load(&m, manifest_path.buf) == 0 && m.version) {
-			arena_off_ver = sb_arena->len;
-			sbuf_addstr(sb_arena, m.version);
-			sbuf_addch(sb_arena, '\0');
-		}
+		have_manifest = access(manifest_path.buf, F_OK) == 0 &&
+				manifest_load(&m, manifest_path.buf) == 0;
+		if (have_manifest && m.version)
+			loff[i].version = arena_intern(sb_arena, m.version) + 1;
 		manifest_release(&m);
 		sbuf_release(&manifest_path);
 
-		lcomps[i].name = sb_arena->buf + arena_off_name;
-		lcomps[i].version =
-		    arena_off_ver ? (sb_arena->buf + arena_off_ver) : NULL;
-
-		/* Sidecar path: every local with a manifest gets its
-		 * absolute path emitted. */
-		if (lcomps[i].version) {
-			ALLOC_GROW(paths, nr_paths + 1, cap_paths);
-			size_t off = sb_arena->len;
-			sbuf_addstr(sb_arena, locals[i].path);
-			sbuf_addch(sb_arena, '\0');
-			paths[nr_paths++] = sb_arena->buf + off;
+		/* Every local that has a manifest goes to the sidecar so
+		 * inject can process its dep list -- not just those that
+		 * declare a @c version: field. */
+		if (have_manifest) {
+			ALLOC_GROW(path_off, nr_paths + 1, cap_paths);
+			path_off[nr_paths++] =
+			    arena_intern(sb_arena, locals[i].path);
 		}
 	}
 
-	/* Managed downloads: anything in the lockfile that isn't IDF/LOCAL. */
-	if (lf && lf->nr) {
-		dcomps = calloc(lf->nr, sizeof(*dcomps));
-		if (!dcomps)
-			die_errno("calloc");
+	/*
+	 * Path-override deps from each local manifest.  Mirrors what
+	 * Python's @c LocalSource does: the dep is treated as a
+	 * @c project_managed_components entry pointing at the resolved
+	 * directory, so CMake builds the component in place rather than
+	 * fetching from the registry.
+	 */
+	for (size_t i = 0; i < locals_nr; i++) {
+		struct manifest m = MANIFEST_INIT;
+		struct sbuf manifest_path = SBUF_INIT;
+
+		sbuf_addf(&manifest_path, "%s/idf_component.yml",
+			  locals[i].path);
+		if (access(manifest_path.buf, F_OK) != 0 ||
+		    manifest_load(&m, manifest_path.buf) < 0) {
+			sbuf_release(&manifest_path);
+			continue;
+		}
+		sbuf_release(&manifest_path);
+
+		for (size_t d = 0; d < m.deps_nr; d++) {
+			const struct manifest_dep *md = &m.deps[d];
+			char *resolved;
+			struct manifest dep_m = MANIFEST_INIT;
+			struct sbuf dep_manifest = SBUF_INIT;
+			const char *ver;
+
+			if (md->source != MANIFEST_SRC_PATH || !md->path)
+				continue;
+
+			resolved = resolve_path_dep(locals[i].path, md->path);
+			if (access(resolved, F_OK) != 0)
+				die("path-override dep '%s' in '%s' resolves "
+				    "to '%s', which does not exist",
+				    md->name, locals[i].name, resolved);
+
+			/* Match Python @c LocalSource.versions: read the
+			 * dep's own manifest if it has one, else "*". */
+			sbuf_addf(&dep_manifest, "%s/idf_component.yml",
+				  resolved);
+			ver = "*";
+			if (access(dep_manifest.buf, F_OK) == 0 &&
+			    manifest_load(&dep_m, dep_manifest.buf) == 0 &&
+			    dep_m.version)
+				ver = dep_m.version;
+
+			ALLOC_GROW(dcomps, nr_dl + 1, cap_dcomps);
+			ALLOC_GROW(doff, nr_dl + 1, cap_doff);
+			doff[nr_dl].name = arena_intern(sb_arena, md->name);
+			doff[nr_dl].abs_path = arena_intern(sb_arena, resolved);
+			doff[nr_dl].version = arena_intern(sb_arena, ver);
+			dcomps[nr_dl].targets = NULL;
+			dcomps[nr_dl].targets_nr = 0;
+
+			manifest_release(&dep_m);
+			sbuf_release(&dep_manifest);
+
+			ALLOC_GROW(path_off, nr_paths + 1, cap_paths);
+			path_off[nr_paths++] = doff[nr_dl].abs_path;
+
+			nr_dl++;
+			free(resolved);
+		}
+
+		manifest_release(&m);
 	}
-	size_t nr_dl = 0;
+
+	/* Managed downloads: anything in the lockfile that isn't IDF/LOCAL. */
 	for (size_t i = 0; lf && i < lf->nr; i++) {
 		const struct lockfile_entry *e = &lf->entries[i];
-		size_t off_name, off_path, off_ver;
 		struct sbuf bn = SBUF_INIT;
+		struct sbuf abs = SBUF_INIT;
 
 		if (e->src_type == LOCKFILE_SRC_IDF ||
 		    e->src_type == LOCKFILE_SRC_LOCAL ||
@@ -255,37 +404,56 @@ build_cmake_inputs(const struct lockfile *lf, const struct local_entry *locals,
 			continue;
 
 		fetch_build_name(&bn, e->name);
+		sbuf_addf(&abs, "%s/%s", managed_components_dir, bn.buf);
 
 		/* Python uses the normalized build-name everywhere -- in
 		 * the @c COMPONENT_VERSION property name, in the trailing
 		 * @c set(managed_components ...) list, AND in the on-disk
 		 * directory path.  Match that. */
-		off_name = sb_arena->len;
-		sbuf_addstr(sb_arena, bn.buf);
-		sbuf_addch(sb_arena, '\0');
-
-		off_path = sb_arena->len;
-		sbuf_addf(sb_arena, "%s/%s", managed_components_dir, bn.buf);
-		sbuf_addch(sb_arena, '\0');
-
-		off_ver = sb_arena->len;
-		sbuf_addstr(sb_arena, e->version ? e->version : "");
-		sbuf_addch(sb_arena, '\0');
-
-		dcomps[nr_dl].name = sb_arena->buf + off_name;
-		dcomps[nr_dl].abs_path = sb_arena->buf + off_path;
-		dcomps[nr_dl].version = sb_arena->buf + off_ver;
+		ALLOC_GROW(dcomps, nr_dl + 1, cap_dcomps);
+		ALLOC_GROW(doff, nr_dl + 1, cap_doff);
+		doff[nr_dl].name = arena_intern(sb_arena, bn.buf);
+		doff[nr_dl].abs_path = arena_intern(sb_arena, abs.buf);
+		doff[nr_dl].version =
+		    arena_intern(sb_arena, e->version ? e->version : "");
 		dcomps[nr_dl].targets = NULL; /* lockfile has no targets */
 		dcomps[nr_dl].targets_nr = 0;
 
-		ALLOC_GROW(paths, nr_paths + 1, cap_paths);
-		paths[nr_paths++] = dcomps[nr_dl].abs_path;
+		ALLOC_GROW(path_off, nr_paths + 1, cap_paths);
+		path_off[nr_paths++] = doff[nr_dl].abs_path;
 
 		nr_dl++;
+		sbuf_release(&abs);
 		sbuf_release(&bn);
 	}
 
-	sbuf_release(&scratch);
+	/*
+	 * Resolve offsets to pointers.  All arena writes are done by
+	 * this point, so @c sb_arena->buf is now stable.
+	 */
+	for (size_t i = 0; i < locals_nr; i++) {
+		lcomps[i].name = arena_at(sb_arena, loff[i].name);
+		lcomps[i].version =
+		    loff[i].version ? arena_at(sb_arena, loff[i].version - 1)
+				    : NULL;
+	}
+	for (size_t i = 0; i < nr_dl; i++) {
+		dcomps[i].name = arena_at(sb_arena, doff[i].name);
+		dcomps[i].abs_path = arena_at(sb_arena, doff[i].abs_path);
+		dcomps[i].version = arena_at(sb_arena, doff[i].version);
+	}
+	if (nr_paths) {
+		paths = malloc(nr_paths * sizeof(*paths));
+		if (!paths)
+			die_errno("malloc");
+		for (size_t i = 0; i < nr_paths; i++)
+			paths[i] = arena_at(sb_arena, path_off[i]);
+	}
+
+	free(loff);
+	free(doff);
+	free(path_off);
+
 	*out_locals = lcomps;
 	*out_nr_locals = locals_nr;
 	*out_dl = dcomps;
