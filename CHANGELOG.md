@@ -1,3 +1,10 @@
+## v0.8.1 (2026-04-27)
+
+### 🐛 Bug Fixes
+
+- **monitor,vt100**: stop modal blink when serial data streams fast *(Jaroslav Burian - bce963e)*
+
+
 ## v0.8.0 (2026-04-27)
 
 ### ✨ New Features
