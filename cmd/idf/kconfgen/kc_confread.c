@@ -210,8 +210,14 @@ static void set_default_seeded(struct kc_ctx *ctx, const char *name,
 	s->cur_val = sbuf_strdup(val);
 	/* s->user_set stays 0; mark default_seeded so the evaluator can
 	 * honour KCONFIG_DEFAULTS_POLICY=sdkconfig and emit can still
-	 * write the `# default:` pragma regardless of policy. */
+	 * write the `# default:` pragma regardless of policy.
+	 * user_default_seeded preserves the loader's intent across
+	 * successive kc_resolve invocations (menuconfig use case) --
+	 * pass_apply_sets may overwrite default_seeded during a resolve,
+	 * so the effective flag needs a stable input source to restore
+	 * from at the start of each run. */
 	s->default_seeded = 1;
+	s->user_default_seeded = 1;
 }
 
 static void process_config_line(struct kc_ctx *ctx, char *line,
