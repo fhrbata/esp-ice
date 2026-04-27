@@ -274,7 +274,7 @@ int cmd_idf_kconfgen(int argc, const char **argv)
 				 */
 				kc_ctx_notify(
 				    &ctx,
-				    "warning: %s has 'option env=\"%s\"', but "
+				    "%s has 'option env=\"%s\"', but "
 				    "the environment variable %s is not set",
 				    s->name, env_name, env_name);
 				env_val = "";
@@ -364,13 +364,15 @@ int cmd_idf_kconfgen(int argc, const char **argv)
 	}
 
 	/*
-	 * Mirror esp_kconfiglib.report's end-of-run summary so tools /
-	 * downstream tests looking for `Status: Finished ...` get the
+	 * Drain the deferred diagnostic queue now that all work is done,
+	 * then mirror esp_kconfiglib.report's end-of-run summary so tools
+	 * / downstream tests looking for `Status: Finished ...` get the
 	 * same signal from the C implementation.  The wording has to
 	 * match upstream exactly -- the test suite grep-matches these
 	 * lines via substring check against golden `.stderr` fixtures.
 	 */
-	if (ctx.n_notifications == 0)
+	int had_errors = kc_report_flush(&ctx.report);
+	if (ctx.report.count == 0)
 		fprintf(stderr, "Status: Finished successfully\n");
 	else
 		fprintf(stderr, "Status: Finished with notifications\n");
@@ -380,5 +382,5 @@ int cmd_idf_kconfgen(int argc, const char **argv)
 	svec_clear(&opt_output);
 	svec_clear(&opt_renames);
 	svec_clear(&opt_env);
-	return 0;
+	return had_errors ? 1 : 0;
 }

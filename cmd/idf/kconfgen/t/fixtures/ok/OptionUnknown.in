@@ -1,0 +1,6 @@
+mainmenu "Test unknown option subcommand"
+
+config MYMOD
+    bool "Module config"
+    option modules
+    default y

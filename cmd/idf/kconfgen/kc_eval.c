@@ -27,8 +27,51 @@
 #include "kc_eval.h"
 #include "ice.h"
 #include "kc_ast.h"
+#include <locale.h>
 
 #define MAX_FIXPOINT_ITERS 50
+
+const char *kc_sym_type_default(enum ksym_type type)
+{
+	switch (type) {
+	case KS_BOOL:
+		return "n";
+	case KS_INT:
+		return "0";
+	case KS_HEX:
+		return "0x0";
+	case KS_FLOAT:
+		return "0.0";
+	case KS_STRING:
+	case KS_UNKNOWN:
+		break;
+	}
+	return "";
+}
+
+double kc_strtod_c(const char *nptr, char **endptr)
+{
+	/*
+	 * setlocale() is process-global, so the save/restore trick below
+	 * only works in single-threaded contexts; see the note in
+	 * kc_eval.h.  Capture the current LC_NUMERIC into a heap copy
+	 * (setlocale's returned pointer is only valid until the next call)
+	 * before swapping to "C" for the actual parse.
+	 */
+	char *prev = setlocale(LC_NUMERIC, NULL);
+	char *saved = prev ? sbuf_strdup(prev) : NULL;
+	double val;
+
+	setlocale(LC_NUMERIC, "C");
+	val = strtod(nptr, endptr);
+
+	if (saved) {
+		setlocale(LC_NUMERIC, saved);
+		free(saved);
+	}
+
+	return val;
+}
 
 /* ================================================================== */
 /*  Expression utilities                                              */
@@ -176,8 +219,8 @@ static int cmp_eval(enum kexpr_op op, const char *a, const char *b)
 	if (integer) {
 		c = (va < vb) ? -1 : (va > vb) ? 1 : 0;
 	} else {
-		double da = strtod(a, &ea);
-		double db = strtod(b, &eb);
+		double da = kc_strtod_c(a, &ea);
+		double db = kc_strtod_c(b, &eb);
 		int floaty = (ea != a && !*ea && eb != b && !*eb);
 		if (floaty)
 			c = (da < db) ? -1 : (da > db) ? 1 : 0;
@@ -739,27 +782,8 @@ static int fixpoint_step(struct kc_ctx *ctx)
 			s->default_applied = default_hit;
 			changed = 1;
 		}
-		if (!new_val) {
-			const char *zero;
-			switch (s->type) {
-			case KS_BOOL:
-				zero = "n";
-				break;
-			case KS_INT:
-				zero = "0";
-				break;
-			case KS_HEX:
-				zero = "0x0";
-				break;
-			case KS_FLOAT:
-				zero = "0.0";
-				break;
-			default:
-				zero = "";
-				break;
-			}
-			new_val = sbuf_strdup(zero);
-		}
+		if (!new_val)
+			new_val = sbuf_strdup(kc_sym_type_default(s->type));
 
 		/*
 		 * Select: force "y" if any selector is active.  NULL

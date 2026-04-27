@@ -22,6 +22,7 @@
 
 #include <stddef.h>
 
+#include "kc_report.h"
 #include "smap.h"
 #include "svec.h"
 
@@ -338,15 +339,16 @@ struct kc_ctx {
 	int defaults_policy;
 
 	/*
-	 * Notification counter.  Incremented by every non-fatal diagnostic
-	 * the parser / evaluator / I/O layer emits via kc_ctx_notify().
-	 * Used by kconfgen.c to decide between the `Status: Finished
-	 * successfully` and `Status: Finished with notifications` end-of-
-	 * run summary lines that esp_kconfiglib.report prints, so the
-	 * upstream test suite can diff our diagnostics against its
-	 * golden `.stderr` fixtures.
+	 * Deferred diagnostic collector.  Every non-fatal diagnostic the
+	 * parser / evaluator / I/O layer emits via kc_ctx_notify() lands
+	 * here; kc_report_flush() prints them at end of run, sorted by
+	 * source location.  The accumulated count also drives the
+	 * `Status: Finished ...` summary line that matches python
+	 * esp_kconfiglib.report's output -- the upstream test suite
+	 * grep-checks that substring against its golden `.stderr`
+	 * fixtures.
 	 */
-	int n_notifications;
+	struct kc_report report;
 
 	/*
 	 * Source-tree root used to relativize file paths in the menu id
@@ -376,17 +378,14 @@ void kc_ctx_init(struct kc_ctx *ctx);
 void kc_ctx_release(struct kc_ctx *ctx);
 
 /**
- * @brief Emit a parser/evaluator notification to stderr, bumping
- * @c ctx->n_notifications.
+ * @brief Append a non-fatal warning to @c ctx->report.
  *
- * Intended for non-fatal diagnostics the upstream python tools would
- * surface via @c esp_kconfiglib.report (multiple-definition warnings,
- * non-bool select / imply targets, unset env-backed options, etc.).
- * The exact wording matters -- the drop-in test shim redirects
- * esp-idf-kconfig's test suite at us and grep-checks the stderr
- * against its golden fixtures.  Do not prefix with "warning:" from
- * the caller; embed any prefix the fixture expects literally in the
- * format string.
+ * Thin wrapper around @c kc_report_warning with no source location
+ * -- use @c kc_report_warning directly when you know the offending
+ * file:line.  Kept for source compatibility with the original
+ * kconfgen callsites.  Pass only the message text in @p fmt;
+ * the "warning:" prefix is added by @c kc_report_flush at print
+ * time.  Nothing prints until @c kc_report_flush runs.
  */
 void kc_ctx_notify(struct kc_ctx *ctx, const char *fmt, ...);
 
@@ -411,6 +410,21 @@ struct ksym *kc_sym_intern(struct kc_ctx *ctx, const char *name);
 /* ------------------------------------------------------------------ */
 /*  Debug                                                             */
 /* ------------------------------------------------------------------ */
+
+struct sbuf;
+
+/**
+ * @brief Append a pretty-printed expression to @p sb.
+ *
+ * Writes the expression tree in roughly its source form: @c y for
+ * KE_SYMREF, quoted for KE_LITERAL, parenthesised binary operators
+ * with spaces around the operator, and @c ! prefixing unary-not.
+ *
+ * Format is not stable -- intended for debug dumps, diagnostics, and
+ * JSON-menus output.  Callers compose the result into any @p sbuf,
+ * so it's usable from error messages, not just stdout.
+ */
+void kc_expr_to_sbuf(const struct kexpr *e, struct sbuf *sb);
 
 /**
  * @brief Dump the parsed AST to stdout in a human-readable form.

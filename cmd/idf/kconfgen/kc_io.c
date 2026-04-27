@@ -6,425 +6,27 @@
 
 /**
  * @file kc_io.c
- * @brief sdkconfig load / write implementation.
+ * @brief sdkconfig output writers (config, header, cmake, json,
+ *        json_menus, savedefconfig).
+ *
+ * Input parsing lives in kc_confread.c; deprecated-rename tables in
+ * kc_rename.c.  This file holds the six format writers and the
+ * emission filters they share -- has_prompt / should_emit /
+ * walk_config -- because those predicates are load-bearing for
+ * matching python kconfgen byte-for-byte and do not cleanly pair
+ * with any one format.
+ *
+ * Further split of the writers is deferred: they share enough helpers
+ * (emit_quoted, is_pseudo_sym, menu_visible_if_chain_ok, has_prompt,
+ * emit_worthy_no_prompt, should_emit, walk_config, reset_emit_seen,
+ * and the emit_deprecated_* family) that untangling them demands more
+ * refactoring than a file move -- tracked as follow-up.
  */
 #include "kc_io.h"
 #include "ice.h"
 #include "kc_ast.h"
 #include "kc_eval.h"
-
-#define CONFIG_PREFIX "CONFIG_"
-#define CONFIG_PREFIX_LEN (sizeof(CONFIG_PREFIX) - 1)
-
-/* ================================================================== */
-/*  Env file loader                                                   */
-/* ================================================================== */
-
-void kc_load_env_file(struct svec *env, const char *path)
-{
-	struct sbuf sb = SBUF_INIT;
-	if (sbuf_read_file(&sb, path) < 0)
-		die_errno("cannot read env-file '%s'", path);
-
-	const char *p = sb.buf;
-	while (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r')
-		p++;
-
-	if (*p == '{') {
-		struct json_value *root = json_parse(sb.buf, sb.len);
-		if (!root || json_type(root) != JSON_OBJECT)
-			die("env-file '%s' is not a JSON object", path);
-		for (int i = 0; i < root->u.object.nr; i++) {
-			const struct json_member *m =
-			    &root->u.object.members[i];
-			const char *val;
-			struct sbuf tmp = SBUF_INIT;
-			switch (json_type(m->value)) {
-			case JSON_STRING:
-				val = json_as_string(m->value);
-				sbuf_addf(&tmp, "%s=%s", m->key,
-					  val ? val : "");
-				break;
-			case JSON_BOOL:
-				sbuf_addf(&tmp, "%s=%s", m->key,
-					  json_as_bool(m->value) ? "y" : "n");
-				break;
-			case JSON_NUMBER:
-				sbuf_addf(&tmp, "%s=%lld", m->key,
-					  (long long)json_as_number(m->value));
-				break;
-			case JSON_NULL:
-				sbuf_addf(&tmp, "%s=", m->key);
-				break;
-			default:
-				sbuf_release(&tmp);
-				continue; /* arrays / objects -- skip */
-			}
-			svec_push(env, tmp.buf);
-			sbuf_release(&tmp);
-		}
-		json_free(root);
-	} else {
-		size_t pos = 0;
-		char *line;
-		while ((line = sbuf_getline(sb.buf, sb.len, &pos)) != NULL) {
-			while (*line == ' ' || *line == '\t')
-				line++;
-			if (!*line || *line == '#')
-				continue;
-			svec_push(env, line);
-		}
-	}
-	sbuf_release(&sb);
-}
-
-/* ================================================================== */
-/*  Rename table                                                      */
-/* ================================================================== */
-
-/*
- * Look up @p name in the context's rename table and, if found,
- * translate @p *name_inout (which holds the name without CONFIG_
- * prefix) and flip @p *val_inout when the entry has invert=1.
- * Returns 1 on a hit (caller frees / replaces the strings), 0 if
- * @p name wasn't renamed.
- */
-static int rename_translate(const struct kc_ctx *ctx, char **name_inout,
-			    char **val_inout)
-{
-	for (size_t i = 0; i < ctx->n_renames; i++) {
-		const struct kc_rename *r = &ctx->renames[i];
-		if (strcmp(r->old_name, *name_inout) != 0)
-			continue;
-		free(*name_inout);
-		*name_inout = sbuf_strdup(r->new_name);
-		if (r->invert && val_inout && *val_inout) {
-			const char *flipped = NULL;
-			if (!strcmp(*val_inout, "y"))
-				flipped = "n";
-			else if (!strcmp(*val_inout, "n"))
-				flipped = "y";
-			if (flipped) {
-				free(*val_inout);
-				*val_inout = sbuf_strdup(flipped);
-			}
-		}
-		return 1;
-	}
-	return 0;
-}
-
-void kc_load_rename(struct kc_ctx *ctx, const char *path)
-{
-	struct sbuf sb = SBUF_INIT;
-	if (sbuf_read_file(&sb, path) < 0)
-		die_errno("cannot read rename '%s'", path);
-
-	size_t pos = 0;
-	char *line;
-	int lineno = 0;
-	while ((line = sbuf_getline(sb.buf, sb.len, &pos)) != NULL) {
-		lineno++;
-		while (*line == ' ' || *line == '\t')
-			line++;
-		if (!*line || *line == '#')
-			continue;
-
-		/* Expect: CONFIG_OLD CONFIG_NEW   or   CONFIG_OLD !CONFIG_NEW
-		 */
-		char *old_start = line;
-		char *space = old_start;
-		while (*space && *space != ' ' && *space != '\t')
-			space++;
-		if (!*space)
-			continue;
-		*space = '\0';
-		char *new_start = space + 1;
-		while (*new_start == ' ' || *new_start == '\t')
-			new_start++;
-		if (!*new_start)
-			continue;
-
-		int invert = 0;
-		if (*new_start == '!') {
-			invert = 1;
-			new_start++;
-		}
-
-		if (strncmp(old_start, CONFIG_PREFIX, CONFIG_PREFIX_LEN) != 0 ||
-		    strncmp(new_start, CONFIG_PREFIX, CONFIG_PREFIX_LEN) != 0)
-			continue; /* not a CONFIG_* rename; skip silently */
-
-		const char *old_short = old_start + CONFIG_PREFIX_LEN;
-		const char *new_short = new_start + CONFIG_PREFIX_LEN;
-
-		/*
-		 * Self-rename is a configuration error: a deprecated-alias
-		 * entry that points at itself can't express any migration.
-		 * Python kconfgen rejects these with a specific RuntimeError
-		 * message the upstream test suite matches on; mirror the
-		 * exact wording so drop-in compatibility holds.
-		 */
-		if (!strcmp(old_short, new_short)) {
-			die("RuntimeError: Error in %s (line %d): Replacement "
-			    "name is the same as original name (%s).",
-			    path, lineno, old_short);
-		}
-
-		/*
-		 * Skip duplicates.  ESP-IDF's build passes rename files both
-		 * via --sdkconfig-rename and via the
-		 * COMPONENT_SDKCONFIG_RENAMES env var, and several components
-		 * intentionally re-list the same line in per-target rename
-		 * files -- loading each entry blindly would produce duplicate
-		 * deprecated-alias #define lines in sdkconfig.h.  Python
-		 * kconfgen dedupes on load.
-		 */
-		int dup = 0;
-		for (size_t i = 0; i < ctx->n_renames; i++) {
-			const struct kc_rename *r0 = &ctx->renames[i];
-			if (r0->invert == invert &&
-			    !strcmp(r0->old_name, old_short) &&
-			    !strcmp(r0->new_name, new_short)) {
-				dup = 1;
-				break;
-			}
-		}
-		if (dup)
-			continue;
-
-		ALLOC_GROW(ctx->renames, ctx->n_renames + 1,
-			   ctx->alloc_renames);
-		struct kc_rename *r = &ctx->renames[ctx->n_renames++];
-		r->old_name = sbuf_strdup(old_short);
-		r->new_name = sbuf_strdup(new_short);
-		r->invert = invert;
-	}
-	sbuf_release(&sb);
-}
-
-/* ================================================================== */
-/*  Loader                                                            */
-/* ================================================================== */
-
-/*
- * Decode backslash escapes and strip surrounding quotes from a
- * string-valued RHS, returning a newly-allocated owned string.
- * Handles \\, \", \n, \t, \r and leaves unknown escapes literal.
- */
-static char *unquote_value(const char *s)
-{
-	size_t n = strlen(s);
-	const char *p = s;
-	const char *end = s + n;
-	if (n >= 2 && *p == '"' && s[n - 1] == '"') {
-		p++;
-		end--;
-	}
-	struct sbuf sb = SBUF_INIT;
-	while (p < end) {
-		if (*p == '\\' && p + 1 < end) {
-			switch (p[1]) {
-			case 'n':
-				sbuf_addch(&sb, '\n');
-				break;
-			case 't':
-				sbuf_addch(&sb, '\t');
-				break;
-			case 'r':
-				sbuf_addch(&sb, '\r');
-				break;
-			case '\\':
-				sbuf_addch(&sb, '\\');
-				break;
-			case '"':
-				sbuf_addch(&sb, '"');
-				break;
-			default:
-				sbuf_addch(&sb, '\\');
-				sbuf_addch(&sb, p[1]);
-				break;
-			}
-			p += 2;
-		} else {
-			sbuf_addch(&sb, *p++);
-		}
-	}
-	return sbuf_detach(&sb);
-}
-
-/*
- * Set @p name's value but keep @c user_set clear -- treat the line as
- * a built-in default rather than user input.  This is the sink for
- * sdkconfig lines that follow a `# default:` pragma (python kconfgen's
- * ESP extension): the value itself comes from a previous auto-generation
- * so re-seeding it into cur_val keeps round-trips stable, but marking
- * it user_set would make the symbol survive evaluation even when its
- * `depends on` chain later goes false.
- */
-static void set_default_seeded(struct kc_ctx *ctx, const char *name,
-			       const char *val)
-{
-	struct ksym *s = smap_get(&ctx->symtab, name);
-	if (!s)
-		return;
-	free(s->cur_val);
-	s->cur_val = sbuf_strdup(val);
-	/* s->user_set stays 0; mark default_seeded so the evaluator can
-	 * honour KCONFIG_DEFAULTS_POLICY=sdkconfig and emit can still
-	 * write the `# default:` pragma regardless of policy.
-	 * user_default_seeded preserves the loader's intent across
-	 * successive kc_resolve invocations (menuconfig use case) --
-	 * pass_apply_sets may overwrite default_seeded during a resolve,
-	 * so the effective flag needs a stable input source to restore
-	 * from at the start of each run. */
-	s->default_seeded = 1;
-	s->user_default_seeded = 1;
-}
-
-static void process_config_line(struct kc_ctx *ctx, char *line,
-				int *default_pending)
-{
-	/* Skip leading whitespace. */
-	while (*line == ' ' || *line == '\t')
-		line++;
-	if (!*line)
-		return;
-
-	/* `# default:` pragma marks the next CONFIG_* line as
-	 * default-seeded rather than user-set. */
-	if (*line == '#') {
-		const char *p = line + 1;
-		while (*p == ' ' || *p == '\t')
-			p++;
-		if (!strncmp(p, "default:", 8)) {
-			const char *q = p + 8;
-			while (*q == ' ' || *q == '\t')
-				q++;
-			if (!*q) {
-				*default_pending = 1;
-				return;
-			}
-		}
-
-		/* `# CONFIG_X is not set` -> X = n */
-		if (strncmp(p, CONFIG_PREFIX, CONFIG_PREFIX_LEN) != 0) {
-			*default_pending = 0;
-			return;
-		}
-		const char *name = p + CONFIG_PREFIX_LEN;
-		const char *end = name;
-		while (*end && *end != ' ' && *end != '\t')
-			end++;
-		const char *tail = end;
-		while (*tail == ' ' || *tail == '\t')
-			tail++;
-		if (strcmp(tail, "is not set") != 0) {
-			*default_pending = 0;
-			return;
-		}
-		char *name_copy = sbuf_strndup(name, (size_t)(end - name));
-		char *val = sbuf_strdup("n");
-		rename_translate(ctx, &name_copy, &val);
-		if (*default_pending) {
-			set_default_seeded(ctx, name_copy, val);
-		} else {
-			/*
-			 * A pragma-less `# CONFIG_X is not set` line in the
-			 * deprecated-rename block shouldn't downgrade an
-			 * already-default-seeded primary entry back to user-
-			 * set -- python kconfgen keeps the `# default:` marker
-			 * even after the rename alias round-trips through the
-			 * loader.  If the symbol hasn't been seen yet OR its
-			 * cur_val genuinely disagrees, treat the line as a
-			 * user override; otherwise leave the existing
-			 * user_set / cur_val alone.
-			 */
-			struct ksym *s = smap_get(&ctx->symtab, name_copy);
-			if (!s || !s->cur_val ||
-			    (strcmp(s->cur_val, val) != 0 && !s->user_set))
-				kc_sym_set_user(ctx, name_copy, val);
-			/* else: keep current state (user_set preserved). */
-		}
-		*default_pending = 0;
-		free(name_copy);
-		free(val);
-		return;
-	}
-
-	/* `CONFIG_NAME=value` */
-	if (strncmp(line, CONFIG_PREFIX, CONFIG_PREFIX_LEN) != 0) {
-		*default_pending = 0;
-		return;
-	}
-	char *eq = strchr(line, '=');
-	if (!eq) {
-		*default_pending = 0;
-		return;
-	}
-
-	size_t name_len = (size_t)(eq - (line + CONFIG_PREFIX_LEN));
-	char *name = sbuf_strndup(line + CONFIG_PREFIX_LEN, name_len);
-	const char *rhs = eq + 1;
-
-	/* Empty RHS on a bool shortcut means "n" (python parity). */
-	char *val;
-	if (!*rhs)
-		val = sbuf_strdup("n");
-	else if (*rhs == '"')
-		val = unquote_value(rhs);
-	else
-		val = sbuf_strdup(rhs);
-
-	rename_translate(ctx, &name, &val);
-	if (*default_pending) {
-		set_default_seeded(ctx, name, val);
-	} else {
-		/*
-		 * A pragma-less `CONFIG_X=value` line in the deprecated-
-		 * rename block shouldn't promote an already-default-seeded
-		 * primary entry to user-set -- e.g. CONFIG_LOG_BOOTLOADER_
-		 * LEVEL_INFO=y in the compat block feeds through the rename
-		 * table to BOOTLOADER_LOG_LEVEL_INFO which is already =y
-		 * via the matching primary entry.  Same idempotent check as
-		 * the `# is not set` branch.
-		 */
-		struct ksym *s = smap_get(&ctx->symtab, name);
-		if (!s || !s->cur_val ||
-		    (strcmp(s->cur_val, val) != 0 && !s->user_set))
-			kc_sym_set_user(ctx, name, val);
-		/* else: keep current state (user_set preserved). */
-	}
-	*default_pending = 0;
-	free(name);
-	free(val);
-}
-
-void kc_load_config(struct kc_ctx *ctx, const char *path)
-{
-	struct sbuf sb = SBUF_INIT;
-	if (sbuf_read_file(&sb, path) < 0) {
-		/*
-		 * Missing @c --config file is not an error -- python
-		 * kconfgen treats it as an empty config and falls through
-		 * to defaults.  ESP-IDF relies on this on first
-		 * @c idf.py set-target (the @c sdkconfig file doesn't
-		 * exist yet; cmake still passes @c --config sdkconfig).
-		 * Silently skip; any errno other than ENOENT surfaces via
-		 * the read attempt above and future invocations.
-		 */
-		sbuf_release(&sb);
-		return;
-	}
-
-	size_t pos = 0;
-	char *line;
-	int default_pending = 0;
-	while ((line = sbuf_getline(sb.buf, sb.len, &pos)) != NULL)
-		process_config_line(ctx, line, &default_pending);
-
-	sbuf_release(&sb);
-}
+#include "kc_private.h"
 
 /* ================================================================== */
 /*  Writer                                                            */
@@ -696,16 +298,16 @@ static void emit_symbol(struct sbuf *out, const struct ksym *s)
 
 	if (s->type == KS_BOOL) {
 		if (!strcmp(val, "y")) {
-			sbuf_addf(out, "%s%s=y\n", CONFIG_PREFIX, s->name);
+			sbuf_addf(out, "%s%s=y\n", KC_CONFIG_PREFIX, s->name);
 		} else {
-			sbuf_addf(out, "# %s%s is not set\n", CONFIG_PREFIX,
+			sbuf_addf(out, "# %s%s is not set\n", KC_CONFIG_PREFIX,
 				  s->name);
 		}
 		return;
 	}
 
 	if (s->type == KS_STRING) {
-		sbuf_addf(out, "%s%s=", CONFIG_PREFIX, s->name);
+		sbuf_addf(out, "%s%s=", KC_CONFIG_PREFIX, s->name);
 		emit_quoted(out, val);
 		sbuf_addch(out, '\n');
 		return;
@@ -713,7 +315,7 @@ static void emit_symbol(struct sbuf *out, const struct ksym *s)
 
 	/* int / hex / float / unknown: emit raw.  For hex, default to
 	 * "0x0" if the stored value happens to be missing a prefix. */
-	sbuf_addf(out, "%s%s=%s\n", CONFIG_PREFIX, s->name, val);
+	sbuf_addf(out, "%s%s=%s\n", KC_CONFIG_PREFIX, s->name, val);
 }
 
 /*
@@ -841,19 +443,20 @@ static void emit_deprecated_alias(struct sbuf *out, const struct kc_rename *r,
 		if (r->invert)
 			y = !y;
 		if (y)
-			sbuf_addf(out, "%s%s=y\n", CONFIG_PREFIX, r->old_name);
+			sbuf_addf(out, "%s%s=y\n", KC_CONFIG_PREFIX,
+				  r->old_name);
 		else
-			sbuf_addf(out, "# %s%s is not set\n", CONFIG_PREFIX,
+			sbuf_addf(out, "# %s%s is not set\n", KC_CONFIG_PREFIX,
 				  r->old_name);
 		return;
 	}
 	if (new_sym->type == KS_STRING) {
-		sbuf_addf(out, "%s%s=", CONFIG_PREFIX, r->old_name);
+		sbuf_addf(out, "%s%s=", KC_CONFIG_PREFIX, r->old_name);
 		emit_quoted(out, val);
 		sbuf_addch(out, '\n');
 		return;
 	}
-	sbuf_addf(out, "%s%s=%s\n", CONFIG_PREFIX, r->old_name, val);
+	sbuf_addf(out, "%s%s=%s\n", KC_CONFIG_PREFIX, r->old_name, val);
 }
 
 struct dep_emit_ctx {
@@ -975,8 +578,8 @@ static void emit_deprecated_header(struct sbuf *out, const struct kc_ctx *ctx)
 	sbuf_addstr(out, "\n/* List of deprecated options */\n");
 	for (size_t i = 0; i < n; i++) {
 		const struct kc_rename *r = sorted[i];
-		sbuf_addf(out, "#define %s%s %s%s\n", CONFIG_PREFIX,
-			  r->old_name, CONFIG_PREFIX, r->new_name);
+		sbuf_addf(out, "#define %s%s %s%s\n", KC_CONFIG_PREFIX,
+			  r->old_name, KC_CONFIG_PREFIX, r->new_name);
 	}
 	free(sorted);
 }
@@ -1025,24 +628,24 @@ static void emit_header_symbol(struct sbuf *out, const struct ksym *s)
 
 	if (s->type == KS_BOOL) {
 		if (!strcmp(val, "y"))
-			sbuf_addf(out, "#define %s%s 1\n", CONFIG_PREFIX,
+			sbuf_addf(out, "#define %s%s 1\n", KC_CONFIG_PREFIX,
 				  s->name);
 		return;
 	}
 	if (s->type == KS_STRING) {
-		sbuf_addf(out, "#define %s%s ", CONFIG_PREFIX, s->name);
+		sbuf_addf(out, "#define %s%s ", KC_CONFIG_PREFIX, s->name);
 		emit_quoted(out, val);
 		sbuf_addch(out, '\n');
 		return;
 	}
 	if (s->type == KS_HEX) {
-		sbuf_addf(out, "#define %s%s ", CONFIG_PREFIX, s->name);
+		sbuf_addf(out, "#define %s%s ", KC_CONFIG_PREFIX, s->name);
 		emit_hex_for_header(out, val);
 		sbuf_addch(out, '\n');
 		return;
 	}
 	/* int / float / unknown: emit raw. */
-	sbuf_addf(out, "#define %s%s %s\n", CONFIG_PREFIX, s->name, val);
+	sbuf_addf(out, "#define %s%s %s\n", KC_CONFIG_PREFIX, s->name, val);
 }
 
 static void cb_header(struct sbuf *out, const struct ksym *s, void *ud)
@@ -1118,20 +721,7 @@ static char *compute_kconfig_default(const struct ksym *s)
 			raw = "";
 		return sbuf_strdup(raw);
 	}
-	switch (s->type) {
-	case KS_BOOL:
-		return sbuf_strdup("n");
-	case KS_INT:
-		return sbuf_strdup("0");
-	case KS_HEX:
-		return sbuf_strdup("0x0");
-	case KS_FLOAT:
-		return sbuf_strdup("0.0");
-	case KS_STRING:
-	case KS_UNKNOWN:
-	default:
-		return sbuf_strdup("");
-	}
+	return sbuf_strdup(kc_sym_type_default(s->type));
 }
 
 /*
@@ -1145,17 +735,17 @@ static void emit_symbol_min(struct sbuf *out, const struct ksym *s)
 	const char *val = s->cur_val ? s->cur_val : "";
 
 	if (s->type == KS_BOOL) {
-		sbuf_addf(out, "%s%s=%s\n", CONFIG_PREFIX, s->name,
+		sbuf_addf(out, "%s%s=%s\n", KC_CONFIG_PREFIX, s->name,
 			  strcmp(val, "y") == 0 ? "y" : "n");
 		return;
 	}
 	if (s->type == KS_STRING) {
-		sbuf_addf(out, "%s%s=", CONFIG_PREFIX, s->name);
+		sbuf_addf(out, "%s%s=", KC_CONFIG_PREFIX, s->name);
 		emit_quoted(out, val);
 		sbuf_addch(out, '\n');
 		return;
 	}
-	sbuf_addf(out, "%s%s=%s\n", CONFIG_PREFIX, s->name, val);
+	sbuf_addf(out, "%s%s=%s\n", KC_CONFIG_PREFIX, s->name, val);
 }
 
 static int min_config_should_emit(const struct ksym *s)
@@ -1271,7 +861,7 @@ void kc_write_min_config(const struct kc_ctx *ctx, const char *path)
 	struct ksym *target = smap_get(&ctx->symtab, "IDF_TARGET");
 	if (target && target->cur_val && target->type == KS_STRING &&
 	    strcmp(target->cur_val, "esp32") != 0) {
-		sbuf_addf(&out, "%sIDF_TARGET=", CONFIG_PREFIX);
+		sbuf_addf(&out, "%sIDF_TARGET=", KC_CONFIG_PREFIX);
 		emit_quoted(&out, target->cur_val);
 		sbuf_addch(&out, '\n');
 	}
@@ -1306,7 +896,7 @@ static void emit_cmake_symbol(struct sbuf *out, const struct ksym *s)
 	if (s->type == KS_BOOL && strcmp(val, "y") != 0)
 		effective = ""; /* bool-n renders as empty string */
 
-	sbuf_addf(out, "set(%s%s ", CONFIG_PREFIX, s->name);
+	sbuf_addf(out, "set(%s%s ", KC_CONFIG_PREFIX, s->name);
 	if (s->type == KS_HEX) {
 		/*
 		 * Hex values go through emit_hex_for_cmake here to match
@@ -1334,7 +924,7 @@ static void list_append(struct cmake_walk *w, const char *name)
 	if (!w->first)
 		sbuf_addch(w->list, ';');
 	w->first = 0;
-	sbuf_addf(w->list, "%s%s", CONFIG_PREFIX, name);
+	sbuf_addf(w->list, "%s%s", KC_CONFIG_PREFIX, name);
 }
 
 static void cb_cmake(struct sbuf *out, const struct ksym *s, void *ud)
@@ -1393,7 +983,7 @@ static void emit_deprecated_cmake_for_sym(struct sbuf *out,
 				y = !y;
 			effective = y ? "y" : "";
 		}
-		sbuf_addf(out, "set(%s%s ", CONFIG_PREFIX, r->old_name);
+		sbuf_addf(out, "set(%s%s ", KC_CONFIG_PREFIX, r->old_name);
 		/* HEX emits through the cmake-specific formatter so the
 		 * digits match python's `%x` rendering (lowercase, no
 		 * zero-pad), otherwise the stored mixed-case literal leaks
@@ -1969,9 +1559,9 @@ static void json_menu_write_node(struct sbuf *out, const struct kc_ctx *ctx,
 			long long hv = his ? strtoll(his, &e, 0) : 0;
 			int hi_num = his && e != his && !*e;
 			if (m->sym->type == KS_FLOAT || !lo_num || !hi_num) {
-				double dlo = los ? strtod(los, &e) : 0.0;
+				double dlo = los ? kc_strtod_c(los, &e) : 0.0;
 				int lo_f = los && e != los && !*e;
-				double dhi = his ? strtod(his, &e) : 0.0;
+				double dhi = his ? kc_strtod_c(his, &e) : 0.0;
 				int hi_f = his && e != his && !*e;
 				if (lo_f && hi_f) {
 					sbuf_addf(out, "[\n%*s%g,\n%*s%g\n%*s]",

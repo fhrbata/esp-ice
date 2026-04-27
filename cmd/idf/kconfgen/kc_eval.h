@@ -26,8 +26,23 @@
 #ifndef KC_EVAL_H
 #define KC_EVAL_H
 
+#include "kc_ast.h"
+
 struct kc_ctx;
 struct kexpr;
+
+/**
+ * @brief Canonical "zero value" for a symbol type.
+ *
+ * Returns a pointer into static storage: @c "n" for KS_BOOL, @c "0"
+ * for KS_INT, @c "0x0" for KS_HEX, @c "0.0" for KS_FLOAT, and @c ""
+ * for KS_STRING / KS_UNKNOWN.  Callers that need ownership must
+ * @c sbuf_strdup the result.
+ *
+ * Used as the fallback payload when a visible symbol has no
+ * user-provided value and no @c default property fires.
+ */
+const char *kc_sym_type_default(enum ksym_type type);
 
 /**
  * @brief Evaluate an expression to a boolean using current symbol
@@ -109,5 +124,20 @@ void kc_sym_set_user(struct kc_ctx *ctx, const char *name, const char *val);
  * kconfgen's resolution.
  */
 void kc_symbols_dump(const struct kc_ctx *ctx);
+
+/**
+ * @brief Locale-independent strtod.
+ *
+ * Python kconfgen parses numeric literals under the C locale so
+ * @c "1.5" always means one-and-a-half regardless of the caller's
+ * @c LC_NUMERIC.  Plain @c strtod() would misparse such a literal as
+ * @c 1.0 under a decimal-comma locale (e.g. @c de_DE).  This helper
+ * saves and restores @c LC_NUMERIC around the call.
+ *
+ * Not thread-safe on its own: @c setlocale is process-global.  Cconfig
+ * is single-threaded today; if that ever changes, move to
+ * @c uselocale / newlocale (POSIX 2008).
+ */
+double kc_strtod_c(const char *nptr, char **endptr);
 
 #endif /* KC_EVAL_H */
