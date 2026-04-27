@@ -31,6 +31,8 @@
 #include "sbuf.h"
 
 struct term_event;
+struct vt100;	   /* defined in vt100.h */
+struct vt100_cell; /* defined in vt100.h */
 
 /**
  * @brief Flush a composed frame to stdout and release the buffer.
@@ -352,6 +354,24 @@ struct tui_log {
 					  *   @c decorate_fn. */
 
 	struct tui_search *search; /**< Active search state, or NULL. */
+
+	/* Live grid (chip-side terminal model).  When non-NULL the grid
+	 * rows are appended to the addressable line space after the ring
+	 * (so render / search / decorator handle them uniformly) and the
+	 * cursor position is painted at the end of @ref tui_log_render
+	 * when tailing.  Set via @ref tui_log_set_grid; the widget does
+	 * not own the grid. */
+	struct vt100 *vt100;
+
+	/* Frozen snapshot of the grid, captured by @ref tui_log_freeze.
+	 * While set, the snapshot stands in for the live grid in the
+	 * addressable line space so inspect-mode scroll and search hit
+	 * stable content even as the chip keeps emitting bytes.  Owned
+	 * by the widget; freed by @ref tui_log_unfreeze and @ref
+	 * tui_log_release. */
+	struct vt100_cell *snapshot;
+	int snapshot_rows;
+	int snapshot_cols;
 };
 
 /**
@@ -415,6 +435,32 @@ void tui_log_set_decorator(struct tui_log *L, tui_log_decorate_fn fn,
  * sequences are stored verbatim and re-emitted at render time.
  */
 void tui_log_append(struct tui_log *L, const void *data, size_t n);
+
+/* ------------------------------------------------------------------ */
+/*  vt100 → scrollback bridge                                         */
+/* ------------------------------------------------------------------ */
+
+/**
+ * @brief Drain the scrolled-off rows of @p V into @p L's line ring.
+ *
+ * Each scrolled-off row is serialized via @c vt100_serialize_row and
+ * pushed as a complete line, then the queue is drained.  Callers
+ * (typically the monitor's render tick) invoke this each frame so the
+ * vt100's bounded queue does not grow unboundedly between drains.  No
+ * effect when the queue is empty.
+ */
+void tui_log_pull_from_vt100(struct tui_log *L, struct vt100 *V);
+
+/**
+ * @brief Attach a live vt100 grid to @p L.
+ *
+ * When set and the widget is in tail mode, @ref tui_log_render reserves
+ * the bottom @c vt100_rows(V) rows of the body for live grid content
+ * (rendered below any visible ring entries) and positions the cursor
+ * at the grid's coordinates if @ref vt100_cursor_visible.  Pass
+ * @p V == NULL to detach.  The widget does not own the grid.
+ */
+void tui_log_set_grid(struct tui_log *L, struct vt100 *V);
 
 /**
  * @brief Feed a navigation event.
