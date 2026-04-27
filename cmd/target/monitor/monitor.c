@@ -45,7 +45,7 @@ static int opt_no_tui;
 /* clang-format off */
 static const struct option cmd_target_monitor_opts[] = {
 	OPT_STRING('p', "port", &opt_port, "dev",
-		   "serial port device (required)", NULL),
+		   "serial port device (required)", serial_complete_port),
 	OPT_INT('b', "baud", &opt_baud, "rate",
 		"baud rate (default: 115200)", NULL),
 	OPT_BOOL(0, "no-reset", &opt_no_reset,

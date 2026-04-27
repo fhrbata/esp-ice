@@ -14,6 +14,7 @@
  */
 #include "esf_port.h"
 #include "ice.h"
+#include "serial.h"
 
 /* Plumbing entry point declared in cmd/target/monitor/monitor.c. */
 int cmd_target_monitor(int argc, const char **argv);
@@ -28,7 +29,7 @@ static int opt_no_reset;
 static const struct option cmd_monitor_opts[] = {
 	OPT_STRING_CFG('p', "port", &opt_port, "path",
 		       "serial.port", "ESPPORT",
-		       "serial port device path", NULL, NULL),
+		       "serial port device path", NULL, serial_complete_port),
 	OPT_INT_CFG('b', "baud", &opt_baud, "rate",
 		    "serial.baud", "ESPBAUD",
 		    "baud rate (default: 115200)", NULL, NULL),

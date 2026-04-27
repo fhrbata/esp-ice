@@ -19,6 +19,7 @@
 #include "cmake.h"
 #include "esf_port.h"
 #include "ice.h"
+#include "serial.h"
 
 /* Plumbing entry point declared in cmd/target/flash/flash.c. */
 int cmd_target_flash(int argc, const char **argv);
@@ -30,7 +31,7 @@ static int opt_baud = 460800;
 static const struct option cmd_flash_opts[] = {
 	OPT_STRING_CFG('p', "port", &opt_port, "dev",
 		       "serial.port", "ESPPORT",
-		       "serial port device", NULL, NULL),
+		       "serial port device", NULL, serial_complete_port),
 	OPT_INT_CFG('b', "baud", &opt_baud, "rate",
 		    "serial.baud", "ESPBAUD",
 		    "baud rate", NULL, NULL),

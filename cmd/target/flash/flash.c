@@ -23,6 +23,7 @@
  */
 #include "esf_port.h"
 #include "ice.h"
+#include "serial.h"
 #include <inttypes.h>
 
 static const char *opt_port;
@@ -32,7 +33,7 @@ static int opt_baud = 460800;
 /* clang-format off */
 static const struct option cmd_target_flash_opts[] = {
 	OPT_STRING('p', "port", &opt_port, "dev",
-		   "serial port device (required)", NULL),
+		   "serial port device (required)", serial_complete_port),
 	OPT_STRING('c', "chip", &opt_chip, "name",
 		   "expected chip name for verification (e.g. esp32c6)", NULL),
 	OPT_INT('b', "baud", &opt_baud, "rate",
