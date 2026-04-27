@@ -11,9 +11,9 @@
  * Replaces IDF's `python -m idf_component_manager.prepare_components`
  * invocations from its CMake integration
  * (`tools/cmake/build.cmake` and `tools/cmake/component.cmake`).
- * The sitecustomize.py installed by @b{ice init} intercepts those
- * Python calls and re-executes into this namespace -- so users never
- * invoke these subcommands directly.
+ * The ice_shim installed by @b{ice init} intercepts those Python
+ * calls and re-executes into this namespace -- so users never invoke
+ * these subcommands directly.
  *
  * Subcommands mirror the Python tool's internal verbs:
  *   @b{prepare} -- resolve / download managed components and emit
@@ -25,7 +25,7 @@
  *
  * Argument style follows the Python convention with underscore flag
  * names (@c --project_dir, @c --lock_path, ...), so the argv CMake
- * hands to Python works unchanged after the sitecustomize rewrite.
+ * hands to Python works unchanged after the ice_shim rewrite.
  */
 #include "ice.h"
 
@@ -41,16 +41,16 @@ static const struct cmd_manual idf_component_manual = {
 
 	.description =
 	H_PARA("Build-system-only surface -- users do not invoke these "
-	       "subcommands directly.  The sitecustomize.py shim written "
-	       "by @b{ice init} intercepts the Python invocations from "
-	       "IDF's CMake integration and dispatches them here.")
+	       "subcommands directly.  The ice_shim written by "
+	       "@b{ice init} intercepts the Python invocations from IDF's "
+	       "CMake integration and dispatches them here.")
 	H_PARA("Argument style matches the Python tool "
 	       "(@b{--project_dir}, @b{--lock_path}, ...) so CMake's "
 	       "command line is accepted unchanged."),
 
 	.examples =
-	H_EXAMPLE("# invoked indirectly via sitecustomize.py; the CMake\n"
-		  "# call `python -m idf_component_manager.prepare_components\n"
+	H_EXAMPLE("# invoked indirectly via ice_shim; the CMake call\n"
+		  "# `python -m idf_component_manager.prepare_components\n"
 		  "#   ... prepare_dependencies ...` becomes\n"
 		  "# `ice idf component prepare ...`"),
 };

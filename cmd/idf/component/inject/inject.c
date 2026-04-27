@@ -15,7 +15,7 @@
  * @c MANAGED_PRIV_REQUIRES lines to the CMake-generated requires
  * file so managed components participate in the IDF component graph.
  *
- * Invoked indirectly via @c sitecustomize.py -- CMake's
+ * Invoked indirectly via @c ice_shim -- CMake's
  * `python -m idf_component_manager.prepare_components
  * ... inject_requirements ...` becomes
  * `ice idf component inject ...`.
@@ -46,7 +46,7 @@ static const struct cmd_manual idf_component_inject_manual = {
 	       "idf_component_manager.prepare_components ... "
 	       "inject_requirements ...` invocation from "
 	       "@c tools/cmake/component.cmake.  Not intended for "
-	       "direct use; sitecustomize.py rewrites the Python call.")
+	       "direct use; ice_shim rewrites the Python call.")
 	H_PARA("Reads the CMake-generated "
 	       "@c --component_requires_file, looks up each "
 	       "component's manifest, and appends the managed "

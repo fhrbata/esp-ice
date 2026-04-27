@@ -349,17 +349,17 @@ static int cmake_configure(void)
 	 * Short-circuit IDF's `__build_check_python` -- the ice venv does
 	 * not have IDF's pip packages installed (kconfgen, idf-component-
 	 * manager, ...) because the tools they provide are intercepted at
-	 * the Python-level via sitecustomize.py.  The property is consulted
-	 * in project.cmake before the check runs, so setting it via -D
-	 * skips the import-style probe.
+	 * the Python-level via ice_shim (see setup_venv()).  The property
+	 * is consulted in project.cmake before the check runs, so setting
+	 * it via -D skips the import-style probe.
 	 */
 	svec_push(&args, "-DPYTHON_DEPS_CHECKED=1");
 	/*
 	 * Pin every Python interpreter cmake and IDF might spawn to the
-	 * ice-managed venv so their invocations route through
-	 * sitecustomize.py (see setup_venv() for the mechanism).  We have
-	 * to set two variables because ESP-IDF and cmake name the
-	 * interpreter differently:
+	 * ice-managed venv so their invocations route through ice_shim
+	 * (see setup_venv() for the mechanism).  We have to set two
+	 * variables because ESP-IDF and cmake name the interpreter
+	 * differently:
 	 *
 	 *   Python3_EXECUTABLE  cmake's find_package(Python3) result,
 	 *                       consumed by generic rules.
@@ -372,7 +372,7 @@ static int cmake_configure(void)
 	 * Without the PYTHON override IDF would fall back to searching
 	 * PATH for "python", which on a machine with a previous
 	 * esp-idf/install.sh run resolves to ~/.espressif/python_env/...
-	 * and bypasses our sitecustomize entirely.
+	 * and bypasses ice_shim entirely.
 	 */
 	{
 		struct sbuf py = SBUF_INIT;
@@ -402,8 +402,8 @@ static int cmake_configure(void)
 }
 
 /* ------------------------------------------------------------------ */
-/* Python venv + sitecustomize.py -- dispatch IDF's host Python        */
-/* scripts to their native ice equivalents                             */
+/* Python venv + ice_shim -- dispatch IDF's host Python scripts to     */
+/* their native ice equivalents                                        */
 /*                                                                     */
 /*   ldgen.py            -> ice idf ldgen                              */
 /*   gen_esp32part.py    -> ice idf partition-table  (generate form)   */
@@ -416,13 +416,22 @@ static int cmake_configure(void)
 /* IDF wires these scripts into its cmake rules (and thus into         */
 /* build.ninja, or Makefiles when -G "Unix Makefiles") as              */
 /* `${Python3_EXECUTABLE} <script>`.  We create a venv once under      */
-/* @c{ice_home()/venv/}, install a sitecustomize.py into its site-     */
-/* packages, and point cmake at the venv's interpreter (under         */
-/* @c{bin/} on POSIX, @c{Scripts/} on Windows) via                     */
-/* -DPython3_EXECUTABLE.  Python's site.py runs sitecustomize at       */
-/* interpreter startup, which inspects sys.argv and execs the ice      */
-/* binary for any recognised script -- transparently to cmake, ninja,  */
-/* and IDF, and regardless of which generator cmake writes files for.  */
+/* @c{ice_home()/venv/}, install a pair of files into its site-        */
+/* packages -- @c{ice_shim.pth} (a one-liner `import ice_shim`) and    */
+/* @c{ice_shim.py} (the dispatch logic) -- and point cmake at the      */
+/* venv's interpreter (under @c{bin/} on POSIX, @c{Scripts/} on        */
+/* Windows) via -DPython3_EXECUTABLE.  At interpreter startup,         */
+/* site.py exec()s every "import ..." line found in any .pth under     */
+/* site-packages, which imports ice_shim; ice_shim inspects sys.argv   */
+/* and execs the ice binary for any recognised script -- transparently */
+/* to cmake, ninja, and IDF, and regardless of which generator cmake   */
+/* writes files for.                                                   */
+/*                                                                     */
+/* The .pth route is deliberate: a sitecustomize.py in the venv would  */
+/* be shadowed on macOS Homebrew (and other framework Python builds)   */
+/* because Python imports the *first* sitecustomize on sys.path and    */
+/* stops, and the framework-level one wins.  .pth files are processed  */
+/* additively, so Homebrew's customisation can't shadow us.            */
 /*                                                                     */
 /* Python3_EXECUTABLE is baked into CMakeCache.txt, so every cmake     */
 /* re-configure (including bootloader / ULP sub-projects triggered by  */
@@ -500,23 +509,51 @@ static int venv_site_packages(const char *py, struct sbuf *out)
 }
 
 /*
- * Write `sitecustomize.py` under @p site_packages.  The ice absolute
- * path is embedded verbatim (POSIX paths contain neither quotes nor
- * backslashes in practice, so no escaping is needed).  Called every
- * @c{ice init} so the path stays fresh if the binary moves.
+ * Write the ice_shim pair under @p site_packages: a one-line .pth file
+ * (`import ice_shim`) that triggers .pth-style import side-effects at
+ * interpreter startup, plus the ice_shim.py module that holds the
+ * dispatch logic.  The ice absolute path is embedded verbatim into the
+ * .py (POSIX paths contain neither quotes nor backslashes in practice,
+ * so no escaping is needed).  Called every @c{ice init} so the path
+ * stays fresh if the binary moves.  Also unlinks any leftover
+ * @c{sitecustomize.py} from pre-.pth ice versions so the venv ends up
+ * with exactly one shim.
  */
-static void write_sitecustomize(const char *site_packages, const char *ice_path)
+static void write_python_shim(const char *site_packages, const char *ice_path)
 {
 	struct sbuf path = SBUF_INIT;
 	struct sbuf content = SBUF_INIT;
 
+	/* Drop any sitecustomize.py from previous ice versions.  Ignored
+	 * if absent.  Leaving it behind would still work on Linux but be
+	 * dead weight, and it could mislead future debugging. */
 	sbuf_addf(&path, "%s/sitecustomize.py", site_packages);
+	unlink(path.buf);
+	sbuf_reset(&path);
+
+	/* ice_shim.pth: site.py treats any line starting with "import "
+	 * as Python code and exec()s it during startup.  Multiple .pth
+	 * files are all processed, so this fires even on macOS Homebrew
+	 * where a framework-level sitecustomize.py would have shadowed
+	 * an in-venv sitecustomize. */
+	sbuf_addf(&path, "%s/ice_shim.pth", site_packages);
+	sbuf_addstr(&content, "import ice_shim\n");
+	if (write_file_atomic(path.buf, content.buf, content.len) < 0)
+		die_errno("write '%s'", path.buf);
+	sbuf_reset(&path);
+	sbuf_reset(&content);
+
+	/* ice_shim.py: imported as a side-effect of the .pth above.  At
+	 * import time site.main() has already populated sys.argv with
+	 * the same view sitecustomize would have seen, so the dispatch
+	 * conditions below are unchanged. */
+	sbuf_addf(&path, "%s/ice_shim.py", site_packages);
 	sbuf_addf(
 	    &content,
-	    "# Generated by `ice init`.  Intercepts ESP-IDF host Python\n"
-	    "# scripts at interpreter startup and hands them off to the\n"
-	    "# native ice equivalents.  Do not edit -- rewritten on\n"
-	    "# every `ice init`.\n"
+	    "# Generated by `ice init`.  Imported via ice_shim.pth at\n"
+	    "# interpreter startup; intercepts ESP-IDF host Python scripts\n"
+	    "# and hands them off to native ice equivalents.  Do not edit\n"
+	    "# -- rewritten on every `ice init`.\n"
 	    "import os\n"
 	    "import sys\n"
 	    "\n"
@@ -614,7 +651,7 @@ static void write_sitecustomize(const char *site_packages, const char *ice_path)
 	    "try:\n"
 	    "    _main()\n"
 	    "except BaseException as _exc:\n"
-	    "    sys.stderr.write(\"ice sitecustomize: \" + repr(_exc) + "
+	    "    sys.stderr.write(\"ice shim: \" + repr(_exc) + "
 	    "\"\\n\")\n",
 	    ice_path);
 
@@ -626,10 +663,11 @@ static void write_sitecustomize(const char *site_packages, const char *ice_path)
 }
 
 /*
- * Create @c{<ice_home>/venv} on first init and write sitecustomize.py
- * into its site-packages.  Subsequent calls skip venv creation but
- * always refresh sitecustomize.py so the embedded ice path tracks the
- * currently-running binary.  Dies on any step that must succeed.
+ * Create @c{<ice_home>/venv} on first init and write the ice_shim
+ * pair (`ice_shim.pth` + `ice_shim.py`) into its site-packages.
+ * Subsequent calls skip venv creation but always refresh the shim so
+ * the embedded ice path tracks the currently-running binary.  Dies on
+ * any step that must succeed.
  */
 static void setup_venv(void)
 {
@@ -667,7 +705,7 @@ static void setup_venv(void)
 	if (venv_site_packages(py.buf, &site) < 0)
 		die("cannot query site-packages from @c{%s}", py.buf);
 
-	write_sitecustomize(site.buf, exe ? exe : "ice");
+	write_python_shim(site.buf, exe ? exe : "ice");
 
 	sbuf_release(&venv);
 	sbuf_release(&py);
@@ -877,7 +915,7 @@ int cmd_init(int argc, const char **argv)
 	if (rc)
 		goto out;
 
-	/* Create ~/.ice/venv (if missing) and refresh its sitecustomize.py
+	/* Create ~/.ice/venv (if missing) and refresh its ice_shim files
 	 * so cmake's Python3_EXECUTABLE can safely route IDF's host scripts
 	 * through ice -- see the section comment on setup_venv() above. */
 	setup_venv();
