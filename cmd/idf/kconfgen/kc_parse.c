@@ -869,14 +869,22 @@ static void parse_help_line(struct kc_parser *p, struct ksym *sym)
 }
 
 /* option NAME [ = STRING ] NL
- *   Only `env` is meaningful for config generation; record it verbatim. */
+ *   Only `env` is meaningful for config generation; record it verbatim.
+ *   `modules` collides with the KT_MODULES top-level keyword, so accept
+ *   that token here too -- python kconfgen quietly ignores unknown
+ *   option subcommands and our existing comment further down promised
+ *   the same. */
 static void parse_option_line(struct kc_parser *p, struct ksym *sym)
 {
 	int line = p->lex.line;
 	p_advance(p);
-	if (p->lex.tok != KT_NAME)
+	char *name = NULL;
+	if (p->lex.tok == KT_NAME)
+		name = p_take_val(p);
+	else if (p->lex.tok == KT_MODULES)
+		name = sbuf_strdup("modules");
+	else
 		kc_lex_die_unexpected(&p->lex, KT_NAME);
-	char *name = p_take_val(p);
 	p_advance(p);
 
 	char *value = NULL;
