@@ -1,0 +1,3 @@
+# Kconfig fixtures are byte-compared against kconfgen output (LF), so
+# Git must not autocrlf them when checking out on Windows.
+* text eol=lf
