@@ -8,14 +8,14 @@
  * @file cmd/target/flash/flash.c
  * @brief `ice target flash` -- plumbing flash command.
  *
- * Operates on an explicitly specified serial port; has no knowledge of
- * project profiles, build directories, or config files.  Intended to
- * be called directly by the user for raw flashing, or invoked by the
- * porcelain `ice flash` after it resolves those details from project
- * state.
+ * Operates on a serial port supplied via --port, or auto-detected when
+ * --port is omitted.  Has no knowledge of project profiles, build
+ * directories, or config files.  Intended to be called directly by the
+ * user for raw flashing, or invoked by the porcelain `ice flash` after
+ * it resolves those details from project state.
  *
  * Usage:
- *   ice target flash --port <dev> [--chip <name>] [--baud <rate>]
+ *   ice target flash [--port <dev>] [--chip <name>] [--baud <rate>]
  *                    <addr>=<file> [<addr>=<file> ...]
  *
  * Each positional is an <addr>=<file> pair where <addr> is a hex flash
@@ -23,6 +23,7 @@
  */
 #include "esf_port.h"
 #include "ice.h"
+#include "serial.h"
 #include <inttypes.h>
 
 static const char *opt_port;
@@ -32,7 +33,7 @@ static int opt_baud = 460800;
 /* clang-format off */
 static const struct option cmd_target_flash_opts[] = {
 	OPT_STRING('p', "port", &opt_port, "dev",
-		   "serial port device (required)", NULL),
+		   "serial port device (required)", serial_complete_port),
 	OPT_STRING('c', "chip", &opt_chip, "name",
 		   "expected chip name for verification (e.g. esp32c6)", NULL),
 	OPT_INT('b', "baud", &opt_baud, "rate",
@@ -47,9 +48,11 @@ static const struct cmd_manual target_flash_manual = {
 
 	.description =
 	H_PARA("Low-level flash command.  Connects to the serial port given "
-	       "by @b{--port}, optionally verifies the connected chip against "
-	       "@b{--chip}, then writes each @b{addr=file} image at the "
-	       "specified flash offset.  Resets the device when done.")
+	       "by @b{--port}, or auto-detects the first available ESP device "
+	       "when @b{--port} is omitted.  When @b{--chip} is given it is "
+	       "used both to filter the auto-detected port and to verify the "
+	       "connected chip.  Writes each @b{addr=file} image at the "
+	       "specified flash offset and resets the device when done.")
 	H_PARA("This command operates on raw arguments only -- it reads no "
 	       "project configuration.  It is the plumbing behind "
 	       "@b{ice flash}, which resolves the port, chip, and file list "
@@ -214,8 +217,6 @@ int cmd_target_flash(int argc, const char **argv)
 
 	argc = parse_options(argc, argv, &cmd_target_flash_desc);
 
-	if (!opt_port)
-		die("--port is required");
 	if (argc < 1)
 		die("at least one addr=file argument is required");
 
@@ -234,8 +235,23 @@ int cmd_target_flash(int argc, const char **argv)
 		paths[i] = eq + 1;
 	}
 
-	/* ---- resolve optional chip filter ---- */
+	/* ---- resolve chip filter ---- */
 	enum ice_chip required_chip = ice_chip_from_idf_name(opt_chip);
+
+	/* ---- resolve port (auto-detect if omitted) ---- */
+	char *autoport = NULL;
+	if (!opt_port) {
+		autoport = esf_find_esp_port(required_chip);
+		if (!autoport) {
+			fprintf(stderr,
+				"ice target flash: no ESP device found.\n"
+				"  Use --port to specify a port explicitly.\n");
+			free(offsets);
+			free(paths);
+			return 1;
+		}
+		opt_port = autoport;
+	}
 
 	/* ---- open port and connect ---- */
 	unsigned baud = (unsigned)opt_baud;
@@ -249,15 +265,18 @@ int cmd_target_flash(int argc, const char **argv)
 	printf("Connecting to @b{%s}...\n", opt_port);
 	fflush(stdout);
 
+	int rc = 1;
+	int loader_open = 0;
+	int n_flashed = 0;
+
 	esp_loader_t loader;
 	esp_loader_error_t err = esp_loader_init_uart(&loader, &sport.port);
 	if (err != ESP_LOADER_SUCCESS) {
 		fprintf(stderr, "ice target flash: failed to open %s\n",
 			opt_port);
-		free(offsets);
-		free(paths);
-		return 1;
+		goto out;
 	}
+	loader_open = 1;
 
 	esp_loader_connect_args_t connect = ESP_LOADER_CONNECT_DEFAULT();
 	err = esp_loader_connect(&loader, &connect);
@@ -266,10 +285,7 @@ int cmd_target_flash(int argc, const char **argv)
 			"ice target flash: connect failed — is the device in "
 			"bootloader mode?\n"
 			"  (Hold BOOT, tap RESET, then release BOOT)\n");
-		esp_loader_deinit(&loader);
-		free(offsets);
-		free(paths);
-		return 1;
+		goto out;
 	}
 
 	enum ice_chip chip = ice_chip_from_esf(esp_loader_get_target(&loader));
@@ -279,10 +295,7 @@ int cmd_target_flash(int argc, const char **argv)
 			"ice target flash: chip mismatch — connected to "
 			"@b{%s}, expected @b{%s}\n",
 			ice_chip_name(chip), ice_chip_name(required_chip));
-		esp_loader_deinit(&loader);
-		free(offsets);
-		free(paths);
-		return 1;
+		goto out;
 	}
 
 	printf("Connected  @G{%s}", ice_chip_name(chip));
@@ -300,8 +313,7 @@ int cmd_target_flash(int argc, const char **argv)
 	printf("\n\n");
 
 	/* ---- flash each image ---- */
-	int rc = 0;
-	int n_flashed = 0;
+	rc = 0;
 
 	for (int i = 0; i < argc; i++) {
 		if (flash_one(&loader, paths[i], offsets[i]) != 0) {
@@ -322,8 +334,11 @@ int cmd_target_flash(int argc, const char **argv)
 		       n_flashed == 1 ? "" : "s");
 	}
 
-	esp_loader_deinit(&loader);
+out:
+	if (loader_open)
+		esp_loader_deinit(&loader);
 	free(offsets);
 	free(paths);
+	free(autoport);
 	return rc;
 }

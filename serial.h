@@ -127,6 +127,15 @@ int serial_list_ports(char ***out);
 void serial_free_port_list(char **ports);
 
 /**
+ * @brief Completion callback for --port options.
+ *
+ * Calls serial_list_ports() and prints each result to stdout, one per
+ * line.  Suitable for use as the @c complete field of an OPT_STRING /
+ * OPT_STRING_CFG entry.
+ */
+void serial_complete_port(void);
+
+/**
  * @brief Read the USB VID and PID for a serial device.
  *
  * On Linux this is read from sysfs.  On other platforms the function

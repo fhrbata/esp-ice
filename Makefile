@@ -206,6 +206,7 @@ LIB_SRCS := \
 	pubgrub.c \
 	sbuf.c \
 	semver.c \
+	serial.c \
 	slip.c \
 	smap.c \
 	svec.c \
