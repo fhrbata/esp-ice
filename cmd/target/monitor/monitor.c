@@ -657,8 +657,19 @@ int cmd_target_monitor(int argc, const char **argv)
 				serial_write(s, r->buf, r->len);
 				sbuf_reset(r);
 			}
-			tui_log_pull_from_vt100(&L, V);
-			dirty = 1;
+			if (tui_log_is_frozen(&L)) {
+				/* Log is frozen (help or inspect modal is up).
+				 * Drain scrolled-off rows so V's queue doesn't
+				 * grow without bound, but don't push them into
+				 * the ring: that would evict pre-ceiling lines
+				 * and change the frozen background on every
+				 * frame, causing the modal to blink.  No dirty
+				 * flag either -- nothing visible changed. */
+				vt100_drain_scrolled(V);
+			} else {
+				tui_log_pull_from_vt100(&L, V);
+				dirty = 1;
+			}
 		}
 
 		switch (mode) {
