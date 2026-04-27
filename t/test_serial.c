@@ -117,9 +117,26 @@ int main(void)
 	tap_check(n == 0);
 	tap_done("serial_flush_input drops pending input");
 
-	/* Unsupported baud rate. */
-	tap_check(serial_set_baud(s, 12345) == -EINVAL);
-	tap_done("serial_set_baud rejects non-standard rates with -EINVAL");
+	/* Unsupported baud rate.
+	 *
+	 * Linux: rates not in the B-symbol table are rejected with
+	 * -EINVAL (no fallback path).
+	 *
+	 * macOS: serial_set_baud falls through to IOSSIOSPEED for rates
+	 * not in the B-symbol table.  On a pty the ioctl is not
+	 * implemented (the pty driver isn't part of IOSerialFamily), so
+	 * the call still fails -- but with whatever errno the kernel
+	 * returns for an unknown ioctl on a pty (typically -ENOTTY).
+	 * Accept any negative return. */
+	{
+		int r = serial_set_baud(s, 12345);
+#ifdef __APPLE__
+		tap_check(r < 0);
+#else
+		tap_check(r == -EINVAL);
+#endif
+	}
+	tap_done("serial_set_baud rejects non-standard rates on a pty");
 
 	serial_close(s);
 	tap_done("serial_close succeeds");

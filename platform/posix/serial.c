@@ -20,6 +20,14 @@
 #include <termios.h>
 #include <unistd.h>
 
+#ifdef __APPLE__
+/* IOSSIOSPEED — Darwin's ioctl for arbitrary baud rates.  Needed for
+ * 460800/921600/... which <termios.h> on macOS does not expose as
+ * B-symbols (only up to B230400).  No framework link required; the
+ * header just provides the ioctl number. */
+#include <IOKit/serial/ioss.h>
+#endif
+
 #include "serial.h"
 
 struct serial {
@@ -148,19 +156,31 @@ void serial_close(struct serial *s)
 
 int serial_set_baud(struct serial *s, unsigned baud)
 {
-	struct termios tio;
 	speed_t speed = baud_lookup(baud);
 
-	if (speed == 0)
+	if (speed != 0) {
+		struct termios tio;
+		if (tcgetattr(s->fd, &tio) < 0)
+			return -errno;
+		if (cfsetispeed(&tio, speed) < 0)
+			return -errno;
+		if (cfsetospeed(&tio, speed) < 0)
+			return -errno;
+		if (tcsetattr(s->fd, TCSANOW, &tio) < 0)
+			return -errno;
+	} else {
+#ifdef __APPLE__
+		/* Non-standard rate: macOS does not define B-symbols past
+		 * B230400, so termios cannot carry the value.  IOSSIOSPEED
+		 * accepts an arbitrary speed_t and is honoured directly by
+		 * the IOKit serial driver, bypassing the B-symbol table. */
+		speed_t want = (speed_t)baud;
+		if (ioctl(s->fd, IOSSIOSPEED, &want) < 0)
+			return -errno;
+#else
 		return -EINVAL;
-	if (tcgetattr(s->fd, &tio) < 0)
-		return -errno;
-	if (cfsetispeed(&tio, speed) < 0)
-		return -errno;
-	if (cfsetospeed(&tio, speed) < 0)
-		return -errno;
-	if (tcsetattr(s->fd, TCSANOW, &tio) < 0)
-		return -errno;
+#endif
+	}
 
 	s->baud = baud;
 	return 0;
