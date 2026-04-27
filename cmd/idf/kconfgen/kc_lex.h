@@ -32,6 +32,8 @@
 
 #include <stddef.h>
 
+#include "platform.h"
+
 struct smap;
 
 /* ------------------------------------------------------------------ */
@@ -224,7 +226,7 @@ const char *kc_tok_name(int tok);
  *
  * Convenience wrapper used by both lexer and parser helpers.
  */
-void kc_lex_die_unexpected(struct kc_lexer *l, int want);
+void NORETURN kc_lex_die_unexpected(struct kc_lexer *l, int want);
 
 /**
  * @brief Push an included file onto the lexer frame stack.

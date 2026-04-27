@@ -162,7 +162,7 @@ const char *kc_tok_name(int tok)
 	return "?";
 }
 
-void kc_lex_die_unexpected(struct kc_lexer *l, int want)
+void NORETURN kc_lex_die_unexpected(struct kc_lexer *l, int want)
 {
 	die("%s:%d: expected %s, got %s", l->path, l->line, kc_tok_name(want),
 	    kc_tok_name(l->tok));
