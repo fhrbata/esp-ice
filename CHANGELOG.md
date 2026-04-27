@@ -1,3 +1,35 @@
+## v0.9.0 (2026-04-27)
+
+### ✨ New Features
+
+- **target**: auto-detect port when --port is omitted *(Jaroslav Burian - 0992613)*
+- **completion**: tab-complete serial ports for --port *(Jaroslav Burian - 48054ce)*
+- **kconfgen**: deferred diagnostic report subsystem *(Jan Beran - f695199)*
+- **kconfgen**: validate value type on sdkconfig load *(Jan Beran - 45381d2)*
+- **kconfgen**: add kc_expr_to_sbuf sbuf-based pretty-printer *(Jan Beran - 85e74db)*
+
+### 🐛 Bug Fixes
+
+- **kconfgen**: pin fixture files to LF so Windows diff matches *(Frantisek Hrbata - 2342b2d)*
+- **kconfgen**: copy fixtures into $O so paths stay relative on Windows *(Frantisek Hrbata - 7817b2f)*
+- **kconfgen**: keep PATH around in fixture harness so Windows can load DLLs *(Frantisek Hrbata - eb65bec)*
+- **kconfgen**: accept "modules" as an option subcommand *(Frantisek Hrbata - 2d4af27)*
+- **kconfgen**: annotate kc_lex_die_unexpected as NORETURN *(Frantisek Hrbata - 8188d41)*
+- **kconfgen**: match python's env-set vs env-unset distinction *(Frantisek Hrbata - b2b7148)*
+- **kconfgen**: preserve user_default_seeded across kc_resolve *(Frantisek Hrbata - 69fac42)*
+- **kconfgen**: keep kc_load_env_file in kc_confread after split *(Jan Beran - f6e374a)*
+- **kconfgen**: locale-independent strtod for numeric comparisons *(Jan Beran - 70465c2)*
+- **serial**: use IOSSIOSPEED for non-standard baud rates on macOS *(Frantisek Hrbata - a00cc93)*
+- **error**: colour only the diagnostic prefix, not the whole line *(Frantisek Hrbata - 04bd787)*
+- **hints**: defer hint template formatting to after the regex matches *(Frantisek Hrbata - 5497dba)*
+- **init**: switch python shim from sitecustomize.py to .pth *(Frantisek Hrbata - 3c50305)*
+
+### 🔧 Code Refactoring
+
+- **kconfgen**: split sdkconfig reader and renames out of kc_io.c *(Jan Beran - 8e97f48)*
+- **kconfgen**: extract kc_sym_type_default helper *(Jan Beran - 6ac040b)*
+
+
 ## v0.8.1 (2026-04-27)
 
 ### 🐛 Bug Fixes
