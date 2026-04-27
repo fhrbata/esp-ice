@@ -264,6 +264,7 @@ int cmd_idf_kconfgen(int argc, const char **argv)
 			}
 			if (!env_val)
 				env_val = getenv(env_name);
+			int env_provided = env_val != NULL;
 			if (!env_val) {
 				/*
 				 * Matches the UndefOptEnv warning
@@ -282,15 +283,23 @@ int cmd_idf_kconfgen(int argc, const char **argv)
 			free(s->cur_val);
 			s->cur_val = sbuf_strdup(env_val);
 			/*
-			 * Seed as a sticky default: user_set stays clear so
-			 * the emit prefixes the line with `# default:`
-			 * (python marks env-backed lines with the same
-			 * pragma), while default_seeded makes the fixpoint
-			 * preserve the env value over any `default ...` the
-			 * Kconfig may declare.
+			 * Python kconfgen treats env-set values as user
+			 * input (no `# default:` pragma) and env-unset
+			 * fallbacks as defaults (pragma + Kconfig default
+			 * filled in by the fixpoint).  user_default_seeded
+			 * mirrors default_seeded across kc_resolve --
+			 * reset_resolve_scratch restores default_seeded from
+			 * it at the start of every resolve, so without it
+			 * the env-unset fallback would be wiped out before
+			 * the fixpoint's stick check fires.
 			 */
-			s->user_set = 0;
-			s->default_seeded = 1;
+			if (env_provided) {
+				s->user_set = 1;
+			} else {
+				s->user_set = 0;
+				s->default_seeded = 1;
+				s->user_default_seeded = 1;
+			}
 		}
 	}
 
