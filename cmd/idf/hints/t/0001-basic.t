@@ -38,6 +38,18 @@ cat >hints.yml <<'YAML'
     re: "Failed to resolve component '(?!esp_ipc|newlib)(\\w+)'"
     hint: "Unknown component '{}' -- check spelling."
     match_to_output: True
+
+# Hint template references more {N} placeholders than hint_variables
+# supplies.  Mirrors a real upstream entry in hints.yml.  The hint
+# template must only be expanded after the regex matches, so a broken
+# template stays dormant when its rule does not fire.
+-
+    re: "warning: '{}' is not declared"
+    hint: "'{0}' has been removed. Use '{1}', '{2}', and '{3}' instead."
+    variables:
+        -
+            re_variables: ['old_thing']
+            hint_variables: ['old_thing', 'new_thing']
 YAML
 
 # ---- Case 1: plain rule ----
@@ -94,6 +106,12 @@ LOG
 "$BINARY" idf hints hints.yml log6 >out6 2>err6
 tap_check ! grep -q '^HINT:' out6
 tap_done "log with no known patterns produces no hints"
+
+# ---- Case 6b: dormant template bug stays silent when its rule misses ----
+
+"$BINARY" idf hints hints.yml log6 >out6b 2>err6b
+tap_check ! grep -q "cannot expand 'hint' template" err6b
+tap_done "broken hint template does not warn unless the regex matches"
 
 # ---- Case 7: non-existent hints file is fatal ----
 

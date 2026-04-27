@@ -246,18 +246,25 @@ static int run_rule(const struct yaml_value *rule, const char *log,
 				     source, re);
 				goto next_var;
 			}
-			if (format_template(&msg, hint, hs, nh) < 0) {
-				warn("%s: cannot expand 'hint' template /%s/"
-				     " -- skipping",
-				     source, hint);
-				goto next_var;
-			}
 
+			/*
+			 * Match Python's generate_hints_buffer: only format
+			 * the hint template after the regex matches.  Some
+			 * upstream entries reference more {N} placeholders
+			 * than they supply hint_variables for; those bugs
+			 * stay dormant unless the rule actually fires.
+			 */
 			struct re_match m = {0};
 			pcre_search(pat.buf, log, 0, &m, source);
 			if (m.matched) {
-				svec_push(out, msg.buf);
-				emitted++;
+				if (format_template(&msg, hint, hs, nh) < 0)
+					warn("%s: cannot expand 'hint'"
+					     " template /%s/ -- skipping",
+					     source, hint);
+				else {
+					svec_push(out, msg.buf);
+					emitted++;
+				}
 			}
 			free(m.groups_joined);
 
