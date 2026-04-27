@@ -1,3 +1,31 @@
+## v0.8.0 (2026-04-27)
+
+### ✨ New Features
+
+- **vt100,tui,monitor**: inner-terminal vt100 emulator for ice monitor *(Frantisek Hrbata - 45e014e)*
+- **tui,monitor**: interactive TUI with normal/inspect modes *(Frantisek Hrbata - 04f9ccf)*
+- **idf,component**: native component-manager hooks via PubGrub *(Frantisek Hrbata - f50720a)*
+- **json**: decode \uXXXX unicode escapes to UTF-8 *(Frantisek Hrbata - 3172c12)*
+- add ZIP archive reader *(Frantisek Hrbata - 08be81c)*
+- add PubGrub version-constraint solver *(Frantisek Hrbata - e2da9db)*
+- add in-house SemVer 2.0.0 parser *(Frantisek Hrbata - eaf23e6)*
+
+### 🐛 Bug Fixes
+
+- **idf,component**: handle path-override deps in prepare *(Frantisek Hrbata - 142897f)*
+- **tui,monitor**: keep modal overlays solid as serial bytes stream *(Frantisek Hrbata - e6ff683)*
+- **ci,win**: install python and zip on the MSYS2 runner *(Frantisek Hrbata - c280432)*
+- **idf,component**: verify archive sha256 against the lockfile *(Frantisek Hrbata - 48dca2b)*
+- **zip**: reject backslash and ':' to block Windows zip-slip *(Frantisek Hrbata - d896516)*
+- **image**: match esptool elf2image output byte-for-byte *(Frantisek Hrbata - 4aa2a2f)*
+- **yaml**: support zero-indent block sequences *(Frantisek Hrbata - eb5e571)*
+- address clang-tidy errors *(Frantisek Hrbata - d967dc5)*
+
+### 🔧 Code Refactoring
+
+- extract git CLI helpers from cmd/repo/ *(Frantisek Hrbata - a1e44a5)*
+
+
 ## v0.7.0 (2026-04-24)
 
 ### ✨ New Features
