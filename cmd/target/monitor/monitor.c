@@ -34,6 +34,7 @@
 #include "ice.h"
 #include "serial.h"
 #include "tui.h"
+#include "vt100.h"
 
 static const char *opt_port;
 static int opt_baud = 115200;
@@ -602,6 +603,17 @@ int cmd_target_monitor(int argc, const char **argv)
 	memset(&help_info, 0, sizeof(help_info));
 
 	update_status(&status, &L, opt_port, baud, mode);
+
+	/*
+	 * Inner-terminal vt100: sized to the visible body region so the
+	 * chip's column probes (linenoise's `\x1b[999C\x1b[6n`) and
+	 * autowrap math match what gets painted on-screen.  Body is
+	 * cols-1 wide (scrollbar) by rows-1 tall (status); no footer.
+	 */
+	int inner_cols = cols > 1 ? cols - 1 : cols;
+	int inner_rows = rows > 1 ? rows - 1 : rows;
+	struct vt100 *V = vt100_new(inner_rows, inner_cols);
+	tui_log_set_grid(&L, V);
 	{
 		struct sbuf frame = SBUF_INIT;
 		tui_log_render(&frame, &L);
@@ -617,6 +629,9 @@ int cmd_target_monitor(int argc, const char **argv)
 		if (term_resize_pending()) {
 			term_size(&cols, &rows);
 			tui_log_resize(&L, cols, rows);
+			int new_inner_cols = cols > 1 ? cols - 1 : cols;
+			int new_inner_rows = rows > 1 ? rows - 1 : rows;
+			vt100_resize(V, new_inner_rows, new_inner_cols);
 			if (mode == MON_INSPECT_SEARCH)
 				tui_prompt_resize(&search_prompt, cols, rows);
 			if (mode == MON_NORMAL_HELP || mode == MON_INSPECT_HELP)
@@ -636,7 +651,13 @@ int cmd_target_monitor(int argc, const char **argv)
 		if (n < 0)
 			break;
 		if (n > 0) {
-			tui_log_append(&L, buf, (size_t)n);
+			vt100_input(V, buf, (size_t)n);
+			struct sbuf *r = vt100_reply(V);
+			if (r->len) {
+				serial_write(s, r->buf, r->len);
+				sbuf_reset(r);
+			}
+			tui_log_pull_from_vt100(&L, V);
 			dirty = 1;
 		}
 
@@ -857,6 +878,7 @@ done:
 	if (mode == MON_NORMAL_HELP || mode == MON_INSPECT_HELP)
 		tui_info_release(&help_info);
 	tui_log_release(&L);
+	vt100_free(V);
 	sbuf_release(&status);
 	term_screen_leave();
 	term_raw_leave();

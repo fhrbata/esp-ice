@@ -17,6 +17,7 @@
  */
 #include "tui.h"
 #include "ice.h"
+#include "vt100.h"
 
 #define PCRE2_CODE_UNIT_WIDTH 8
 #include <pcre2.h>
@@ -867,6 +868,10 @@ void tui_log_release(struct tui_log *L)
 	}
 	L->n_lines = 0;
 	L->start = 0;
+	free(L->snapshot);
+	L->snapshot = NULL;
+	L->snapshot_rows = 0;
+	L->snapshot_cols = 0;
 	sbuf_release(&L->pending);
 	tui_log_search_clear(L);
 }
@@ -880,17 +885,61 @@ void tui_log_resize(struct tui_log *L, int width, int height)
 void tui_log_freeze(struct tui_log *L)
 {
 	L->ceiling = L->total_pushed;
-	/* Anchor to the last line inside the snapshot so the visible
-	 * body lines up with what the user was watching when they froze.
-	 * If there are no completed lines yet (ceiling == 0), there's
-	 * nothing to anchor on and live-tail (-1) is the safe default. */
-	L->anchor = L->ceiling > 0 ? L->ceiling - 1 : -1;
+
+	/*
+	 * Snapshot the live grid so inspect-mode scroll and search hit
+	 * stable content while the chip keeps writing.  Snapshot rows
+	 * occupy globals [ceiling, ceiling + snapshot_rows) -- past the
+	 * ring, but within the same monotonic counter so the existing
+	 * global ↔ user mapping keeps working.
+	 */
+	free(L->snapshot);
+	L->snapshot = NULL;
+	L->snapshot_rows = 0;
+	L->snapshot_cols = 0;
+	if (L->vt100) {
+		int rows = vt100_rows(L->vt100);
+		int cols = vt100_cols(L->vt100);
+
+		if (rows > 0 && cols > 0) {
+			L->snapshot =
+			    malloc((size_t)rows * cols * sizeof(*L->snapshot));
+			if (!L->snapshot)
+				die_errno("malloc");
+			for (int r = 0; r < rows; r++) {
+				const struct vt100_cell *src =
+				    vt100_cell(L->vt100, r, 0);
+				memcpy(&L->snapshot[(size_t)r * cols], src,
+				       (size_t)cols *
+					   sizeof(struct vt100_cell));
+			}
+			L->snapshot_rows = rows;
+			L->snapshot_cols = cols;
+		}
+	}
+
+	/*
+	 * Anchor at the bottom of frozen content -- the last snapshot
+	 * row when a grid was attached, otherwise the last ring line.
+	 * If there's nothing to anchor on, live-tail (-1) is the safe
+	 * default and log_bottom_idx returns total - 1 anyway.
+	 */
+	if (L->snapshot)
+		L->anchor = L->ceiling + L->snapshot_rows - 1;
+	else if (L->ceiling > 0)
+		L->anchor = L->ceiling - 1;
+	else
+		L->anchor = -1;
 }
 
 void tui_log_unfreeze(struct tui_log *L)
 {
 	L->ceiling = -1;
 	L->anchor = -1;
+	free(L->snapshot);
+	L->snapshot = NULL;
+	L->snapshot_rows = 0;
+	L->snapshot_cols = 0;
 }
 
 int tui_log_is_frozen(const struct tui_log *L) { return L->ceiling >= 0; }
@@ -904,6 +953,8 @@ void tui_log_set_footer(struct tui_log *L, const char *footer)
 {
 	L->footer = footer;
 }
+
+void tui_log_set_grid(struct tui_log *L, struct vt100 *V) { L->vt100 = V; }
 
 void tui_log_set_decorator(struct tui_log *L, tui_log_decorate_fn fn, void *ctx)
 {
@@ -1034,6 +1085,28 @@ void tui_log_append(struct tui_log *L, const void *data, size_t n)
 		sbuf_reset(&L->pending);
 		p = nl + 1;
 	}
+}
+
+void tui_log_pull_from_vt100(struct tui_log *L, struct vt100 *V)
+{
+	int n = vt100_scrolled_count(V);
+
+	if (n == 0)
+		return;
+
+	struct sbuf row = SBUF_INIT;
+
+	for (int i = 0; i < n; i++) {
+		int cols;
+		const struct vt100_cell *cells =
+		    vt100_scrolled_row(V, i, &cols);
+
+		sbuf_reset(&row);
+		vt100_serialize_row(&row, cells, cols);
+		log_push_line(L, row.buf, row.len);
+	}
+	sbuf_release(&row);
+	vt100_drain_scrolled(V);
 }
 
 /*
@@ -1299,17 +1372,77 @@ static int render_log_line(struct sbuf *sb, const char *line, size_t len,
  * oldest surviving line, @c L->n_lines is the (sole) pending line if
  * any.  The caller must have already bounded @p idx.
  */
+static int log_effective_n_lines(const struct tui_log *L);
+
+/*
+ * Scratch buffer for serializing grid / snapshot rows on demand inside
+ * @ref log_get_line.  File-static so callers don't need to thread an
+ * sbuf parameter through every helper; safe because tui is single-
+ * threaded and every caller processes the returned pointer (or copies
+ * what it needs) before the next @ref log_get_line call.
+ */
+static struct sbuf log_grid_scratch = SBUF_INIT;
+
 static void log_get_line(const struct tui_log *L, int idx, const char **out,
 			 size_t *out_len)
 {
-	if (idx < L->n_lines) {
+	int n_eff = log_effective_n_lines(L);
+
+	if (idx < n_eff) {
 		const char *s = L->lines[(L->start + idx) % L->cap_lines];
+
 		*out = s;
 		*out_len = strlen(s);
-	} else {
+		return;
+	}
+
+	int grid_idx = idx - n_eff;
+
+	/*
+	 * Frozen + has snapshot: stable cell array taken at freeze time.
+	 * Searches and scroll inside inspect see consistent content even
+	 * as the chip keeps emitting bytes into the live grid.
+	 */
+	if (L->ceiling >= 0 && L->snapshot && grid_idx >= 0 &&
+	    grid_idx < L->snapshot_rows) {
+		sbuf_reset(&log_grid_scratch);
+		vt100_serialize_row(
+		    &log_grid_scratch,
+		    &L->snapshot[(size_t)grid_idx * L->snapshot_cols],
+		    L->snapshot_cols);
+		*out = log_grid_scratch.buf;
+		*out_len = log_grid_scratch.len;
+		return;
+	}
+
+	/*
+	 * Not frozen + grid attached: serialize the live grid row.  The
+	 * pointer is valid until the next log_get_line call.
+	 */
+	if (L->ceiling < 0 && L->vt100 && grid_idx >= 0 &&
+	    grid_idx < vt100_rows(L->vt100)) {
+		sbuf_reset(&log_grid_scratch);
+		vt100_serialize_row(&log_grid_scratch,
+				    vt100_cell(L->vt100, grid_idx, 0),
+				    vt100_cols(L->vt100));
+		*out = log_grid_scratch.buf;
+		*out_len = log_grid_scratch.len;
+		return;
+	}
+
+	/*
+	 * Pending in-progress line, only when no grid is attached -- the
+	 * grid IS the in-progress edit when monitor.c is wired up.
+	 */
+	if (L->ceiling < 0 && !L->vt100 && L->pending.len > 0 &&
+	    grid_idx == 0) {
 		*out = L->pending.buf;
 		*out_len = L->pending.len;
+		return;
 	}
+
+	*out = "";
+	*out_len = 0;
 }
 
 /*
@@ -1333,14 +1466,22 @@ static int log_effective_n_lines(const struct tui_log *L)
 }
 
 /*
- * Total number of user-visible logical lines.  Pending only counts
- * when no ceiling is set -- a frozen view excludes the half-built
- * line because its bytes change under the user.
+ * Total number of user-visible logical lines.  Includes the live
+ * grid when attached (so inspect-mode scroll and search reach grid
+ * content) and the snapshot when frozen.  Pending only counts when
+ * no grid is attached and no ceiling is set -- a frozen view
+ * excludes the half-built line because its bytes change under the
+ * user, and the grid takes over the in-progress role when wired.
  */
 static int log_total(const struct tui_log *L)
 {
 	int n = log_effective_n_lines(L);
-	if (L->ceiling < 0 && L->pending.len > 0)
+
+	if (L->ceiling >= 0 && L->snapshot)
+		n += L->snapshot_rows;
+	else if (L->ceiling < 0 && L->vt100)
+		n += vt100_rows(L->vt100);
+	else if (L->ceiling < 0 && L->pending.len > 0)
 		n++;
 	return n;
 }
@@ -1436,13 +1577,10 @@ static int log_bottom_idx(const struct tui_log *L)
 	if (L->anchor < 0)
 		return total - 1;
 	long long u = log_global_to_user(L, L->anchor);
-	int eff = log_effective_n_lines(L);
 	if (u < 0)
 		u = 0;
-	if (u >= eff)
-		u = eff - 1;
-	if (u < 0)
-		u = 0;
+	if (u >= total)
+		u = total - 1;
 	return (int)u;
 }
 
@@ -1458,22 +1596,30 @@ int tui_log_on_event(struct tui_log *L, const struct term_event *ev)
 		body_rows = 1;
 
 	long long oldest = L->total_pushed - L->n_lines;
-	/* total_pushed - 1 is the newest completed line, i.e. the live-
-	 * tail target when there is no pending content.  When a snapshot
-	 * ceiling is active the user is exploring a frozen view, so the
-	 * upper bound is the last line inside the snapshot rather than
-	 * the live tail. */
+	/*
+	 * "newest_completed" is the upper-bound global index for
+	 * navigation.  Includes the snapshot when frozen and the live
+	 * grid otherwise -- both occupy globals past total_pushed (the
+	 * snapshot at [ceiling, ceiling+snapshot_rows) and the live
+	 * grid at [total_pushed, total_pushed+grid_rows)) so the
+	 * existing arithmetic walks them as virtual lines.
+	 */
 	long long newest_completed;
-	if (L->ceiling >= 0)
+	if (L->ceiling >= 0 && L->snapshot)
+		newest_completed = L->ceiling + L->snapshot_rows - 1;
+	else if (L->ceiling >= 0)
 		newest_completed = L->ceiling > 0 ? L->ceiling - 1 : -1;
+	else if (L->vt100)
+		newest_completed = L->total_pushed + vt100_rows(L->vt100) - 1;
 	else
 		newest_completed =
 		    L->total_pushed > 0 ? L->total_pushed - 1 : -1;
 
 	long long current;
 	if (L->anchor < 0) {
-		current =
-		    (L->pending.len > 0) ? L->total_pushed : newest_completed;
+		current = (!L->vt100 && L->ceiling < 0 && L->pending.len > 0)
+			      ? L->total_pushed
+			      : newest_completed;
 	} else {
 		current = L->anchor;
 	}
@@ -1594,6 +1740,7 @@ void tui_log_render(struct sbuf *out, const struct tui_log *L)
 	}
 
 	int body_rows = body_bottom - body_top + 1;
+
 	if (body_rows < 0)
 		body_rows = 0;
 
@@ -1605,6 +1752,25 @@ void tui_log_render(struct sbuf *out, const struct tui_log *L)
 	int body_w = L->width > 1 ? L->width - 1 : L->width;
 
 	int bottom_idx = log_bottom_idx(L);
+
+	/*
+	 * Cursor tracking: when tailing with a grid attached and the
+	 * chip has the cursor visible, find which user-idx the cursor
+	 * lives on (n_eff + cur_row in the unified addressable space)
+	 * and remember the terminal row when we render that line.  The
+	 * cursor positioning emit at the bottom of this function then
+	 * just looks up the saved row.
+	 */
+	int cursor_user_idx = -1;
+	int cursor_term_row = -1;
+	int cursor_term_col = 0;
+
+	if (L->vt100 && tui_log_is_tailing(L) &&
+	    vt100_cursor_visible(L->vt100)) {
+		cursor_user_idx =
+		    log_effective_n_lines(L) + vt100_cursor_row(L->vt100);
+		cursor_term_col = vt100_cursor_col(L->vt100) + 1;
+	}
 
 	if (body_rows > 0 && body_w > 0 && bottom_idx >= 0) {
 		int first_line, first_skip;
@@ -1619,6 +1785,8 @@ void tui_log_render(struct sbuf *out, const struct tui_log *L)
 		int term_row = body_top + leading_blanks;
 		for (int i = first_line;
 		     i <= bottom_idx && term_row <= body_bottom; i++) {
+			if (i == cursor_user_idx)
+				cursor_term_row = term_row;
 			const char *s;
 			size_t slen;
 			log_get_line(L, i, &s, &slen);
@@ -1645,9 +1813,14 @@ void tui_log_render(struct sbuf *out, const struct tui_log *L)
 			 * overlay because the renderer re-issues active
 			 * opens after every close. */
 			if (L->search && L->search->re) {
-				long long line_g =
-				    (i < L->n_lines) ? log_user_to_global(L, i)
-						     : -1;
+				/*
+				 * Globals beyond total_pushed encode grid
+				 * rows (frozen → snapshot at ceiling+r,
+				 * live → total_pushed+r).  log_user_to_global
+				 * yields those naturally, so search current-
+				 * tracking works for grid rows too.
+				 */
+				long long line_g = log_user_to_global(L, i);
 				int line_is_current =
 				    line_g >= 0 &&
 				    L->search->current_line == line_g;
@@ -1717,6 +1890,17 @@ void tui_log_render(struct sbuf *out, const struct tui_log *L)
 		sbuf_pad(out, L->footer, L->width - 1);
 		sbuf_addstr(out, "\x1b[0m");
 	}
+
+	/*
+	 * Position the cursor at the live grid's coordinates iff the
+	 * grid row that holds it actually rendered into the body.  When
+	 * scrolled, cursor_term_row stays -1 (cursor's row is past the
+	 * visible window) and the leading "\x1b[?25l" keeps the cursor
+	 * hidden.
+	 */
+	if (cursor_term_row > 0 && cursor_term_col > 0)
+		sbuf_addf(out, "\x1b[%d;%dH\x1b[?25h", cursor_term_row,
+			  cursor_term_col);
 }
 
 /* ================================================================== */
@@ -1767,7 +1951,7 @@ void tui_log_search_clear(struct tui_log *L)
 static int line_match_after(const struct tui_log *L, int u, size_t min_start,
 			    size_t *start_out, size_t *end_out)
 {
-	if (u < 0 || u >= log_effective_n_lines(L))
+	if (u < 0 || u >= log_total(L))
 		return 0;
 	const char *s;
 	size_t slen;
@@ -1794,7 +1978,7 @@ static int line_match_after(const struct tui_log *L, int u, size_t min_start,
 static int line_match_before(const struct tui_log *L, int u, size_t max_start,
 			     size_t *start_out, size_t *end_out)
 {
-	if (u < 0 || u >= log_effective_n_lines(L))
+	if (u < 0 || u >= log_total(L))
 		return 0;
 	const char *s;
 	size_t slen;
@@ -1833,7 +2017,7 @@ static int search_compute_index(const struct tui_log *L)
 	if (!L->search || !L->search->re || L->search->current_line < 0)
 		return 0;
 	long long u_ll = log_global_to_user(L, L->search->current_line);
-	if (u_ll < 0 || u_ll >= log_effective_n_lines(L))
+	if (u_ll < 0 || u_ll >= log_total(L))
 		return 0;
 	int u = (int)u_ll;
 	int idx = 0;
@@ -1910,9 +2094,9 @@ int tui_log_search_set(struct tui_log *L, const char *pattern)
 	 * When a snapshot ceiling is active we only walk the lines
 	 * inside the snapshot; matches in lines that arrived past the
 	 * ceiling don't count as visible. */
-	int eff = log_effective_n_lines(L);
+	int total = log_total(L);
 	L->search->total_matches = 0;
-	for (int i = 0; i < eff; i++) {
+	for (int i = 0; i < total; i++) {
 		const char *s;
 		size_t slen;
 		log_get_line(L, i, &s, &slen);
@@ -1928,7 +2112,7 @@ int tui_log_search_set(struct tui_log *L, const char *pattern)
 	if (L->ceiling < 0)
 		L->anchor = -1;
 	if (L->search->total_matches > 0) {
-		for (int i = eff - 1; i >= 0; i--) {
+		for (int i = total - 1; i >= 0; i--) {
 			size_t ms, me;
 			if (line_match_before(L, i, SIZE_MAX, &ms, &me)) {
 				L->search->current_line =
@@ -1956,12 +2140,12 @@ int tui_log_search_next(struct tui_log *L)
 	 * the bottom of the body.  When the current match's line has
 	 * been evicted, fall back to the oldest surviving line so
 	 * navigation doesn't strand at "nothing found". */
-	int eff = log_effective_n_lines(L);
+	int total = log_total(L);
 	int from_line;
 	size_t from_offset;
 	if (L->search->current_line >= 0) {
 		long long u = log_global_to_user(L, L->search->current_line);
-		if (u < 0 || u >= eff) {
+		if (u < 0 || u >= total) {
 			from_line = 0;
 			from_offset = 0;
 		} else {
@@ -1970,7 +2154,7 @@ int tui_log_search_next(struct tui_log *L)
 		}
 	} else {
 		from_line = log_bottom_idx(L);
-		if (from_line < 0 || from_line >= eff)
+		if (from_line < 0 || from_line >= total)
 			from_line = 0;
 		from_offset = 0;
 	}
@@ -1980,7 +2164,7 @@ int tui_log_search_next(struct tui_log *L)
 	if (line_match_after(L, from_line, from_offset, &ms, &me)) {
 		found_at = from_line;
 	} else {
-		for (int i = from_line + 1; i < eff; i++) {
+		for (int i = from_line + 1; i < total; i++) {
 			if (line_match_after(L, i, 0, &ms, &me)) {
 				found_at = i;
 				break;
@@ -2007,13 +2191,13 @@ int tui_log_search_prev(struct tui_log *L)
 	if (!tui_log_search_active(L))
 		return 0;
 
-	int eff = log_effective_n_lines(L);
+	int total = log_total(L);
 	int from_line;
 	size_t upper_bound;
 	if (L->search->current_line >= 0) {
 		long long u = log_global_to_user(L, L->search->current_line);
-		if (u < 0 || u >= eff) {
-			from_line = eff - 1;
+		if (u < 0 || u >= total) {
+			from_line = total - 1;
 			upper_bound = SIZE_MAX;
 		} else {
 			from_line = (int)u;
@@ -2023,8 +2207,8 @@ int tui_log_search_prev(struct tui_log *L)
 		/* No current match yet: walk from the line at the bottom
 		 * of the body backward, scanning each line in full. */
 		from_line = log_bottom_idx(L);
-		if (from_line < 0 || from_line >= eff)
-			from_line = eff - 1;
+		if (from_line < 0 || from_line >= total)
+			from_line = total - 1;
 		upper_bound = SIZE_MAX;
 	}
 	if (from_line < 0)

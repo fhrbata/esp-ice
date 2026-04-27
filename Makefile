@@ -214,6 +214,7 @@ LIB_SRCS := \
 	tar.c \
 	toolenv.c \
 	tui.c \
+	vt100.c \
 	vendor/cacert/ca_bundle.c \
 	vendor/sha256/sha256.c \
 	chip.c \
