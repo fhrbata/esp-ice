@@ -28,15 +28,17 @@
  * undocumented panic-eject that exits from any state.
  *
  * Usage:
- *   ice target monitor --port <dev> [--baud <rate>] [--no-reset]
- *                      [--scrollback <lines>]
+ *   ice target monitor [--port <dev>] [--chip <name>] [--baud <rate>]
+ *                      [--no-reset] [--scrollback <lines>]
  */
+#include "esf_port.h"
 #include "ice.h"
 #include "serial.h"
 #include "tui.h"
 #include "vt100.h"
 
 static const char *opt_port;
+static const char *opt_chip;
 static int opt_baud = 115200;
 static int opt_no_reset;
 static int opt_scrollback = 10000;
@@ -45,7 +47,11 @@ static int opt_no_tui;
 /* clang-format off */
 static const struct option cmd_target_monitor_opts[] = {
 	OPT_STRING('p', "port", &opt_port, "dev",
-		   "serial port device (required)", serial_complete_port),
+		   "serial port device (auto-detected if omitted)",
+		   serial_complete_port),
+	OPT_STRING('c', "chip", &opt_chip, "name",
+		   "expected chip name for port auto-detection (e.g. esp32c6)",
+		   NULL),
 	OPT_INT('b', "baud", &opt_baud, "rate",
 		"baud rate (default: 115200)", NULL),
 	OPT_BOOL(0, "no-reset", &opt_no_reset,
@@ -83,12 +89,17 @@ static const struct cmd_manual target_monitor_manual = {
 	       "alt-screen, no inspect mode, no key bindings, just bytes "
 	       "from the serial port to stdout (and stdin, if any, to the "
 	       "port).  Use @b{--no-tui} to force the dumb path explicitly.")
+	H_PARA("When @b{--port} is omitted the first available ESP device is "
+	       "auto-detected.  Pass @b{--chip} to restrict the scan to a "
+	       "specific chip family.")
 	H_PARA("This command reads no project configuration.  It is the "
 	       "plumbing behind @b{ice monitor}, which resolves the port "
 	       "and baud rate from the project profile."),
 
 	.examples =
 	H_EXAMPLE("ice target monitor --port /dev/ttyUSB0")
+	H_EXAMPLE("ice target monitor")
+	H_EXAMPLE("ice target monitor --chip esp32c6")
 	H_EXAMPLE("ice target monitor -p /dev/ttyACM0 -b 460800")
 	H_EXAMPLE("ice target monitor -p /dev/ttyUSB0 --no-reset")
 	H_EXAMPLE("ice target monitor -p /dev/ttyUSB0 --scrollback 50000")
@@ -533,6 +544,7 @@ static int monitor_run_dumb(struct serial *s)
 int cmd_target_monitor(int argc, const char **argv)
 {
 	opt_port = NULL;
+	opt_chip = NULL;
 	opt_baud = 115200;
 	opt_no_reset = 0;
 	opt_scrollback = 10000;
@@ -542,10 +554,19 @@ int cmd_target_monitor(int argc, const char **argv)
 	if (argc > 0)
 		die("unexpected argument '%s'", argv[0]);
 
-	if (!opt_port)
-		die("--port is required");
 	if (opt_scrollback < 1)
 		die("--scrollback must be at least 1");
+
+	/* ---- resolve port (auto-detect if omitted) ---- */
+	char *autoport = NULL;
+	if (!opt_port) {
+		enum ice_chip scan_chip = ice_chip_from_idf_name(opt_chip);
+		autoport = esf_find_esp_port(scan_chip);
+		if (!autoport)
+			die("no ESP device found; use --port to specify a port "
+			    "explicitly");
+		opt_port = autoport;
+	}
 
 	unsigned baud = (unsigned)opt_baud;
 	struct serial *s;
@@ -576,6 +597,7 @@ int cmd_target_monitor(int argc, const char **argv)
 	if (opt_no_tui || !isatty(STDOUT_FILENO) || !isatty(STDIN_FILENO)) {
 		int dumb_rc = monitor_run_dumb(s);
 		serial_close(s);
+		free(autoport);
 		return dumb_rc;
 	}
 
@@ -894,6 +916,7 @@ done:
 	term_screen_leave();
 	term_raw_leave();
 	serial_close(s);
+	free(autoport);
 	fprintf(stderr, "--- exit ---" EOL);
 	return 0;
 }
