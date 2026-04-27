@@ -14,7 +14,7 @@
  * @c managed_components/, and emits the CMake include file the
  * build reads back (@c managed_components_list.temp.cmake).
  *
- * Invoked indirectly via @c sitecustomize.py -- CMake's
+ * Invoked indirectly via @c ice_shim -- CMake's
  * `python -m idf_component_manager.prepare_components
  * ... prepare_dependencies ...` becomes
  * `ice idf component prepare ...`.  Argument names keep Python's
@@ -57,8 +57,8 @@ static const struct cmd_manual idf_component_prepare_manual = {
 	       "idf_component_manager.prepare_components ... "
 	       "prepare_dependencies ...` invocation from "
 	       "@c tools/cmake/build.cmake.  Not intended for direct "
-	       "use; the sitecustomize.py shim installed by "
-	       "@b{ice init} rewrites the Python call into this one.")
+	       "use; the ice_shim installed by @b{ice init} rewrites "
+	       "the Python call into this one.")
 	H_PARA("Inputs: project manifests (discovered via "
 	       "@c --local_components_list_file) and the existing "
 	       "@c dependencies.lock.  Outputs: downloaded components "
