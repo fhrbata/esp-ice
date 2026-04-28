@@ -1,3 +1,20 @@
+## v0.10.0 (2026-04-28)
+
+### ✨ New Features
+
+- **idf,component**: print resolve / fetch status during prepare *(Frantisek Hrbata - a266e6a)*
+- **progress**: runtime Ctrl-v toggle between spinner and live output *(Frantisek Hrbata - ca34e9f)*
+- **progress**: wrapper/log rework with --ice-wrapped flag *(Frantisek Hrbata - e42a62f)*
+
+### 🐛 Bug Fixes
+
+- **idf,component**: verify component_hash against the unpacked dirhash *(Frantisek Hrbata - e5c3a2a)*
+
+### 🔧 Code Refactoring
+
+- **progress**: stream child output when stdout is not a tty *(Frantisek Hrbata - 49dc294)*
+
+
 ## v0.9.0 (2026-04-27)
 
 ### ✨ New Features
