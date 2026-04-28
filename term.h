@@ -128,18 +128,35 @@ void color_text(struct sbuf *out, const char *text, size_t len,
 /* ------------------------------------------------------------------ */
 
 /**
+ * @brief Keep signal generation enabled in raw mode.
+ *
+ * With this flag set, terminal driver still translates Ctrl-C into
+ * @c SIGINT (and the OS-equivalent on Windows: @c ENABLE_PROCESSED_INPUT
+ * is left on).  Use this when the caller wants character-at-a-time
+ * keystrokes for an in-place UI but still wants Ctrl-C to kill a
+ * spawned child / the whole process -- e.g. @c process_run_progress
+ * polling stdin for a Ctrl-O toggle while the user can still abort
+ * the underlying build with Ctrl-C.
+ */
+#define TERM_RAW_KEEP_SIG (1u << 0)
+
+/**
  * @brief Enter raw terminal mode on stdin.
  *
- * Character-at-a-time, no-echo, no signal generation.  Control
- * characters (Ctrl-C, Ctrl-], ...) arrive as regular bytes / key
- * events.  Output processing is left enabled so '\n' still produces
- * a carriage return.  Registers an atexit handler on first call to
- * restore the original mode.
+ * Character-at-a-time, no-echo.  Control characters (Ctrl-C, Ctrl-],
+ * ...) arrive as regular bytes / key events unless @ref
+ * TERM_RAW_KEEP_SIG is set in @p flags, in which case the kernel still
+ * generates signals from them.  Output processing is left enabled so
+ * '\n' still produces a carriage return.  Registers an atexit handler
+ * on first call to restore the original mode.
+ *
+ * @param flags  Bitmask of @c TERM_RAW_* flags; pass @c 0 for the
+ *               full raw behaviour (no signal generation).
  *
  * @return 0 on success, -errno on failure (-ENOTTY when stdin is
  *         not a terminal).
  */
-int term_raw_enter(void);
+int term_raw_enter(unsigned flags);
 
 /**
  * @brief Leave raw terminal mode.  Safe when not in raw mode (no-op).

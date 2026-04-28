@@ -120,10 +120,11 @@ static void restore_on_exit(void)
 		term_raw_leave();
 }
 
-int term_raw_enter(void)
+int term_raw_enter(unsigned flags)
 {
 	HANDLE h = GetStdHandle(STD_INPUT_HANDLE);
 	DWORD mode;
+	DWORD clear;
 
 	if (h == INVALID_HANDLE_VALUE)
 		return -EIO;
@@ -132,8 +133,16 @@ int term_raw_enter(void)
 		return -ENOTTY;
 
 	mode = saved_mode;
-	mode &= ~(DWORD)(ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT |
-			 ENABLE_PROCESSED_INPUT);
+	/*
+	 * ENABLE_PROCESSED_INPUT is the Windows analogue of POSIX ISIG --
+	 * with it on the console driver translates Ctrl-C into a CTRL_C_EVENT
+	 * (delivered via SetConsoleCtrlHandler).  Strip it for a fully raw
+	 * mode unless TERM_RAW_KEEP_SIG asks us to leave it in.
+	 */
+	clear = ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT;
+	if (!(flags & TERM_RAW_KEEP_SIG))
+		clear |= ENABLE_PROCESSED_INPUT;
+	mode &= ~clear;
 	/*
 	 * ENABLE_WINDOW_INPUT delivers WINDOW_BUFFER_SIZE_EVENT records we
 	 * rely on for resize notification.  We deliberately do NOT enable

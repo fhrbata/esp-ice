@@ -20,6 +20,15 @@
  * source file stays strict ASCII -- same convention used for the
  * box-drawing characters in term.h.
  *
+ * Runtime live-tail toggle: when stdin is a tty the read loop also
+ * polls for keystrokes (raw mode with @c TERM_RAW_KEEP_SIG so Ctrl-C
+ * still kills the child).  Pressing @b{Ctrl-v} flips between the
+ * spinner and verbose-mirror mode -- the spinner is cleared on the
+ * way in and child bytes stream straight to stdout; on the way back
+ * out a newline is emitted and the spinner resumes on a fresh row.
+ * The atexit handler in @c platform/{posix,win}/term.c restores the
+ * cooked mode if a signal kills the process.
+ *
  * Captured output lands at ~/.ice/logs/YYYYMMDD-HHMMSS-<slug>-<pid>.log
  * so every spawn produces a uniquely-named artefact regardless of which
  * command invoked the helper -- the PID disambiguates concurrent or
@@ -65,6 +74,11 @@ static const char *const spinner_frames[] = {
  * long enough that fast ops stay quiet. */
 #define PROGRESS_SLOW_HINT_MS 5000
 #define PROGRESS_SLOW_HINT " @[2]{[this can take a while]}"
+/* Always-on cue when raw mode is active so the user knows the toggle
+ * exists from the first frame.  Lowercase @c{v} on purpose -- @c{V}
+ * reads as Shift-V and would mislead users into pressing the wrong
+ * combo. */
+#define PROGRESS_CTRLV_HINT " @[2]{[Ctrl-v shows live output]}"
 
 static int progress_interactive(void) { return isatty(STDOUT_FILENO); }
 
@@ -133,22 +147,30 @@ static void format_log_header(char *out, const char *slug, const char *iso,
 	out[LOG_HEADER_BYTES - 1] = '\n';
 }
 
-static void progress_draw(const char *msg, int frame, unsigned long long start)
+static void progress_draw(const char *msg, int frame, unsigned long long start,
+			  int raw)
 {
 	unsigned long long elapsed_ms = mono_ms() - start;
 	char elapsed[32];
-	const char *hint = "";
+	const char *slow_hint = "";
+	const char *ctrlv_hint = "";
 
 	format_elapsed(elapsed, sizeof elapsed, elapsed_ms);
 	if (elapsed_ms >= PROGRESS_SLOW_HINT_MS)
-		hint = PROGRESS_SLOW_HINT;
+		slow_hint = PROGRESS_SLOW_HINT;
+	if (raw)
+		ctrlv_hint = PROGRESS_CTRLV_HINT;
 	/* \r returns to column 0; the line only grows in length as
-	 * seconds tick up (and once across the slow-hint threshold),
-	 * so no explicit clear sequence is needed between redraws.
+	 * seconds tick up (and the slow-hint clause appears once across
+	 * the threshold), so no explicit clear sequence is needed
+	 * between redraws.  Slow hint goes BEFORE the Ctrl-v hint so
+	 * the latter's position is stable -- "[this can take a while]"
+	 * is inserted in front, the Ctrl-v hint just shifts right.
 	 * Colors go through the @c{} / @[2]{} tokens so they degrade
 	 * to plain text on non-tty output. */
-	fprintf(stdout, "\r@c{%s} %s (%s)%s",
-		spinner_frames[frame % SPINNER_NFRAMES], msg, elapsed, hint);
+	fprintf(stdout, "\r@c{%s} %s (%s)%s%s",
+		spinner_frames[frame % SPINNER_NFRAMES], msg, elapsed,
+		slow_hint, ctrlv_hint);
 	fflush(stdout);
 }
 
@@ -224,6 +246,7 @@ int process_run_progress(struct process *proc, const char *msg,
 	 * stdout, where the parent's pipe captures them. */
 	int wrapped = global_wrapped;
 	int verbose = wrapped ? 1 : global_verbose;
+	int raw_active = 0;
 	unsigned long long start;
 	unsigned long long duration_ms;
 
@@ -272,17 +295,61 @@ int process_run_progress(struct process *proc, const char *msg,
 
 	interactive = progress_interactive();
 
+	/* Enter raw mode so we can poll for the @b{Ctrl-v} verbose
+	 * toggle while the child runs.  Skip when already verbose
+	 * (nothing to toggle to), wrapped (parent owns user-facing
+	 * output), or non-interactive (no tty / no stdin to listen
+	 * on).  TERM_RAW_KEEP_SIG keeps Ctrl-C signal generation so
+	 * the user can still abort. */
+	if (interactive && !verbose && !wrapped) {
+		if (term_raw_enter(TERM_RAW_KEEP_SIG) == 0)
+			raw_active = 1;
+	}
+
 	if (!verbose && interactive)
-		progress_draw(msg, frame, start);
+		progress_draw(msg, frame, start, raw_active);
 
 	for (;;) {
+		/* Drain any pending key events before sleeping in
+		 * pipe_read_timed -- a buffered Ctrl-v should flip
+		 * verbose mode on the next iteration without waiting
+		 * another 100 ms tick.  Multiple presses queued up in
+		 * one tick collapse to the last state, which matches
+		 * what the user just asked for. */
+		if (raw_active) {
+			struct term_event ev;
+			while (term_read_event(&ev, 0) == 1) {
+				if (ev.key != TK_CTRL('v'))
+					continue;
+				verbose = !verbose;
+				if (!interactive)
+					continue;
+				if (verbose) {
+					/* Spinner row → live tail: wipe
+					 * the spinner so the first child
+					 * bytes start at column 0. */
+					progress_clear();
+				} else {
+					/* Live tail → spinner: child output
+					 * may have left the cursor mid-line
+					 * with no trailing newline.  Start
+					 * a fresh row before progress_draw
+					 * lays the spinner down. */
+					fputs("\n", stdout);
+					fflush(stdout);
+					progress_draw(msg, frame, start,
+						      raw_active);
+				}
+			}
+		}
+
 		n = pipe_read_timed(proc->out, buf, sizeof buf,
 				    PROGRESS_POLL_MS);
 		if (n < 0)
 			break;
 		if (n == 0) {
 			if (!verbose && interactive)
-				progress_draw(msg, ++frame, start);
+				progress_draw(msg, ++frame, start, raw_active);
 			continue;
 		}
 		if (log)
@@ -292,6 +359,9 @@ int process_run_progress(struct process *proc, const char *msg,
 			fflush(stdout);
 		}
 	}
+
+	if (raw_active)
+		term_raw_leave();
 
 	rc = process_finish(proc);
 	duration_ms = mono_ms() - start;

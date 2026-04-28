@@ -1518,7 +1518,7 @@ int cmd_idf_menuconfig(int argc, const char **argv)
 	tui_list_set_footer(&v.list, "  Enter=open  /=search  ?=help  "
 				     "F1=keys  s=save  q=quit");
 
-	int rc = term_raw_enter();
+	int rc = term_raw_enter(0);
 	if (rc)
 		die("cannot enter raw mode: %s", strerror(-rc));
 	term_screen_enter();
