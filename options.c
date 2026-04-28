@@ -469,6 +469,15 @@ int parse_options(int argc, const char **argv, const struct cmd_desc *desc)
 		if (!strcmp(arg, "--ice-complete"))
 			print_completions(desc);
 
+		/* --ice-wrapped: hidden flag the porcelain inserts when
+		 * spawning its plumbing under process_run_progress.  Sets a
+		 * global so the child's own process_run_progress calls skip
+		 * log creation and stream output to the parent instead. */
+		if (!strcmp(arg, "--ice-wrapped")) {
+			global_wrapped = 1;
+			continue;
+		}
+
 		/* Long option */
 		if (arg[1] == '-') {
 			const char *val = NULL;

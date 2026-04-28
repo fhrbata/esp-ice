@@ -20,10 +20,12 @@
  * source file stays strict ASCII -- same convention used for the
  * box-drawing characters in term.h.
  *
- * Captured output lands at ~/.ice/logs/YYYYMMDD-HHMMSS-<slug>.log so
- * every spawn produces a uniquely-named artefact regardless of which
- * command invoked the helper.  The path is printed via hint() when
- * the child exits non-zero.
+ * Captured output lands at ~/.ice/logs/YYYYMMDD-HHMMSS-<slug>-<pid>.log
+ * so every spawn produces a uniquely-named artefact regardless of which
+ * command invoked the helper -- the PID disambiguates concurrent or
+ * nested invocations that share a wall-clock second, and the
+ * @c{<slug>-<pid>} suffix is also the typing-friendly identifier the
+ * failure hint prints (`ice log <slug>-<pid>`).
  */
 #include "ice.h"
 
@@ -92,41 +94,9 @@ static void build_log_path(struct sbuf *out, const char *slug)
 	else
 		sbuf_addf(out, "%s/logs/", ice_home());
 
-	sbuf_addf(out, "%04d%02d%02d-%02d%02d%02d-%s.log", tm->tm_year + 1900,
-		  tm->tm_mon + 1, tm->tm_mday, tm->tm_hour, tm->tm_min,
-		  tm->tm_sec, slug);
-}
-
-/*
- * Update @c <log-dir>/last to point at @p log_path.  Atomic rename
- * gives last-writer-wins with no torn reads even under concurrent
- * spawns; no lock needed.  Plain text (not a symlink) because
- * Windows symlink support is flaky.
- */
-static void update_last_pointer(const char *log_path)
-{
-	struct sbuf last_path = SBUF_INIT;
-	struct sbuf last_tmp = SBUF_INIT;
-	const char *sep = strrchr(log_path, '/');
-	FILE *fp;
-
-	if (!sep)
-		return;
-
-	sbuf_add(&last_path, log_path, (size_t)(sep - log_path));
-	sbuf_addstr(&last_path, "/last");
-	sbuf_addf(&last_tmp, "%s.tmp", last_path.buf);
-
-	fp = fopen(last_tmp.buf, "wb");
-	if (fp) {
-		fprintf(fp, "%s\n", log_path);
-		fclose(fp);
-		if (rename(last_tmp.buf, last_path.buf) != 0)
-			unlink(last_tmp.buf);
-	}
-
-	sbuf_release(&last_path);
-	sbuf_release(&last_tmp);
+	sbuf_addf(out, "%04d%02d%02d-%02d%02d%02d-%s-%d.log",
+		  tm->tm_year + 1900, tm->tm_mon + 1, tm->tm_mday, tm->tm_hour,
+		  tm->tm_min, tm->tm_sec, slug, self_pid());
 }
 
 /*
@@ -241,7 +211,7 @@ int process_run_progress(struct process *proc, const char *msg,
 	struct sbuf log_path = SBUF_INIT;
 	char header[LOG_HEADER_BYTES];
 	char iso[32];
-	FILE *log;
+	FILE *log = NULL;
 	char buf[4096];
 	char elapsed[32];
 	time_t start_wall;
@@ -249,52 +219,53 @@ int process_run_progress(struct process *proc, const char *msg,
 	int rc;
 	int frame = 0;
 	int interactive;
-	int verbose = global_verbose;
+	/* Wrapped child: parent owns the log file and the user-facing
+	 * output.  Force verbose so the read loop mirrors child bytes to
+	 * stdout, where the parent's pipe captures them. */
+	int wrapped = global_wrapped;
+	int verbose = wrapped ? 1 : global_verbose;
 	unsigned long long start;
 	unsigned long long duration_ms;
 
-	build_log_path(&log_path, slug);
+	if (!wrapped) {
+		build_log_path(&log_path, slug);
 
-	if (mkdirp_for_file(log_path.buf) < 0) {
-		err_errno("mkdirp: '%s'", log_path.buf);
-		sbuf_release(&log_path);
-		return -1;
+		if (mkdirp_for_file(log_path.buf) < 0) {
+			err_errno("mkdirp: '%s'", log_path.buf);
+			sbuf_release(&log_path);
+			return -1;
+		}
+
+		log = fopen(log_path.buf, "wb");
+		if (!log) {
+			err_errno("fopen: '%s'", log_path.buf);
+			sbuf_release(&log_path);
+			return -1;
+		}
+
+		/*
+		 * Reserve the header's bytes at file start; real values get
+		 * written back at close once duration and exit are known.  A
+		 * newline at the last byte keeps `head -1` output tidy even
+		 * if the run abends before we rewrite in place.
+		 */
+		memset(header, ' ', LOG_HEADER_BYTES);
+		header[LOG_HEADER_BYTES - 1] = '\n';
+		fwrite(header, 1, LOG_HEADER_BYTES, log);
 	}
-
-	log = fopen(log_path.buf, "wb");
-	if (!log) {
-		err_errno("fopen: '%s'", log_path.buf);
-		sbuf_release(&log_path);
-		return -1;
-	}
-
-	/*
-	 * Reserve the header's bytes at file start; real values get
-	 * written back at close once duration and exit are known.  A
-	 * newline at the last byte keeps `head -1` output tidy even if
-	 * the run abends before we rewrite in place.
-	 */
-	memset(header, ' ', LOG_HEADER_BYTES);
-	header[LOG_HEADER_BYTES - 1] = '\n';
-	fwrite(header, 1, LOG_HEADER_BYTES, log);
-
-	/*
-	 * Publish the log path for `ice log` before we run the child,
-	 * so even a kill -9 leaves `last` pointing at the file that did
-	 * get created.
-	 */
-	update_last_pointer(log_path.buf);
 
 	proc->pipe_out = 1;
 	proc->pipe_err = 0;
 	proc->merge_err = 1;
 
 	start_wall = time(NULL);
-	format_iso_ts(iso, sizeof iso, start_wall);
+	if (!wrapped)
+		format_iso_ts(iso, sizeof iso, start_wall);
 
 	start = mono_ms();
 	if (process_start(proc)) {
-		fclose(log);
+		if (log)
+			fclose(log);
 		sbuf_release(&log_path);
 		return -1;
 	}
@@ -314,7 +285,8 @@ int process_run_progress(struct process *proc, const char *msg,
 				progress_draw(msg, ++frame, start);
 			continue;
 		}
-		fwrite(buf, 1, (size_t)n, log);
+		if (log)
+			fwrite(buf, 1, (size_t)n, log);
 		if (verbose) {
 			fwrite(buf, 1, (size_t)n, stdout);
 			fflush(stdout);
@@ -324,16 +296,18 @@ int process_run_progress(struct process *proc, const char *msg,
 	rc = process_finish(proc);
 	duration_ms = mono_ms() - start;
 
-	/*
-	 * Rewrite the reserved header in place with the real values.
-	 * Fixed width keeps the seek simple: formatted output is
-	 * truncated to LOG_HEADER_BYTES - 1 and space-padded, and the
-	 * trailing newline stays at the same offset.
-	 */
-	format_log_header(header, slug, iso, duration_ms, rc);
-	fseek(log, 0, SEEK_SET);
-	fwrite(header, 1, LOG_HEADER_BYTES, log);
-	fclose(log);
+	if (log) {
+		/*
+		 * Rewrite the reserved header in place with the real values.
+		 * Fixed width keeps the seek simple: formatted output is
+		 * truncated to LOG_HEADER_BYTES - 1 and space-padded, and
+		 * the trailing newline stays at the same offset.
+		 */
+		format_log_header(header, slug, iso, duration_ms, rc);
+		fseek(log, 0, SEEK_SET);
+		fwrite(header, 1, LOG_HEADER_BYTES, log);
+		fclose(log);
+	}
 
 	if (!verbose && interactive)
 		progress_clear();
@@ -348,46 +322,51 @@ int process_run_progress(struct process *proc, const char *msg,
 		 * stdout first so the "failed" headline appears above
 		 * them. */
 		fflush(stdout);
-		/* Verbose mode already streamed everything live, so skip
-		 * the dump to avoid printing the same output twice. */
-		if (!verbose)
-			dump_failure_log(log_path.buf, on_fail);
-		/*
-		 * Scan the captured log against ESP-IDF's hints.yml and
-		 * emit HINT: lines for any matching rule.  Gated on the
-		 * same "configured project" check as `ice log` below --
-		 * outside a project we have no idf-path to find the rules
-		 * file.  --no-hints / core.no-hints opts out.  Format
-		 * matches ESP-IDF's yellow_print("HINT: ...") convention.
-		 */
-		if (!global_no_hints && config_has("_project.configured")) {
-			const char *idf = config_get("_project.idf-path");
-			if (idf && *idf) {
-				struct sbuf hints_yml = SBUF_INIT;
-				struct svec hints = SVEC_INIT;
-				sbuf_addf(&hints_yml,
-					  "%s/tools/idf_py_actions/hints.yml",
-					  idf);
-				hints_scan(hints_yml.buf, log_path.buf, &hints);
-				for (size_t i = 0; i < hints.nr; i++)
-					printf("@y{HINT: %s}\n", hints.v[i]);
-				fflush(stdout);
-				svec_clear(&hints);
-				sbuf_release(&hints_yml);
+		/* Wrapped: the parent will dump its own captured log and
+		 * print the user-facing hint -- the child stays quiet. */
+		if (!wrapped) {
+			/* Verbose mode already streamed everything live, so
+			 * skip the dump to avoid printing the same output
+			 * twice. */
+			if (!verbose)
+				dump_failure_log(log_path.buf, on_fail);
+			/*
+			 * Scan the captured log against ESP-IDF's hints.yml
+			 * and emit HINT: lines for any matching rule.  Gated
+			 * on the same "configured project" check as `ice log`
+			 * below -- outside a project we have no idf-path to
+			 * find the rules file.  --no-hints / core.no-hints
+			 * opts out.  Format matches ESP-IDF's
+			 * yellow_print("HINT: ...") convention.
+			 */
+			if (!global_no_hints &&
+			    config_has("_project.configured")) {
+				const char *idf =
+				    config_get("_project.idf-path");
+				if (idf && *idf) {
+					struct sbuf hints_yml = SBUF_INIT;
+					struct svec hints = SVEC_INIT;
+					sbuf_addf(&hints_yml,
+						  "%s/tools/idf_py_actions/"
+						  "hints.yml",
+						  idf);
+					hints_scan(hints_yml.buf, log_path.buf,
+						   &hints);
+					for (size_t i = 0; i < hints.nr; i++)
+						printf("@y{HINT: %s}\n",
+						       hints.v[i]);
+					fflush(stdout);
+					svec_clear(&hints);
+					sbuf_release(&hints_yml);
+				}
 			}
+			if (config_has("_project.configured"))
+				hint("see %s for details, or run "
+				     "@b{ice log %s-%d}",
+				     log_path.buf, slug, self_pid());
+			else
+				hint("see %s for details", log_path.buf);
 		}
-		/*
-		 * `ice log` only works inside a configured project (it
-		 * walks the profile's log-dir).  Gate the "run ice log"
-		 * hint on that so standalone commands (ice repo clone,
-		 * ice tools install) don't suggest a command that will
-		 * die for unrelated reasons.
-		 */
-		if (config_has("_project.configured"))
-			hint("see %s for details, or run @b{ice log}",
-			     log_path.buf);
-		else
-			hint("see %s for details", log_path.buf);
 	}
 
 	sbuf_release(&log_path);

@@ -90,12 +90,15 @@ static const struct cmd_manual manual = {
 int cmd_flash(int argc, const char **argv);
 int cmd___flash(int argc, const char **argv);
 
+/* No .needs: the porcelain wrapper does no setup_project of its own.
+ * The build runs inside the spawned __flash child (which carries
+ * .needs = PROJECT_BUILT), so all output -- cmake, port scan, flash
+ * protocol -- lands in a single log written by the parent. */
 const struct cmd_desc cmd_flash_desc = {
     .name = "flash",
     .fn = cmd_flash,
     .opts = cmd_flash_opts,
     .manual = &manual,
-    .needs = PROJECT_BUILT,
 };
 
 /* Hidden plumbing: does the actual work.  The porcelain cmd_flash
@@ -120,8 +123,12 @@ int cmd_flash(int argc, const char **argv)
 	int rc;
 
 	/* Capture argv BEFORE parse_options runs -- it compacts argv in
-	 * place and we need the original option tokens to forward. */
+	 * place and we need the original option tokens to forward.
+	 * --ice-wrapped is consumed by the child's parse_options (sets
+	 * global_wrapped); it tells the child's process_run_progress
+	 * calls to skip log creation and stream output through to here. */
 	svec_push(&cmd, exe ? exe : "ice");
+	svec_push(&cmd, "--ice-wrapped");
 	svec_push(&cmd, "__flash");
 	for (int i = 1; i < argc; i++)
 		svec_push(&cmd, argv[i]);

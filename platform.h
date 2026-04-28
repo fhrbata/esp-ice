@@ -263,6 +263,15 @@ int dir_foreach(const char *path, int (*cb)(const char *name, void *ud),
  */
 const char *process_exe(void);
 
+/**
+ * @brief Return the current process ID.
+ *
+ * POSIX: getpid().  Windows: GetCurrentProcessId().  Returned as int
+ * because callers only use it as an opaque uniqueness token (e.g. in
+ * log filenames); platform widths beyond int aren't relevant.
+ */
+int self_pid(void);
+
 /* ------------------------------------------------------------------ */
 /*  Child process API                                                 */
 /* ------------------------------------------------------------------ */
