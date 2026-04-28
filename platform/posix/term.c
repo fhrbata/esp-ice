@@ -64,9 +64,10 @@ static void restore_on_exit(void)
 		term_raw_leave();
 }
 
-int term_raw_enter(void)
+int term_raw_enter(unsigned flags)
 {
 	struct termios tio;
+	tcflag_t lflag_clear;
 
 	if (!isatty(STDIN_FILENO))
 		return -ENOTTY;
@@ -76,10 +77,15 @@ int term_raw_enter(void)
 
 	tio = saved_tio;
 
-	/* Raw input: no echo, no canonical buffering, no signal
-	 * generation, no extended input processing. */
+	/* Raw input: no echo, no canonical buffering, no extended input
+	 * processing.  ISIG (signal generation from Ctrl-C / Ctrl-Z / ...)
+	 * is left intact when TERM_RAW_KEEP_SIG is requested so the caller
+	 * can poll stdin while still letting Ctrl-C kill the process. */
 	tio.c_iflag &= (tcflag_t) ~(BRKINT | ICRNL | INPCK | ISTRIP | IXON);
-	tio.c_lflag &= (tcflag_t) ~(ECHO | ICANON | IEXTEN | ISIG);
+	lflag_clear = ECHO | ICANON | IEXTEN;
+	if (!(flags & TERM_RAW_KEEP_SIG))
+		lflag_clear |= ISIG;
+	tio.c_lflag &= ~lflag_clear;
 	tio.c_cflag |= CS8;
 	tio.c_cc[VMIN] = 0;
 	tio.c_cc[VTIME] = 0;

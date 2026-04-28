@@ -20,10 +20,21 @@
  * source file stays strict ASCII -- same convention used for the
  * box-drawing characters in term.h.
  *
- * Captured output lands at ~/.ice/logs/YYYYMMDD-HHMMSS-<slug>.log so
- * every spawn produces a uniquely-named artefact regardless of which
- * command invoked the helper.  The path is printed via hint() when
- * the child exits non-zero.
+ * Runtime live-tail toggle: when stdin is a tty the read loop also
+ * polls for keystrokes (raw mode with @c TERM_RAW_KEEP_SIG so Ctrl-C
+ * still kills the child).  Pressing @b{Ctrl-v} flips between the
+ * spinner and verbose-mirror mode -- the spinner is cleared on the
+ * way in and child bytes stream straight to stdout; on the way back
+ * out a newline is emitted and the spinner resumes on a fresh row.
+ * The atexit handler in @c platform/{posix,win}/term.c restores the
+ * cooked mode if a signal kills the process.
+ *
+ * Captured output lands at ~/.ice/logs/YYYYMMDD-HHMMSS-<slug>-<pid>.log
+ * so every spawn produces a uniquely-named artefact regardless of which
+ * command invoked the helper -- the PID disambiguates concurrent or
+ * nested invocations that share a wall-clock second, and the
+ * @c{<slug>-<pid>} suffix is also the typing-friendly identifier the
+ * failure hint prints (`ice log <slug>-<pid>`).
  */
 #include "ice.h"
 
@@ -63,6 +74,11 @@ static const char *const spinner_frames[] = {
  * long enough that fast ops stay quiet. */
 #define PROGRESS_SLOW_HINT_MS 5000
 #define PROGRESS_SLOW_HINT " @[2]{[this can take a while]}"
+/* Always-on cue when raw mode is active so the user knows the toggle
+ * exists from the first frame.  Lowercase @c{v} on purpose -- @c{V}
+ * reads as Shift-V and would mislead users into pressing the wrong
+ * combo. */
+#define PROGRESS_CTRLV_HINT " @[2]{[Ctrl-v shows live output]}"
 
 static int progress_interactive(void) { return isatty(STDOUT_FILENO); }
 
@@ -92,41 +108,9 @@ static void build_log_path(struct sbuf *out, const char *slug)
 	else
 		sbuf_addf(out, "%s/logs/", ice_home());
 
-	sbuf_addf(out, "%04d%02d%02d-%02d%02d%02d-%s.log", tm->tm_year + 1900,
-		  tm->tm_mon + 1, tm->tm_mday, tm->tm_hour, tm->tm_min,
-		  tm->tm_sec, slug);
-}
-
-/*
- * Update @c <log-dir>/last to point at @p log_path.  Atomic rename
- * gives last-writer-wins with no torn reads even under concurrent
- * spawns; no lock needed.  Plain text (not a symlink) because
- * Windows symlink support is flaky.
- */
-static void update_last_pointer(const char *log_path)
-{
-	struct sbuf last_path = SBUF_INIT;
-	struct sbuf last_tmp = SBUF_INIT;
-	const char *sep = strrchr(log_path, '/');
-	FILE *fp;
-
-	if (!sep)
-		return;
-
-	sbuf_add(&last_path, log_path, (size_t)(sep - log_path));
-	sbuf_addstr(&last_path, "/last");
-	sbuf_addf(&last_tmp, "%s.tmp", last_path.buf);
-
-	fp = fopen(last_tmp.buf, "wb");
-	if (fp) {
-		fprintf(fp, "%s\n", log_path);
-		fclose(fp);
-		if (rename(last_tmp.buf, last_path.buf) != 0)
-			unlink(last_tmp.buf);
-	}
-
-	sbuf_release(&last_path);
-	sbuf_release(&last_tmp);
+	sbuf_addf(out, "%04d%02d%02d-%02d%02d%02d-%s-%d.log",
+		  tm->tm_year + 1900, tm->tm_mon + 1, tm->tm_mday, tm->tm_hour,
+		  tm->tm_min, tm->tm_sec, slug, self_pid());
 }
 
 /*
@@ -163,22 +147,30 @@ static void format_log_header(char *out, const char *slug, const char *iso,
 	out[LOG_HEADER_BYTES - 1] = '\n';
 }
 
-static void progress_draw(const char *msg, int frame, unsigned long long start)
+static void progress_draw(const char *msg, int frame, unsigned long long start,
+			  int raw)
 {
 	unsigned long long elapsed_ms = mono_ms() - start;
 	char elapsed[32];
-	const char *hint = "";
+	const char *slow_hint = "";
+	const char *ctrlv_hint = "";
 
 	format_elapsed(elapsed, sizeof elapsed, elapsed_ms);
 	if (elapsed_ms >= PROGRESS_SLOW_HINT_MS)
-		hint = PROGRESS_SLOW_HINT;
+		slow_hint = PROGRESS_SLOW_HINT;
+	if (raw)
+		ctrlv_hint = PROGRESS_CTRLV_HINT;
 	/* \r returns to column 0; the line only grows in length as
-	 * seconds tick up (and once across the slow-hint threshold),
-	 * so no explicit clear sequence is needed between redraws.
+	 * seconds tick up (and the slow-hint clause appears once across
+	 * the threshold), so no explicit clear sequence is needed
+	 * between redraws.  Slow hint goes BEFORE the Ctrl-v hint so
+	 * the latter's position is stable -- "[this can take a while]"
+	 * is inserted in front, the Ctrl-v hint just shifts right.
 	 * Colors go through the @c{} / @[2]{} tokens so they degrade
 	 * to plain text on non-tty output. */
-	fprintf(stdout, "\r@c{%s} %s (%s)%s",
-		spinner_frames[frame % SPINNER_NFRAMES], msg, elapsed, hint);
+	fprintf(stdout, "\r@c{%s} %s (%s)%s%s",
+		spinner_frames[frame % SPINNER_NFRAMES], msg, elapsed,
+		slow_hint, ctrlv_hint);
 	fflush(stdout);
 }
 
@@ -241,99 +233,155 @@ int process_run_progress(struct process *proc, const char *msg,
 	struct sbuf log_path = SBUF_INIT;
 	char header[LOG_HEADER_BYTES];
 	char iso[32];
-	FILE *log;
+	FILE *log = NULL;
 	char buf[4096];
 	char elapsed[32];
 	time_t start_wall;
 	ssize_t n;
 	int rc;
 	int frame = 0;
-	int interactive;
-	int verbose = global_verbose;
+	int interactive = progress_interactive();
+	/* Wrapped child: parent owns the log file and the user-facing
+	 * output.  Force verbose so the read loop mirrors child bytes to
+	 * stdout, where the parent's pipe captures them.
+	 *
+	 * Non-interactive (piped, redirected, CI): no spinner is
+	 * possible, so default to verbose -- silence is the wrong
+	 * default when there's no progress UI to fall back to.  Users
+	 * who really want quiet can redirect stderr (where the spinner
+	 * would have lived) and parse the captured log themselves. */
+	int wrapped = global_wrapped;
+	int verbose = (wrapped || !interactive) ? 1 : global_verbose;
+	int raw_active = 0;
 	unsigned long long start;
 	unsigned long long duration_ms;
 
-	build_log_path(&log_path, slug);
+	if (!wrapped) {
+		build_log_path(&log_path, slug);
 
-	if (mkdirp_for_file(log_path.buf) < 0) {
-		err_errno("mkdirp: '%s'", log_path.buf);
-		sbuf_release(&log_path);
-		return -1;
+		if (mkdirp_for_file(log_path.buf) < 0) {
+			err_errno("mkdirp: '%s'", log_path.buf);
+			sbuf_release(&log_path);
+			return -1;
+		}
+
+		log = fopen(log_path.buf, "wb");
+		if (!log) {
+			err_errno("fopen: '%s'", log_path.buf);
+			sbuf_release(&log_path);
+			return -1;
+		}
+
+		/*
+		 * Reserve the header's bytes at file start; real values get
+		 * written back at close once duration and exit are known.  A
+		 * newline at the last byte keeps `head -1` output tidy even
+		 * if the run abends before we rewrite in place.
+		 */
+		memset(header, ' ', LOG_HEADER_BYTES);
+		header[LOG_HEADER_BYTES - 1] = '\n';
+		fwrite(header, 1, LOG_HEADER_BYTES, log);
 	}
-
-	log = fopen(log_path.buf, "wb");
-	if (!log) {
-		err_errno("fopen: '%s'", log_path.buf);
-		sbuf_release(&log_path);
-		return -1;
-	}
-
-	/*
-	 * Reserve the header's bytes at file start; real values get
-	 * written back at close once duration and exit are known.  A
-	 * newline at the last byte keeps `head -1` output tidy even if
-	 * the run abends before we rewrite in place.
-	 */
-	memset(header, ' ', LOG_HEADER_BYTES);
-	header[LOG_HEADER_BYTES - 1] = '\n';
-	fwrite(header, 1, LOG_HEADER_BYTES, log);
-
-	/*
-	 * Publish the log path for `ice log` before we run the child,
-	 * so even a kill -9 leaves `last` pointing at the file that did
-	 * get created.
-	 */
-	update_last_pointer(log_path.buf);
 
 	proc->pipe_out = 1;
 	proc->pipe_err = 0;
 	proc->merge_err = 1;
 
 	start_wall = time(NULL);
-	format_iso_ts(iso, sizeof iso, start_wall);
+	if (!wrapped)
+		format_iso_ts(iso, sizeof iso, start_wall);
 
 	start = mono_ms();
 	if (process_start(proc)) {
-		fclose(log);
+		if (log)
+			fclose(log);
 		sbuf_release(&log_path);
 		return -1;
 	}
 
-	interactive = progress_interactive();
+	/* Enter raw mode so we can poll for the @b{Ctrl-v} verbose
+	 * toggle while the child runs.  Skip when already verbose
+	 * (nothing to toggle to), wrapped (parent owns user-facing
+	 * output), or non-interactive (no tty / no stdin to listen
+	 * on).  TERM_RAW_KEEP_SIG keeps Ctrl-C signal generation so
+	 * the user can still abort. */
+	if (interactive && !verbose && !wrapped) {
+		if (term_raw_enter(TERM_RAW_KEEP_SIG) == 0)
+			raw_active = 1;
+	}
 
 	if (!verbose && interactive)
-		progress_draw(msg, frame, start);
+		progress_draw(msg, frame, start, raw_active);
 
 	for (;;) {
+		/* Drain any pending key events before sleeping in
+		 * pipe_read_timed -- a buffered Ctrl-v should flip
+		 * verbose mode on the next iteration without waiting
+		 * another 100 ms tick.  Multiple presses queued up in
+		 * one tick collapse to the last state, which matches
+		 * what the user just asked for. */
+		if (raw_active) {
+			struct term_event ev;
+			while (term_read_event(&ev, 0) == 1) {
+				if (ev.key != TK_CTRL('v'))
+					continue;
+				verbose = !verbose;
+				if (!interactive)
+					continue;
+				if (verbose) {
+					/* Spinner row → live tail: wipe
+					 * the spinner so the first child
+					 * bytes start at column 0. */
+					progress_clear();
+				} else {
+					/* Live tail → spinner: child output
+					 * may have left the cursor mid-line
+					 * with no trailing newline.  Start
+					 * a fresh row before progress_draw
+					 * lays the spinner down. */
+					fputs("\n", stdout);
+					fflush(stdout);
+					progress_draw(msg, frame, start,
+						      raw_active);
+				}
+			}
+		}
+
 		n = pipe_read_timed(proc->out, buf, sizeof buf,
 				    PROGRESS_POLL_MS);
 		if (n < 0)
 			break;
 		if (n == 0) {
 			if (!verbose && interactive)
-				progress_draw(msg, ++frame, start);
+				progress_draw(msg, ++frame, start, raw_active);
 			continue;
 		}
-		fwrite(buf, 1, (size_t)n, log);
+		if (log)
+			fwrite(buf, 1, (size_t)n, log);
 		if (verbose) {
 			fwrite(buf, 1, (size_t)n, stdout);
 			fflush(stdout);
 		}
 	}
 
+	if (raw_active)
+		term_raw_leave();
+
 	rc = process_finish(proc);
 	duration_ms = mono_ms() - start;
 
-	/*
-	 * Rewrite the reserved header in place with the real values.
-	 * Fixed width keeps the seek simple: formatted output is
-	 * truncated to LOG_HEADER_BYTES - 1 and space-padded, and the
-	 * trailing newline stays at the same offset.
-	 */
-	format_log_header(header, slug, iso, duration_ms, rc);
-	fseek(log, 0, SEEK_SET);
-	fwrite(header, 1, LOG_HEADER_BYTES, log);
-	fclose(log);
+	if (log) {
+		/*
+		 * Rewrite the reserved header in place with the real values.
+		 * Fixed width keeps the seek simple: formatted output is
+		 * truncated to LOG_HEADER_BYTES - 1 and space-padded, and
+		 * the trailing newline stays at the same offset.
+		 */
+		format_log_header(header, slug, iso, duration_ms, rc);
+		fseek(log, 0, SEEK_SET);
+		fwrite(header, 1, LOG_HEADER_BYTES, log);
+		fclose(log);
+	}
 
 	if (!verbose && interactive)
 		progress_clear();
@@ -348,46 +396,51 @@ int process_run_progress(struct process *proc, const char *msg,
 		 * stdout first so the "failed" headline appears above
 		 * them. */
 		fflush(stdout);
-		/* Verbose mode already streamed everything live, so skip
-		 * the dump to avoid printing the same output twice. */
-		if (!verbose)
-			dump_failure_log(log_path.buf, on_fail);
-		/*
-		 * Scan the captured log against ESP-IDF's hints.yml and
-		 * emit HINT: lines for any matching rule.  Gated on the
-		 * same "configured project" check as `ice log` below --
-		 * outside a project we have no idf-path to find the rules
-		 * file.  --no-hints / core.no-hints opts out.  Format
-		 * matches ESP-IDF's yellow_print("HINT: ...") convention.
-		 */
-		if (!global_no_hints && config_has("_project.configured")) {
-			const char *idf = config_get("_project.idf-path");
-			if (idf && *idf) {
-				struct sbuf hints_yml = SBUF_INIT;
-				struct svec hints = SVEC_INIT;
-				sbuf_addf(&hints_yml,
-					  "%s/tools/idf_py_actions/hints.yml",
-					  idf);
-				hints_scan(hints_yml.buf, log_path.buf, &hints);
-				for (size_t i = 0; i < hints.nr; i++)
-					printf("@y{HINT: %s}\n", hints.v[i]);
-				fflush(stdout);
-				svec_clear(&hints);
-				sbuf_release(&hints_yml);
+		/* Wrapped: the parent will dump its own captured log and
+		 * print the user-facing hint -- the child stays quiet. */
+		if (!wrapped) {
+			/* Verbose mode already streamed everything live, so
+			 * skip the dump to avoid printing the same output
+			 * twice. */
+			if (!verbose)
+				dump_failure_log(log_path.buf, on_fail);
+			/*
+			 * Scan the captured log against ESP-IDF's hints.yml
+			 * and emit HINT: lines for any matching rule.  Gated
+			 * on the same "configured project" check as `ice log`
+			 * below -- outside a project we have no idf-path to
+			 * find the rules file.  --no-hints / core.no-hints
+			 * opts out.  Format matches ESP-IDF's
+			 * yellow_print("HINT: ...") convention.
+			 */
+			if (!global_no_hints &&
+			    config_has("_project.configured")) {
+				const char *idf =
+				    config_get("_project.idf-path");
+				if (idf && *idf) {
+					struct sbuf hints_yml = SBUF_INIT;
+					struct svec hints = SVEC_INIT;
+					sbuf_addf(&hints_yml,
+						  "%s/tools/idf_py_actions/"
+						  "hints.yml",
+						  idf);
+					hints_scan(hints_yml.buf, log_path.buf,
+						   &hints);
+					for (size_t i = 0; i < hints.nr; i++)
+						printf("@y{HINT: %s}\n",
+						       hints.v[i]);
+					fflush(stdout);
+					svec_clear(&hints);
+					sbuf_release(&hints_yml);
+				}
 			}
+			if (config_has("_project.configured"))
+				hint("see %s for details, or run "
+				     "@b{ice log %s-%d}",
+				     log_path.buf, slug, self_pid());
+			else
+				hint("see %s for details", log_path.buf);
 		}
-		/*
-		 * `ice log` only works inside a configured project (it
-		 * walks the profile's log-dir).  Gate the "run ice log"
-		 * hint on that so standalone commands (ice repo clone,
-		 * ice tools install) don't suggest a command that will
-		 * die for unrelated reasons.
-		 */
-		if (config_has("_project.configured"))
-			hint("see %s for details, or run @b{ice log}",
-			     log_path.buf);
-		else
-			hint("see %s for details", log_path.buf);
 	}
 
 	sbuf_release(&log_path);

@@ -114,6 +114,7 @@ int global_no_hints;
 int global_no_pager;
 int global_version;
 int global_verbose;
+int global_wrapped;
 const char *global_profile;
 
 static void complete_aliases(void)

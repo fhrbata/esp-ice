@@ -601,7 +601,7 @@ int cmd_target_monitor(int argc, const char **argv)
 		return dumb_rc;
 	}
 
-	rc = term_raw_enter();
+	rc = term_raw_enter(0);
 	if (rc) {
 		serial_close(s);
 		die("cannot set terminal to raw mode: %s", strerror(-rc));

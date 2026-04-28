@@ -10,11 +10,13 @@
  *        process_run_progress.
  *
  * Each process_run_progress() call writes its full tee'd output to a
- * timestamped file under @c <build>/.ice/logs/ (or @c ~/.ice/logs/
- * when no project is in scope) and updates @c <log-dir>/last to
- * point at the newest one.  @b{ice log} is the reader:
+ * timestamped + PID-tagged file under @c <build>/.ice/logs/ (or @c
+ * ~/.ice/logs/ when no project is in scope).  @b{ice log} is the reader:
  *
- *   ice log             — view the log pointed to by `last`.
+ *   ice log             — view the newest log (by filename timestamp).
+ *   ice log <name>      — view the unique log whose filename contains
+ *                         <name> as a substring (e.g. @c{flash-3640});
+ *                         errors out on zero matches or ambiguity.
  *   ice log -n N        — view the Nth-most-recent log.
  *   ice log --all       — one line per log with timings and exit
  *                         codes, oldest last.
@@ -25,6 +27,10 @@
 
 static int opt_n;
 static int opt_all;
+
+/* Forward decl: completion callback wired into the option table needs
+ * to see collect_logs() defined further down. */
+static void complete_log_names(void);
 
 /* clang-format off */
 static const struct cmd_manual log_manual = {
@@ -38,13 +44,17 @@ static const struct cmd_manual log_manual = {
 	       "commands that run inside a configured project, and "
 	       "under @b{~/.ice/logs/} for standalone commands "
 	       "(@b{ice repo clone}, @b{ice tools install}, ...).")
-	H_PARA("By default the newest log is colorised and paged.  "
+	H_PARA("With no argument the newest log is colorised and paged.  "
+	       "Pass @b{<name>} to pick a specific log by substring match "
+	       "against its filename -- the @b{<slug>-<pid>} suffix printed "
+	       "in run hints (e.g. @b{flash-3640}) is the canonical form.  "
 	       "@b{-n <N>} selects the Nth most recent (1 = newest); "
 	       "@b{--all} lists every log for the active profile with "
 	       "start time, slug, exit code and duration."),
 
 	.examples =
 	H_EXAMPLE("ice log")
+	H_EXAMPLE("ice log flash-3640")
 	H_EXAMPLE("ice log -n 2")
 	H_EXAMPLE("ice log --all"),
 
@@ -65,6 +75,7 @@ static const struct option cmd_log_opts[] = {
     OPT_INT('n', NULL, &opt_n, "N", "view the Nth most recent log (1 = newest)",
 	    NULL),
     OPT_BOOL(0, "all", &opt_all, "list all logs for this profile"),
+    OPT_POSITIONAL_OPT("name", complete_log_names),
     OPT_END(),
 };
 
@@ -134,10 +145,9 @@ static int display_log(const char *path)
 }
 
 /*
- * Resolve the path of the log selected by @p n (1-indexed from
- * newest).  @p n = 0 means "use the `last` pointer" which shortcuts
- * any directory enumeration.  Caller owns @p out and must sbuf_release
- * it; on success @p out holds the absolute log path.
+ * Resolve the path of the log selected by @p n (1-indexed from newest).
+ * Caller owns @p out and must sbuf_release it; on success @p out holds
+ * the absolute log path.
  */
 static void resolve_log_by_index(const char *log_dir, int n, struct sbuf *out)
 {
@@ -159,6 +169,44 @@ static void resolve_log_by_index(const char *log_dir, int n, struct sbuf *out)
 	/* logs is oldest-first after sort; newest is index nr-1. */
 	sbuf_addf(out, "%s/%s", log_dir, logs.v[logs.nr - (size_t)n]);
 	svec_clear(&logs);
+}
+
+/*
+ * Resolve a log filename by substring match against @p name.  Walks the
+ * sorted log listing and collects every entry whose filename contains
+ * @p name.  Zero matches dies with a clear error; multiple matches die
+ * after listing the candidates (newest first) so the user can refine.
+ */
+static void resolve_log_by_name(const char *log_dir, const char *name,
+				struct sbuf *out)
+{
+	struct svec logs = SVEC_INIT;
+	struct svec matches = SVEC_INIT;
+
+	collect_logs(log_dir, &logs);
+	for (size_t i = 0; i < logs.nr; i++) {
+		if (strstr(logs.v[i], name))
+			svec_push(&matches, logs.v[i]);
+	}
+
+	if (matches.nr == 0) {
+		svec_clear(&logs);
+		svec_clear(&matches);
+		die("no log under @b{%s} matches '%s'", log_dir, name);
+	}
+
+	if (matches.nr > 1) {
+		fprintf(stderr, "logs matching '%s':\n", name);
+		for (size_t i = matches.nr; i > 0; i--)
+			fprintf(stderr, "  %s\n", matches.v[i - 1]);
+		svec_clear(&logs);
+		svec_clear(&matches);
+		die("'%s' matches multiple logs; be more specific", name);
+	}
+
+	sbuf_addf(out, "%s/%s", log_dir, matches.v[0]);
+	svec_clear(&logs);
+	svec_clear(&matches);
 }
 
 /*
@@ -271,40 +319,58 @@ static int list_all(const char *log_dir)
 	return 0;
 }
 
-static int show_last(const char *log_dir)
+/*
+ * Completion: emit each log's @c{<slug>-<pid>} stem (the typing-friendly
+ * tail of @c YYYYMMDD-HHMMSS-<slug>-<pid>.log) with its date/time as a
+ * description.  Newest first so menu-style completions show recent runs
+ * at the top.  Silent when the project has no log dir or the dir is
+ * empty -- the shell falls back to no candidates.
+ */
+static void complete_log_names(void)
 {
-	struct sbuf last_path = SBUF_INIT;
-	struct sbuf target = SBUF_INIT;
-	int rc;
+	const char *log_dir = config_get("_project.log-dir");
+	struct svec logs = SVEC_INIT;
 
-	sbuf_addf(&last_path, "%s/last", log_dir);
-	if (sbuf_read_file(&target, last_path.buf) < 0) {
-		sbuf_release(&last_path);
-		sbuf_release(&target);
-		die("no last-log pointer at @b{%s}", log_dir);
+	if (!log_dir || !*log_dir)
+		return;
+
+	collect_logs(log_dir, &logs);
+	for (size_t i = logs.nr; i > 0; i--) {
+		const char *name = logs.v[i - 1];
+		size_t n = strlen(name);
+		struct sbuf stem = SBUF_INIT;
+		char desc[64];
+
+		/* "YYYYMMDD-HHMMSS-" prefix (16 bytes) + ".log" (4 bytes). */
+		if (n <= 16 + 4)
+			continue;
+		sbuf_add(&stem, name + 16, n - 16 - 4);
+		snprintf(desc, sizeof(desc), "%.4s-%.2s-%.2s %.2s:%.2s:%.2s",
+			 name, name + 4, name + 6, name + 9, name + 11,
+			 name + 13);
+		complete_emit(stem.buf, desc);
+		sbuf_release(&stem);
 	}
-	sbuf_rtrim(&target);
-
-	if (!target.len)
-		die("last-log pointer at @b{%s} is empty", last_path.buf);
-
-	rc = display_log(target.buf);
-
-	sbuf_release(&last_path);
-	sbuf_release(&target);
-	return rc;
+	svec_clear(&logs);
 }
 
 int cmd_log(int argc, const char **argv)
 {
 	const char *log_dir;
+	const char *name = NULL;
+	struct sbuf path = SBUF_INIT;
 	int rc;
 
 	argc = parse_options(argc, argv, &cmd_log_desc);
-	if (argc > 0)
+	if (argc > 1)
 		die("too many arguments");
+	if (argc == 1)
+		name = argv[0];
+
 	if (opt_n && opt_all)
 		die("-n and --all are mutually exclusive");
+	if (name && (opt_n || opt_all))
+		die("<name> is mutually exclusive with -n and --all");
 	if (opt_n < 0)
 		die("-n argument must be >= 1");
 
@@ -315,14 +381,12 @@ int cmd_log(int argc, const char **argv)
 	if (opt_all)
 		return list_all(log_dir);
 
-	if (opt_n) {
-		struct sbuf path = SBUF_INIT;
+	if (name)
+		resolve_log_by_name(log_dir, name, &path);
+	else
+		resolve_log_by_index(log_dir, opt_n ? opt_n : 1, &path);
 
-		resolve_log_by_index(log_dir, opt_n, &path);
-		rc = display_log(path.buf);
-		sbuf_release(&path);
-		return rc;
-	}
-
-	return show_last(log_dir);
+	rc = display_log(path.buf);
+	sbuf_release(&path);
+	return rc;
 }

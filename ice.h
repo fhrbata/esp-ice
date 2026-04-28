@@ -205,6 +205,7 @@ extern int global_no_hints;
 extern int global_no_pager;
 extern int global_version;
 extern int global_verbose;
+extern int global_wrapped;
 extern const char *global_profile;
 
 /**

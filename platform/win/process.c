@@ -317,6 +317,8 @@ unsigned long long mono_ms(void)
 
 void delay_ms(uint32_t ms) { Sleep((DWORD)ms); }
 
+int self_pid(void) { return (int)GetCurrentProcessId(); }
+
 const char *process_exe(void)
 {
 	static char buf[4096];

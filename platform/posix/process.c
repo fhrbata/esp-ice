@@ -255,3 +255,5 @@ void delay_ms(uint32_t ms)
 	ts.tv_nsec = (long)((ms % 1000u) * 1000000u);
 	nanosleep(&ts, NULL);
 }
+
+int self_pid(void) { return (int)getpid(); }

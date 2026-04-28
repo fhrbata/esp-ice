@@ -93,7 +93,9 @@ const struct cmd_desc cmd_target_flash_desc = {
  *
  * On a color-capable tty: emits \r so repeated calls rewrite the same
  * line; done=1 appends \n to commit it.  On plain output (pipe, CI):
- * prints a single line only when done=1.
+ * emits two lines per binary -- one when the write starts (so users
+ * get incremental output instead of multi-second silence on a long
+ * binary) and one when it completes.  Mid-write updates are dropped.
  */
 static void print_progress(const char *label, uint32_t offset, uint32_t written,
 			   uint32_t total, int done)
@@ -114,9 +116,14 @@ static void print_progress(const char *label, uint32_t offset, uint32_t written,
 		if (done)
 			printf("  @G{done}\n");
 		fflush(stdout);
+	} else if (written == 0 && !done) {
+		printf("  %-24s  0x%05" PRIx32 "  %6.1f KB  flashing...\n",
+		       label, offset, total / 1024.0);
+		fflush(stdout);
 	} else if (done) {
-		printf("  %-24s  0x%05" PRIx32 "  %6.1f KB\n", label, offset,
-		       total / 1024.0);
+		printf("  %-24s  0x%05" PRIx32 "  %6.1f KB  done\n", label,
+		       offset, total / 1024.0);
+		fflush(stdout);
 	}
 }
 
