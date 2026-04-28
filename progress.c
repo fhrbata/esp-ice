@@ -240,12 +240,18 @@ int process_run_progress(struct process *proc, const char *msg,
 	ssize_t n;
 	int rc;
 	int frame = 0;
-	int interactive;
+	int interactive = progress_interactive();
 	/* Wrapped child: parent owns the log file and the user-facing
 	 * output.  Force verbose so the read loop mirrors child bytes to
-	 * stdout, where the parent's pipe captures them. */
+	 * stdout, where the parent's pipe captures them.
+	 *
+	 * Non-interactive (piped, redirected, CI): no spinner is
+	 * possible, so default to verbose -- silence is the wrong
+	 * default when there's no progress UI to fall back to.  Users
+	 * who really want quiet can redirect stderr (where the spinner
+	 * would have lived) and parse the captured log themselves. */
 	int wrapped = global_wrapped;
-	int verbose = wrapped ? 1 : global_verbose;
+	int verbose = (wrapped || !interactive) ? 1 : global_verbose;
 	int raw_active = 0;
 	unsigned long long start;
 	unsigned long long duration_ms;
@@ -292,8 +298,6 @@ int process_run_progress(struct process *proc, const char *msg,
 		sbuf_release(&log_path);
 		return -1;
 	}
-
-	interactive = progress_interactive();
 
 	/* Enter raw mode so we can poll for the @b{Ctrl-v} verbose
 	 * toggle while the child runs.  Skip when already verbose
