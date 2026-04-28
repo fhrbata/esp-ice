@@ -745,6 +745,12 @@ int cmd_idf_component_prepare(int argc, const char **argv)
 			size_t resolved_nr = 0;
 			struct sbuf err = SBUF_INIT;
 
+			/* Match the python tool's status line.  Printed before
+			 * solving so the user sees the work happening, not just
+			 * after the fact. */
+			printf("Dependencies lock doesn't exist, solving "
+			       "dependencies.\n");
+
 			if (solve_resolve(roots, roots_nr, idf_version,
 					  DEFAULT_REGISTRY_URL, &resolved,
 					  &resolved_nr, &err) < 0)
@@ -757,6 +763,7 @@ int cmd_idf_component_prepare(int argc, const char **argv)
 
 			if (lockfile_save(&lf, lock_path) < 0)
 				die_errno("write '%s'", lock_path);
+			printf("Updating lock file at %s\n", lock_path);
 
 			for (size_t i = 0; i < resolved_nr; i++)
 				solve_resolved_release(&resolved[i]);
@@ -770,15 +777,41 @@ int cmd_idf_component_prepare(int argc, const char **argv)
 
 	sbuf_addf(&managed_dir, "%s/managed_components", opt_project_dir);
 
-	/* Materialise everything the lockfile says we need. */
-	for (size_t i = 0; have_lock && i < lf.nr; i++) {
-		const struct lockfile_entry *e = &lf.entries[i];
-		if (e->src_type == LOCKFILE_SRC_IDF ||
-		    e->src_type == LOCKFILE_SRC_LOCAL)
-			continue;
-		if (fetch_component(e, managed_dir.buf) < 0)
-			die("cannot fetch '%s' (%s)", e->name,
-			    e->version ? e->version : "?");
+	/*
+	 * Materialise everything the lockfile says we need.  Mirror the
+	 * python tool's status output: the count and per-component lines
+	 * include IDF (and any path-overrides recorded as @c local) even
+	 * though they are not actually downloaded -- it tells the user
+	 * which versions the build is using.
+	 */
+	if (have_lock) {
+		size_t total = 0;
+		size_t idx = 0;
+
+		for (size_t i = 0; i < lf.nr; i++) {
+			if (lf.entries[i].src_type != LOCKFILE_SRC_UNKNOWN)
+				total++;
+		}
+		if (total)
+			printf("Processing %zu dependencies:\n", total);
+
+		for (size_t i = 0; i < lf.nr; i++) {
+			const struct lockfile_entry *e = &lf.entries[i];
+
+			if (e->src_type == LOCKFILE_SRC_UNKNOWN)
+				continue;
+
+			idx++;
+			printf("[%zu/%zu] %s (%s)\n", idx, total, e->name,
+			       e->version ? e->version : "?");
+
+			if (e->src_type == LOCKFILE_SRC_IDF ||
+			    e->src_type == LOCKFILE_SRC_LOCAL)
+				continue;
+			if (fetch_component(e, managed_dir.buf) < 0)
+				die("cannot fetch '%s' (%s)", e->name,
+				    e->version ? e->version : "?");
+		}
 	}
 
 	build_cmake_inputs(have_lock ? &lf : NULL, locals, locals_nr,

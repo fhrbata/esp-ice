@@ -18,6 +18,18 @@
 #include <string.h>
 #include <sys/stat.h>
 
+/* Drop @p len bytes of @p data into @p path; mkdirp the parent first. */
+static void write_file(const char *path, const char *data)
+{
+	FILE *fp;
+	tap_check(mkdirp_for_file(path) == 0);
+	fp = fopen(path, "wb");
+	tap_check(fp != NULL);
+	if (data && *data)
+		fputs(data, fp);
+	fclose(fp);
+}
+
 static void build(struct sbuf *out, const char *name)
 {
 	sbuf_reset(out);
@@ -132,6 +144,58 @@ int main(void)
 			tap_check(fetch_component(&e, "noop_dir") == -1);
 		}
 		tap_done("fetch_component: UNKNOWN / NULL rejected");
+	}
+
+	/*
+	 * fetch_compute_dirhash: empty tree -> sha256 of empty input (the
+	 * outer hash sees no path/file bytes, so the result is the standard
+	 * "e3b0..." digest).
+	 */
+	{
+		const char *root = "dir_empty";
+		char hex[65];
+		tap_check(mkdirp(root) == 0);
+		tap_check(fetch_compute_dirhash(root, hex) == 0);
+		tap_check(!strcmp(hex, "e3b0c44298fc1c149afbf4c8996fb92427ae41"
+				       "e4649b934ca495991b7852b855"));
+		tap_done("fetch_compute_dirhash: empty directory");
+	}
+
+	/*
+	 * Recursion + sort order: top-level @c a.txt and nested
+	 * @c sub/b.txt.  Hash is precomputed against the python tool's
+	 * hash_dir() so any drift between implementations breaks the test.
+	 */
+	{
+		const char *root = "dir_recursive";
+		char hex[65];
+		write_file("dir_recursive/a.txt", "hello");
+		write_file("dir_recursive/sub/b.txt", "world");
+		tap_check(fetch_compute_dirhash(root, hex) == 0);
+		tap_check(!strcmp(hex, "aa53ebe0074a0f07cb17d9fe1e0a05f94b181f"
+				       "747bd24fbb7ad642f8fa7efe3c"));
+		tap_done("fetch_compute_dirhash: recursion + sorted order");
+	}
+
+	/*
+	 * @c .component_hash and @c CHECKSUMS.json are skipped at any
+	 * depth -- adding them must not change the digest.  Reuse the
+	 * single-file digest computed via the python algorithm.
+	 */
+	{
+		const char *root = "dir_excluded";
+		char hex[65];
+		write_file("dir_excluded/a.txt", "hello");
+		tap_check(fetch_compute_dirhash(root, hex) == 0);
+		tap_check(!strcmp(hex, "7ce533eb8ea1f2e8b3cfe38fbffe1c92f04094"
+				       "2a2bb1b9c8fa6031670e542ce1"));
+
+		write_file("dir_excluded/.component_hash", "IGNORED");
+		write_file("dir_excluded/CHECKSUMS.json", "IGNORED");
+		tap_check(fetch_compute_dirhash(root, hex) == 0);
+		tap_check(!strcmp(hex, "7ce533eb8ea1f2e8b3cfe38fbffe1c92f04094"
+				       "2a2bb1b9c8fa6031670e542ce1"));
+		tap_done("fetch_compute_dirhash: skips marker files");
 	}
 
 	return tap_result();

@@ -21,7 +21,9 @@
 #include "git.h"
 #include "http.h"
 #include "json.h"
+#include "platform.h"
 #include "sbuf.h"
+#include "svec.h"
 #include "vendor/sha256/sha256.h"
 #include "zip.h"
 
@@ -36,6 +38,13 @@ void fetch_build_name(struct sbuf *out, const char *name)
 			sbuf_addch(out, (unsigned char)*p);
 	}
 }
+
+/*
+ * Forward decl: shared with fetch_compute_dirhash() below.  Lives next
+ * to its caller for readability.
+ */
+static void hex_lower(unsigned char digest[SHA256_BLOCK_SIZE],
+		      char out_hex[65]);
 
 int fetch_compute_sha256(const char *path, char out_hex[65])
 {
@@ -65,13 +74,7 @@ int fetch_compute_sha256(const char *path, char out_hex[65])
 	fclose(fp);
 
 	sha256_final(&ctx, digest);
-
-	for (size_t i = 0; i < SHA256_BLOCK_SIZE; i++) {
-		static const char hex[] = "0123456789abcdef";
-		out_hex[i * 2] = hex[(digest[i] >> 4) & 0xf];
-		out_hex[i * 2 + 1] = hex[digest[i] & 0xf];
-	}
-	out_hex[64] = '\0';
+	hex_lower(digest, out_hex);
 	return 0;
 }
 
@@ -100,6 +103,109 @@ int fetch_verify_sha256(const char *path, const char *expected_hex)
 	if (fetch_compute_sha256(path, got) < 0)
 		return -1;
 	return hex_eq_ci(got, expected_hex) ? 0 : -1;
+}
+
+/* ==================================================================== */
+/* Directory hash (registry component_hash)                              */
+/* ==================================================================== */
+
+/*
+ * Mirror python's exclude list.  The registry's @c component_hash is
+ * computed before either marker file exists, so we must skip them when
+ * verifying after extraction (or after we've written @c .component_hash
+ * for the cache).  Match by basename at any depth -- python uses a
+ * recursive glob for the same effect.
+ */
+static int dirhash_skip(const char *basename)
+{
+	return !strcmp(basename, ".component_hash") ||
+	       !strcmp(basename, "CHECKSUMS.json");
+}
+
+struct dirhash_walk {
+	const char *root;	/**< absolute path to component root */
+	struct sbuf *prefix;	/**< relative prefix (POSIX), "" at top */
+	struct svec *rel_paths; /**< collected relative file paths */
+};
+
+static int dirhash_collect_cb(const char *name, void *ud)
+{
+	struct dirhash_walk *ctx = ud;
+	struct sbuf full = SBUF_INIT;
+	struct sbuf rel = SBUF_INIT;
+
+	if (ctx->prefix->len)
+		sbuf_addf(&full, "%s/%s/%s", ctx->root, ctx->prefix->buf, name);
+	else
+		sbuf_addf(&full, "%s/%s", ctx->root, name);
+
+	if (ctx->prefix->len)
+		sbuf_addf(&rel, "%s/%s", ctx->prefix->buf, name);
+	else
+		sbuf_addstr(&rel, name);
+
+	if (is_directory(full.buf)) {
+		struct sbuf saved = *ctx->prefix;
+		*ctx->prefix = rel; /* descend with the longer prefix */
+		(void)dir_foreach(full.buf, dirhash_collect_cb, ctx);
+		*ctx->prefix = saved;
+	} else if (!dirhash_skip(name)) {
+		svec_push(ctx->rel_paths, rel.buf);
+	}
+
+	sbuf_release(&full);
+	sbuf_release(&rel);
+	return 0;
+}
+
+static void hex_lower(unsigned char digest[SHA256_BLOCK_SIZE], char out_hex[65])
+{
+	static const char hex[] = "0123456789abcdef";
+	for (size_t i = 0; i < SHA256_BLOCK_SIZE; i++) {
+		out_hex[i * 2] = hex[(digest[i] >> 4) & 0xf];
+		out_hex[i * 2 + 1] = hex[digest[i] & 0xf];
+	}
+	out_hex[64] = '\0';
+}
+
+int fetch_compute_dirhash(const char *root, char out_hex[65])
+{
+	struct svec rel_paths = SVEC_INIT;
+	struct sbuf prefix = SBUF_INIT;
+	struct dirhash_walk ctx = {root, &prefix, &rel_paths};
+	SHA256_CTX sha;
+	unsigned char digest[SHA256_BLOCK_SIZE];
+	int rc = -1;
+
+	if (dir_foreach(root, dirhash_collect_cb, &ctx) < 0)
+		goto out;
+
+	svec_sort(&rel_paths);
+
+	sha256_init(&sha);
+	for (size_t i = 0; i < rel_paths.nr; i++) {
+		const char *rel = rel_paths.v[i];
+		struct sbuf full = SBUF_INIT;
+		char file_hex[65];
+
+		sbuf_addf(&full, "%s/%s", root, rel);
+		if (fetch_compute_sha256(full.buf, file_hex) < 0) {
+			sbuf_release(&full);
+			goto out;
+		}
+		sbuf_release(&full);
+
+		sha256_update(&sha, (const BYTE *)rel, strlen(rel));
+		sha256_update(&sha, (const BYTE *)file_hex, 64);
+	}
+
+	sha256_final(&sha, digest);
+	hex_lower(digest, out_hex);
+	rc = 0;
+out:
+	svec_clear(&rel_paths);
+	sbuf_release(&prefix);
+	return rc;
 }
 
 int fetch_download(const char *url, const char *dest_path)
@@ -251,21 +357,58 @@ static int fetch_service(const struct lockfile_entry *entry,
 	if (fetch_download(dl_url.buf, tmp_zip.buf) < 0)
 		goto out;
 
-	/* Pin to the digest carried in the lockfile -- without this
-	 * the lockfile only pins the version number, not the bytes. */
-	if (entry->component_hash &&
-	    fetch_verify_sha256(tmp_zip.buf, entry->component_hash) != 0) {
-		warn("%s@%s: archive sha256 mismatch (expected %s)",
-		     entry->name, entry->version, entry->component_hash);
-		goto out;
-	}
-
 	sbuf_addf(&dest, "%s/%s", managed_components_dir, build_name.buf);
 	if (access(dest.buf, F_OK) == 0)
 		(void)rmtree(dest.buf, 0); /* idempotent: replace existing */
 
 	if (zip_extract_all(tmp_zip.buf, dest.buf) < 0)
 		goto out;
+
+	/*
+	 * Pin to the registry's @c component_hash, which is a digest over
+	 * the unpacked tree (see fetch_compute_dirhash()), not over the
+	 * ZIP -- the python tool doesn't verify the archive bytes either.
+	 * Without this the lockfile pins the version number but nothing
+	 * else, so a swapped archive at the storage URL would extract
+	 * silently.  On mismatch wipe the directory so we don't leave
+	 * unverified bytes behind for the next ice invocation to pick up.
+	 */
+	if (entry->component_hash) {
+		char got[65];
+
+		if (fetch_compute_dirhash(dest.buf, got) < 0) {
+			warn("%s@%s: cannot hash extracted directory",
+			     entry->name, entry->version);
+			(void)rmtree(dest.buf, 0);
+			(void)rmdir(dest.buf);
+			goto out;
+		}
+		if (!hex_eq_ci(got, entry->component_hash)) {
+			warn("%s@%s: directory sha256 mismatch (got %s, "
+			     "expected %s)",
+			     entry->name, entry->version, got,
+			     entry->component_hash);
+			(void)rmtree(dest.buf, 0);
+			(void)rmdir(dest.buf);
+			goto out;
+		}
+	}
+
+	/*
+	 * Drop a @c .component_hash marker so future runs (and the python
+	 * tool, if it shares the directory) can validate via the cheaper
+	 * @c validate_hashfile_eq_hashdir path without recomputing from
+	 * the lockfile.
+	 */
+	if (entry->component_hash) {
+		struct sbuf hash_path = SBUF_INIT;
+		size_t n = strlen(entry->component_hash);
+		sbuf_addf(&hash_path, "%s/.component_hash", dest.buf);
+		if (write_file_atomic(hash_path.buf, entry->component_hash, n) <
+		    0)
+			warn_errno("write '%s'", hash_path.buf);
+		sbuf_release(&hash_path);
+	}
 
 	rc = 0;
 out:

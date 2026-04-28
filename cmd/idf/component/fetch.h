@@ -78,6 +78,31 @@ int fetch_compute_sha256(const char *path, char out_hex[65]);
 int fetch_verify_sha256(const char *path, const char *expected_hex);
 
 /**
+ * @brief Compute the registry-style directory hash of @p root.
+ *
+ * Mirrors the python tool's @c hash_dir (idf_component_tools.hash_tools):
+ * recursively walk @p root, sort regular file paths alphabetically by
+ * their POSIX-style relative path, and feed @c sha256(path-bytes ||
+ * lowercase-hex(file-sha256)) into one outer SHA256.  The result is
+ * the same digest the ESP Component Registry publishes as
+ * @c component_hash for service-source entries -- the lockfile pins to
+ * this digest, so callers verify a freshly extracted component by
+ * comparing against @c lockfile_entry.component_hash.
+ *
+ * Files named @c .component_hash and @c CHECKSUMS.json are skipped at
+ * any depth -- the python tool excludes them so we can write the hash
+ * marker after verification without invalidating the digest.  Manifest
+ * @c include / @c exclude patterns are not honoured (the python tool
+ * applies them via @c exclude_default=False; in practice ZIPs the
+ * registry serves never carry build artefacts that would need filtering).
+ *
+ * Writes 64 hex chars + NUL into @p out_hex (min. 65 bytes).
+ *
+ * @return 0 on success, -1 on I/O error.
+ */
+int fetch_compute_dirhash(const char *root, char out_hex[65]);
+
+/**
  * @brief Download @p url into @p dest_path.
  *
  * Thin wrapper over @c http_download() that creates @p dest_path's
