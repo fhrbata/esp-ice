@@ -146,15 +146,26 @@ static const struct chip_mem_range esp32s3_ranges[] = {
     {0},
 };
 
+/* ---- esp32s31 ------------------------------------------------------- */
+
+static const struct chip_mem_range esp32s31_ranges[] = {
+    {"DIRAM", 0x2F000000, 0x80000, 0x2F000000},
+    {"Flash", 0x40000000, 0x4000000, 0},
+    {"External RAM", 0x50000000, 0x4000000, 0},
+    {"LP SRAM", 0x2E000000, 0x8000, 0},
+    {0},
+};
+
 /* ---- lookup table --------------------------------------------------- */
 
 static const struct chip_info chips[] = {
-    {"esp32", esp32_ranges},	 {"esp32c2", esp32c2_ranges},
-    {"esp32c3", esp32c3_ranges}, {"esp32c5", esp32c5_ranges},
-    {"esp32c6", esp32c6_ranges}, {"esp32c61", esp32c61_ranges},
-    {"esp32h2", esp32h2_ranges}, {"esp32h21", esp32h21_ranges},
-    {"esp32h4", esp32h4_ranges}, {"esp32p4", esp32p4_ranges},
-    {"esp32s2", esp32s2_ranges}, {"esp32s3", esp32s3_ranges},
+    {"esp32", esp32_ranges},	   {"esp32c2", esp32c2_ranges},
+    {"esp32c3", esp32c3_ranges},   {"esp32c5", esp32c5_ranges},
+    {"esp32c6", esp32c6_ranges},   {"esp32c61", esp32c61_ranges},
+    {"esp32h2", esp32h2_ranges},   {"esp32h21", esp32h21_ranges},
+    {"esp32h4", esp32h4_ranges},   {"esp32p4", esp32p4_ranges},
+    {"esp32s2", esp32s2_ranges},   {"esp32s3", esp32s3_ranges},
+    {"esp32s31", esp32s31_ranges},
 };
 
 const struct chip_info *chip_find(const char *name)

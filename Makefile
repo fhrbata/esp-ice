@@ -160,6 +160,14 @@ LIB_SRCS := \
 	cmd/idf/menuconfig/menuconfig.c \
 	cmd/idf/partition-table/partition-table.c \
 	cmd/idf/size/mem.c \
+	cmd/idf/size/memmap.c \
+	cmd/idf/size/memmap_ops.c \
+	cmd/idf/size/views.c \
+	cmd/idf/size/format_table.c \
+	cmd/idf/size/format_csv.c \
+	cmd/idf/size/format_json.c \
+	cmd/idf/size/format_tree.c \
+	cmd/idf/size/format_dot.c \
 	cmd/idf/size/size.c \
 	cmd/image/image.c \
 	cmd/image/create/create.c \
