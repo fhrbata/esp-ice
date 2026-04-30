@@ -221,6 +221,21 @@ void delay_ms(uint32_t ms);
 int term_width(int fd);
 
 /**
+ * @brief Test a string against a glob-style pattern.
+ *
+ * Mirrors POSIX @c fnmatch with flags=0: @c '*' matches any sequence,
+ * @c '?' matches any single character, and @c "[seq]" / @c "[!seq]"
+ * match a character in / not in the bracketed set.  No FNM_PATHNAME
+ * or FNM_PERIOD semantics; backslashes are not treated specially.
+ *
+ * Returns 1 on match, 0 otherwise -- inverted from @c fnmatch's
+ * "0 means match" so callers read naturally.  Implementation lives
+ * in platform/posix/fnmatch.c (libc-backed) and platform/win/fnmatch.c
+ * (portable C99) since @c <fnmatch.h> isn't part of the Windows CRT.
+ */
+int glob_match(const char *pattern, const char *str);
+
+/**
  * @brief Test whether @p path refers to a directory.
  *
  * @return 1 if the path exists and is a directory, 0 otherwise
