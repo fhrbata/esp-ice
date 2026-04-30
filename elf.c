@@ -360,3 +360,163 @@ void elf_segments_release(struct elf_segments *out)
 	out->nr = 0;
 	out->entry = 0;
 }
+
+/* ------------------------------------------------------------------ */
+
+/* Symbol-table entry sizes. */
+#define ELF32_SYM_SIZE 16
+#define ELF64_SYM_SIZE 24
+
+/*
+ * Walk the section header table looking for a single SHT_SYMTAB.
+ *
+ * Returns the section index of the symbol table (0 if none), and
+ * fills *p_link with sh_link (the strtab index).  Internal helper.
+ */
+static uint32_t find_symtab(const struct elf_reader *r, uint64_t shoff,
+			    uint32_t shnum, uint32_t shentsize,
+			    uint32_t *p_link)
+{
+	uint32_t i;
+
+	for (i = 1; i < shnum; i++) {
+		size_t hoff = (size_t)(shoff + (uint64_t)i * shentsize);
+		uint32_t sh_type = rd32(r, hoff + 4);
+		uint32_t sh_link;
+
+		if (sh_type != SHT_SYMTAB)
+			continue;
+
+		if (r->ei_class == ELFCLASS32)
+			sh_link = rd32(r, hoff + 24);
+		else
+			sh_link = rd32(r, hoff + 40);
+
+		*p_link = sh_link;
+		return i;
+	}
+
+	return 0;
+}
+
+void elf_read_symbols(const void *buf, size_t len, struct elf_symbols *out)
+{
+	struct elf_reader r;
+	uint64_t shoff;
+	uint32_t shnum, shentsize;
+	uint32_t symtab_idx, strtab_idx;
+	uint64_t sym_off, sym_size, str_off, str_size;
+	uint32_t entsize;
+	size_t hoff;
+	const char *strtab;
+	int alloc = 0;
+	uint64_t i, count;
+
+	out->s = NULL;
+	out->nr = 0;
+
+	elf_reader_init(&r, buf, len);
+
+	if (r.ei_class == ELFCLASS32) {
+		shoff = rd32(&r, 32);
+		shentsize = rd16(&r, 46);
+		shnum = rd16(&r, 48);
+	} else {
+		shoff = rd64(&r, 40);
+		shentsize = rd16(&r, 58);
+		shnum = rd16(&r, 60);
+	}
+
+	if (shnum == 0)
+		return;
+
+	if (shoff + (uint64_t)shnum * shentsize > len)
+		die("ELF: section header table extends past end of file");
+
+	symtab_idx = find_symtab(&r, shoff, shnum, shentsize, &strtab_idx);
+	if (!symtab_idx)
+		return;
+
+	if (strtab_idx >= shnum)
+		die("ELF: symtab sh_link %u out of range", strtab_idx);
+
+	/* Symbol table location and entry size. */
+	hoff = (size_t)(shoff + (uint64_t)symtab_idx * shentsize);
+	if (r.ei_class == ELFCLASS32) {
+		sym_off = rd32(&r, hoff + 16);
+		sym_size = rd32(&r, hoff + 20);
+		entsize = rd32(&r, hoff + 36);
+	} else {
+		sym_off = rd64(&r, hoff + 24);
+		sym_size = rd64(&r, hoff + 32);
+		entsize = (uint32_t)rd64(&r, hoff + 56);
+	}
+
+	if (entsize == 0)
+		entsize = (r.ei_class == ELFCLASS32) ? ELF32_SYM_SIZE
+						     : ELF64_SYM_SIZE;
+	if (entsize <
+	    (r.ei_class == ELFCLASS32 ? ELF32_SYM_SIZE : ELF64_SYM_SIZE))
+		die("ELF: symbol entry size %u too small", entsize);
+	if (sym_off + sym_size > len)
+		die("ELF: symbol table extends past end of file");
+
+	/* Associated string table. */
+	hoff = (size_t)(shoff + (uint64_t)strtab_idx * shentsize);
+	if (r.ei_class == ELFCLASS32) {
+		str_off = rd32(&r, hoff + 16);
+		str_size = rd32(&r, hoff + 20);
+	} else {
+		str_off = rd64(&r, hoff + 24);
+		str_size = rd64(&r, hoff + 32);
+	}
+	if (str_off + str_size > len)
+		die("ELF: symbol string table truncated");
+
+	strtab = (const char *)r.buf + str_off;
+
+	count = sym_size / entsize;
+	/*
+	 * Skip index 0 -- it's the SHN_UNDEF sentinel and carries no
+	 * useful information.  This matches both the ELF spec and how
+	 * the upstream esp-idf-size walks symbol tables.
+	 */
+	for (i = 1; i < count; i++) {
+		size_t soff = (size_t)(sym_off + i * entsize);
+		uint32_t st_name;
+		uint64_t st_value, st_size;
+		uint8_t st_info;
+		uint16_t st_shndx;
+
+		if (r.ei_class == ELFCLASS32) {
+			st_name = rd32(&r, soff);
+			st_value = rd32(&r, soff + 4);
+			st_size = rd32(&r, soff + 8);
+			st_info = ((const unsigned char *)r.buf)[soff + 12];
+			st_shndx = rd16(&r, soff + 14);
+		} else {
+			st_name = rd32(&r, soff);
+			st_info = ((const unsigned char *)r.buf)[soff + 4];
+			st_shndx = rd16(&r, soff + 6);
+			st_value = rd64(&r, soff + 8);
+			st_size = rd64(&r, soff + 16);
+		}
+
+		ALLOC_GROW(out->s, out->nr + 1, alloc);
+		out->s[out->nr].name =
+		    (st_name < str_size) ? strtab + st_name : "";
+		out->s[out->nr].value = st_value;
+		out->s[out->nr].size = st_size;
+		out->s[out->nr].shndx = st_shndx;
+		out->s[out->nr].type = (uint8_t)(st_info & 0xf);
+		out->s[out->nr].bind = (uint8_t)(st_info >> 4);
+		out->nr++;
+	}
+}
+
+void elf_symbols_release(struct elf_symbols *out)
+{
+	free(out->s);
+	out->s = NULL;
+	out->nr = 0;
+}
