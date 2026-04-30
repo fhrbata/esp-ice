@@ -429,20 +429,96 @@ static void parse_sections(char *buf, size_t len, size_t *pos,
 	}
 }
 
+/**
+ * Parse the "Cross Reference Table" into out->xrefs.
+ *
+ * The CRT lives at the very end of the map file.  Each entry begins
+ * with a symbol name in column 0 followed by the defining
+ * archive(object); subsequent indented lines list referencing
+ * locations.  Format is the same archive(object) shape used elsewhere.
+ *
+ * Indented continuation lines may also contain only an "object"
+ * portion (when the previous line's archive is implied, e.g. a literal
+ * cross-reference within the same archive); the parser falls back to
+ * "(exe)" in that case to mirror parse_archive_object().
+ */
+static void parse_xrefs(char *buf, size_t len, size_t *pos,
+			struct map_file *out)
+{
+	char *line, *p;
+	int header = 0;
+	int alloc = 0;
+	struct map_xref *cur = NULL;
+
+	/*
+	 * parse_sections() already consumed the "Cross Reference Table"
+	 * marker line before breaking, so begin by scanning for the
+	 * "Symbol" header that separates the marker from the entries.
+	 */
+	while ((line = sbuf_getline(buf, len, pos)) != NULL) {
+		if (!header) {
+			if (strncmp(line, "Symbol", 6) == 0)
+				header = 1;
+			continue;
+		}
+
+		if (!*line) {
+			/* Blank line ends the table. */
+			break;
+		}
+
+		if (line[0] != ' ' && line[0] != '\t') {
+			/* "<symbol>  archive(object)" -- new entry. */
+			char *sym = line;
+			char *rest = line;
+
+			while (*rest && *rest != ' ' && *rest != '\t')
+				rest++;
+			if (!*rest)
+				continue;
+			*rest++ = '\0';
+			while (*rest == ' ' || *rest == '\t')
+				rest++;
+
+			ALLOC_GROW(out->xrefs, out->nr_xrefs + 1, alloc);
+			cur = &out->xrefs[out->nr_xrefs];
+			memset(cur, 0, sizeof(*cur));
+			cur->symbol = sym;
+			out->nr_xrefs++;
+
+			ALLOC_GROW(cur->refs, cur->nr_refs + 1,
+				   cur->alloc_refs);
+			parse_archive_object(rest, &cur->refs[0].archive,
+					     &cur->refs[0].object);
+			cur->nr_refs = 1;
+			continue;
+		}
+
+		/* Continuation line: trim leading whitespace. */
+		p = line;
+		while (*p == ' ' || *p == '\t')
+			p++;
+		if (!*p || !cur)
+			continue;
+
+		ALLOC_GROW(cur->refs, cur->nr_refs + 1, cur->alloc_refs);
+		parse_archive_object(p, &cur->refs[cur->nr_refs].archive,
+				     &cur->refs[cur->nr_refs].object);
+		cur->nr_refs++;
+	}
+}
+
 /* ---- Public API ----------------------------------------------------- */
 
 void map_read(char *buf, size_t len, struct map_file *out)
 {
 	size_t pos = 0;
 
-	out->target = NULL;
-	out->regions = NULL;
-	out->nr_regions = 0;
-	out->sections = NULL;
-	out->nr_sections = 0;
+	memset(out, 0, sizeof(*out));
 
 	parse_memory_regions(buf, len, &pos, out);
 	parse_sections(buf, len, &pos, out);
+	parse_xrefs(buf, len, &pos, out);
 }
 
 void map_release(struct map_file *out)
@@ -453,9 +529,9 @@ void map_release(struct map_file *out)
 	for (i = 0; i < out->nr_sections; i++)
 		free(out->sections[i].inputs);
 	free(out->sections);
+	for (i = 0; i < out->nr_xrefs; i++)
+		free(out->xrefs[i].refs);
+	free(out->xrefs);
 
-	out->regions = NULL;
-	out->nr_regions = 0;
-	out->sections = NULL;
-	out->nr_sections = 0;
+	memset(out, 0, sizeof(*out));
 }
