@@ -118,6 +118,16 @@ int link_w(const char *target, const char *linkpath);
 int setenv_w(const char *name, const char *value, int overwrite);
 
 /*
+ * POSIX kill(2) replacement.  Windows has no signals, so the shim
+ * supports the subset that matters for child-process control:
+ * SIGTERM and SIGKILL both call TerminateProcess on the HANDLE stored
+ * in the proc.pid slot (process_start casts the HANDLE to pid_t).  Any
+ * other signal returns -1 with errno = EINVAL.  Lets call sites read
+ * as plain POSIX C on both platforms.
+ */
+int kill_w(pid_t pid, int sig);
+
+/*
  * X_OK is not a meaningful mode for the Win32 _access() CRT call, but
  * it is the semantic POSIX callers want ("can I spawn this?").  We
  * define the POSIX bit here and let access_w() interpret it by trying
@@ -138,6 +148,7 @@ int setenv_w(const char *name, const char *value, int overwrite);
 #define chmod chmod_w
 #define isatty _isatty
 #define setenv setenv_w
+#define kill kill_w
 #define fileno _fileno
 #define dup _dup
 #define dup2 _dup2
@@ -398,6 +409,21 @@ static inline int process_run(struct process *proc)
  * @return bytes read (> 0), 0 on timeout, -1 on EOF or error.
  */
 ssize_t pipe_read_timed(int fd, void *buf, size_t n, unsigned timeout_ms);
+
+/**
+ * @brief Write all @p n bytes to a pipe file descriptor.
+ *
+ * Retries on partial writes and @c EINTR.  Designed for sending bytes
+ * to the input side of a pipe created by @ref process_start (proc->in)
+ * — typically forwarding the user's keystrokes to a child process, the
+ * mirror image of @ref pipe_read_timed for child output.
+ *
+ * @param fd   Write end of the pipe (e.g. proc->in).
+ * @param buf  Source buffer.
+ * @param n    Bytes to write.
+ * @return n on success, -1 on error (EOF / EPIPE / errno set).
+ */
+ssize_t pipe_write_all(int fd, const void *buf, size_t n);
 
 /**
  * @brief Return a monotonic timestamp in milliseconds.

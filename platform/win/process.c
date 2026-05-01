@@ -14,9 +14,11 @@
  * UTF-8 conversion, caching the result on first call.
  */
 #include <errhandlingapi.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <io.h>
 #include <processenv.h>
+#include <signal.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -308,6 +310,54 @@ ssize_t pipe_read_timed(int fd, void *buf, size_t n, unsigned timeout_ms)
 	if (!ReadFile(h, buf, (DWORD)n, &got, NULL) || got == 0)
 		return -1;
 	return (ssize_t)got;
+}
+
+int kill_w(pid_t pid, int sig)
+{
+	/* NOLINTNEXTLINE(performance-no-int-to-ptr) */
+	HANDLE hProcess = (HANDLE)(intptr_t)pid;
+
+	/* Windows has no signal mechanism; the only thing the shim
+	 * implements is "force this child to stop now."  SIGTERM is the
+	 * conventional ask in POSIX call sites, so treat it as that.
+	 * Unknown signals fail loudly rather than silently no-op. */
+	if (sig != SIGTERM) {
+		errno = EINVAL;
+		return -1;
+	}
+	if (hProcess == NULL || hProcess == INVALID_HANDLE_VALUE) {
+		errno = ESRCH;
+		return -1;
+	}
+	if (!TerminateProcess(hProcess, 1)) {
+		errno = EPERM;
+		return -1;
+	}
+	return 0;
+}
+
+ssize_t pipe_write_all(int fd, const void *buf, size_t n)
+{
+	/* NOLINTNEXTLINE(performance-no-int-to-ptr) */
+	HANDLE h = (HANDLE)_get_osfhandle(fd);
+	const char *p = buf;
+	size_t left = n;
+
+	if (h == INVALID_HANDLE_VALUE)
+		return -1;
+
+	while (left > 0) {
+		DWORD chunk = left > (size_t)0xffff0000u ? (DWORD)0xffff0000u
+							 : (DWORD)left;
+		DWORD wrote = 0;
+		if (!WriteFile(h, p, chunk, &wrote, NULL))
+			return -1;
+		if (wrote == 0)
+			return -1;
+		p += wrote;
+		left -= wrote;
+	}
+	return (ssize_t)n;
 }
 
 unsigned long long mono_ms(void)
