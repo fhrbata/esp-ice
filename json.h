@@ -140,4 +140,14 @@ void json_push(struct json_value *arr, struct json_value *value);
 /** Serialize @p j into @p out in compact form (no whitespace). */
 void json_serialize(const struct json_value *j, struct sbuf *out);
 
+/**
+ * Serialize @p j into @p out with @p indent spaces per level, mirroring
+ * Python's json.dumps(indent=N).  Object members and array items are
+ * placed on their own lines; the trailing closing brace/bracket is at
+ * the parent's indent level.  Numbers, strings, and atoms render the
+ * same as in compact mode.
+ */
+void json_serialize_pretty(const struct json_value *j, struct sbuf *out,
+			   int indent);
+
 #endif /* JSON_H */

@@ -525,6 +525,32 @@ static void write_string(const char *s, struct sbuf *out)
 	sbuf_addch(out, '"');
 }
 
+/*
+ * Serialize a number using the smallest representation that still
+ * round-trips: integers up to 2^53 print without a fractional part
+ * (matching Python's json.dumps), other doubles use %.17g for
+ * round-trip safety.  Negative zero is normalized to "0" so that
+ * JSON output for ints stored as doubles never shows "-0".
+ */
+static void write_number(double n, struct sbuf *out)
+{
+	if (n == 0.0) {
+		sbuf_addstr(out, "0");
+		return;
+	}
+
+	if (n >= -9007199254740992.0 && n <= 9007199254740992.0) {
+		double t;
+		long long ll = (long long)n;
+		t = (double)ll;
+		if (t == n) {
+			sbuf_addf(out, "%lld", ll);
+			return;
+		}
+	}
+	sbuf_addf(out, "%.17g", n);
+}
+
 void json_serialize(const struct json_value *j, struct sbuf *out)
 {
 	if (!j) {
@@ -540,7 +566,7 @@ void json_serialize(const struct json_value *j, struct sbuf *out)
 		sbuf_addstr(out, j->u.boolean ? "true" : "false");
 		break;
 	case JSON_NUMBER:
-		sbuf_addf(out, "%.17g", j->u.number);
+		write_number(j->u.number, out);
 		break;
 	case JSON_STRING:
 		write_string(j->u.string, out);
@@ -566,4 +592,77 @@ void json_serialize(const struct json_value *j, struct sbuf *out)
 		sbuf_addch(out, '}');
 		break;
 	}
+}
+
+static void put_indent(struct sbuf *out, int level, int width)
+{
+	int total = level * width;
+	for (int i = 0; i < total; i++)
+		sbuf_addch(out, ' ');
+}
+
+static void serialize_pretty(const struct json_value *j, struct sbuf *out,
+			     int indent, int level)
+{
+	if (!j) {
+		sbuf_addstr(out, "null");
+		return;
+	}
+
+	switch (j->type) {
+	case JSON_NULL:
+		sbuf_addstr(out, "null");
+		break;
+	case JSON_BOOL:
+		sbuf_addstr(out, j->u.boolean ? "true" : "false");
+		break;
+	case JSON_NUMBER:
+		write_number(j->u.number, out);
+		break;
+	case JSON_STRING:
+		write_string(j->u.string, out);
+		break;
+	case JSON_ARRAY:
+		if (j->u.array.nr == 0) {
+			sbuf_addstr(out, "[]");
+			break;
+		}
+		sbuf_addstr(out, "[\n");
+		for (int i = 0; i < j->u.array.nr; i++) {
+			put_indent(out, level + 1, indent);
+			serialize_pretty(j->u.array.items[i], out, indent,
+					 level + 1);
+			if (i + 1 < j->u.array.nr)
+				sbuf_addch(out, ',');
+			sbuf_addch(out, '\n');
+		}
+		put_indent(out, level, indent);
+		sbuf_addch(out, ']');
+		break;
+	case JSON_OBJECT:
+		if (j->u.object.nr == 0) {
+			sbuf_addstr(out, "{}");
+			break;
+		}
+		sbuf_addstr(out, "{\n");
+		for (int i = 0; i < j->u.object.nr; i++) {
+			put_indent(out, level + 1, indent);
+			write_string(j->u.object.members[i].key, out);
+			sbuf_addstr(out, ": ");
+			serialize_pretty(j->u.object.members[i].value, out,
+					 indent, level + 1);
+			if (i + 1 < j->u.object.nr)
+				sbuf_addch(out, ',');
+			sbuf_addch(out, '\n');
+		}
+		put_indent(out, level, indent);
+		sbuf_addch(out, '}');
+		break;
+	}
+}
+
+void json_serialize_pretty(const struct json_value *j, struct sbuf *out,
+			   int indent)
+{
+	serialize_pretty(j, out, indent, 0);
 }

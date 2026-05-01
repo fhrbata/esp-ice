@@ -186,4 +186,81 @@ void elf_read_segments(const void *buf, size_t len, struct elf_segments *out);
  */
 void elf_segments_release(struct elf_segments *out);
 
+/* ELF symbol type values (st_info & 0xf). */
+#define STT_NOTYPE 0
+#define STT_OBJECT 1
+#define STT_FUNC 2
+#define STT_SECTION 3
+#define STT_FILE 4
+#define STT_COMMON 5
+#define STT_TLS 6
+
+/* ELF symbol bind values (st_info >> 4). */
+#define STB_LOCAL 0
+#define STB_GLOBAL 1
+#define STB_WEAK 2
+
+/* Special section indices (st_shndx). */
+#define SHN_UNDEF 0
+#define SHN_ABS 0xFFF1
+#define SHN_COMMON 0xFFF2
+
+/* Section types relevant to symbol tables. */
+#define SHT_SYMTAB 2
+#define SHT_PROGBITS 1
+#define SHT_NOBITS 8
+
+/* Section flags. */
+#define SHF_WRITE 0x1
+#define SHF_ALLOC 0x2
+#define SHF_EXECINSTR 0x4
+
+/**
+ * Parsed information from an ELF symbol-table entry.
+ *
+ * @p name points into the string table associated with the symbol's
+ * SHT_SYMTAB section (not a copy).  The caller must keep the input
+ * buffer alive while using the returned data.
+ */
+struct elf_symbol {
+	const char *name; /**< Symbol name (points into buffer). */
+	uint64_t value;	  /**< st_value (load address for defined syms). */
+	uint64_t size;	  /**< st_size in bytes. */
+	uint16_t shndx;	  /**< st_shndx (section index, or SHN_*). */
+	uint8_t type;	  /**< STT_* (low nibble of st_info). */
+	uint8_t bind;	  /**< STB_* (high nibble of st_info). */
+};
+
+/**
+ * Array of parsed ELF symbols.
+ *
+ * Allocated by elf_read_symbols(); freed by elf_symbols_release().
+ */
+struct elf_symbols {
+	struct elf_symbol *s; /**< Array of symbol entries. */
+	int nr;		      /**< Number of entries (excludes the SHN_UNDEF
+			       * sentinel at symtab index 0). */
+};
+
+/**
+ * @brief Read symbols from the (single) SHT_SYMTAB section of an ELF
+ *        executable in memory.
+ *
+ * Object files / executables produced by GCC contain a single static
+ * symbol table -- the dynamic symbol table SHT_DYNSYM is not used in
+ * the workflows ice serves.  This reader locates that one SHT_SYMTAB
+ * and decodes every entry except the index-0 sentinel.
+ *
+ * Dies on malformed ELF data.  If no SHT_SYMTAB section is present,
+ * out->nr is set to 0 and out->s to NULL (not an error).
+ *
+ * @param buf  ELF file contents (caller retains ownership)
+ * @param len  length of @p buf
+ * @param out  output structure (caller provides; filled in)
+ */
+void elf_read_symbols(const void *buf, size_t len, struct elf_symbols *out);
+
+/** Free memory allocated by elf_read_symbols(). */
+void elf_symbols_release(struct elf_symbols *out);
+
 #endif /* ELF_H */

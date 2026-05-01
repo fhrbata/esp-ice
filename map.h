@@ -86,6 +86,31 @@ struct map_section {
 };
 
 /**
+ * One reference of a symbol from the Cross Reference Table.
+ *
+ * Strings point into the source buffer.
+ */
+struct map_xref_ref {
+	const char *archive; /**< Archive path, or "(exe)". */
+	const char *object;  /**< Object file name. */
+};
+
+/**
+ * One entry in the Cross Reference Table.
+ *
+ * The first reference (refs[0]) is the symbol's defining location;
+ * the remaining entries are referencing locations.  The original
+ * linker output groups these under the symbol name in document order,
+ * which the C side preserves.
+ */
+struct map_xref {
+	const char *symbol;	   /**< Symbol name (points into buffer). */
+	struct map_xref_ref *refs; /**< Heap array; refs[0] is the def. */
+	int nr_refs;		   /**< Number of entries in refs. */
+	int alloc_refs;		   /**< Capacity of refs. */
+};
+
+/**
  * Complete parsed linker map file.
  *
  * Populated by map_read(); freed by map_release().
@@ -96,6 +121,8 @@ struct map_file {
 	int nr_regions;		      /**< Number of memory regions. */
 	struct map_section *sections; /**< Array of output sections. */
 	int nr_sections;	      /**< Number of output sections. */
+	struct map_xref *xrefs;	      /**< Cross Reference Table entries. */
+	int nr_xrefs; /**< Number of xref entries (0 if absent). */
 };
 
 /**

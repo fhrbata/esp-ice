@@ -54,32 +54,6 @@ struct gen_scheme {
 
 /* ---- Small helpers ---------------------------------------------- */
 
-/* Tiny glob: '*' matches any chars (including none); all other chars
- * are literal.  Matches the subset of fnmatch we actually use
- * (section patterns like ".text.*", object-name suffixes like
- * "obj.*.o").  No '?' or bracket expressions needed.
- */
-static int glob_match(const char *pat, const char *s)
-{
-	while (*pat) {
-		if (*pat == '*') {
-			while (*pat == '*')
-				pat++;
-			if (!*pat)
-				return 1;
-			for (; *s; s++)
-				if (glob_match(pat, s))
-					return 1;
-			return 0;
-		}
-		if (*pat != *s)
-			return 0;
-		pat++;
-		s++;
-	}
-	return *s == '\0';
-}
-
 /* Strip trailing ".o" or ".obj" suffix.  Returns a fresh heap
  * allocation, or a copy if neither suffix is present. */
 static char *strip_obj_suffix(const char *name)

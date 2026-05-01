@@ -84,20 +84,50 @@ static int try_expand_alias(int *argcp, const char ***argvp)
 	return 1;
 }
 
-/*
- * Return 1 if argv contains --help or -h before the first "--"
- * separator.  Used to skip setup_project() for help/usage requests
- * so @b{ice build --help} works outside a configured project.
- */
-static int argv_wants_help(int argc, const char **argv)
+/* Helpers for "argv contains <introspection-flag> before --".  Both
+ * cause the leaf's parse_options() to short-circuit, but they need
+ * different setup treatment: --help wants no project state at all
+ * (so `ice build --help` works outside a project), while
+ * --ice-complete still wants a *lenient* profile load so
+ * completion handlers can read _project.mapfile etc. without
+ * triggering a reconfigure or build. */
+static int argv_has_flag(int argc, const char **argv, const char *a,
+			 const char *b)
 {
 	for (int i = 1; i < argc; i++) {
 		if (!strcmp(argv[i], "--"))
 			return 0;
-		if (!strcmp(argv[i], "--help") || !strcmp(argv[i], "-h"))
+		if (!strcmp(argv[i], a) || (b && !strcmp(argv[i], b)))
 			return 1;
 	}
 	return 0;
+}
+
+static int argv_wants_help(int argc, const char **argv)
+{
+	return argv_has_flag(argc, argv, "--help", "-h");
+}
+
+static int argv_wants_complete(int argc, const char **argv)
+{
+	return argv_has_flag(argc, argv, "--ice-complete", NULL);
+}
+
+/* Set up project state for the matched leaf.  Help skips entirely;
+ * completion does a lenient load (resolve profile, derive
+ * _project.* keys when available, no build, no die) so completion
+ * handlers can read project-derived config.  Everything else gets
+ * the leaf's full setup_project() at the requested level. */
+static void prepare_project(int argc, const char **argv,
+			    enum project_need needs)
+{
+	if (argv_wants_help(argc, argv))
+		return;
+	if (argv_wants_complete(argc, argv)) {
+		setup_project_lenient();
+		return;
+	}
+	setup_project(needs);
 }
 
 /* Dispatch: parse globals then fire the matched subcommand. */
@@ -169,15 +199,7 @@ static void complete_aliases(void)
 int ice_dispatch(int argc, const char **argv, const struct cmd_desc *desc)
 {
 	if (!desc->subcommands) {
-		/*
-		 * --help / -h short-circuits to the manual inside
-		 * parse_options before the handler does any real work,
-		 * so skip setup_project() for that path -- otherwise
-		 * @b{ice build --help} would demand a configured project
-		 * just to render its usage.
-		 */
-		if (!argv_wants_help(argc, argv))
-			setup_project(desc->needs);
+		prepare_project(argc, argv, desc->needs);
 		return desc->fn(argc, argv);
 	}
 
@@ -192,8 +214,7 @@ int ice_dispatch(int argc, const char **argv, const struct cmd_desc *desc)
 	}
 
 	if (desc->fn) {
-		if (!argv_wants_help(argc, argv))
-			setup_project(desc->needs);
+		prepare_project(argc, argv, desc->needs);
 		return desc->fn(argc, argv);
 	}
 
