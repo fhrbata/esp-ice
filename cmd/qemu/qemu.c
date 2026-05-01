@@ -133,11 +133,14 @@ static const unsigned char default_efuse_esp32s3[1024] = {
 };
 
 struct qemu_chip {
-	const char *name;	  /* "esp32", "esp32c3", "esp32s3" */
-	const char *qemu_prog;	  /* default binary name */
-	const char *machine;	  /* -M argument */
-	const char *memory;	  /* -m argument, NULL to omit */
-	const char *strap_global; /* -global driver=...,strap_mode,... */
+	const char *name;	     /* "esp32", "esp32c3", "esp32s3" */
+	const char *qemu_prog;	     /* default binary name */
+	const char *machine;	     /* -M argument */
+	const char *memory;	     /* -m argument, NULL to omit */
+	const char *boot_mode_strap; /* strap_mode value for forced download
+				      * mode (efuse burn, etc.); unused in
+				      * v1 -- kept here so we can wire it up
+				      * the day a --download flag lands. */
 	const unsigned char *default_efuse;
 	size_t default_efuse_len;
 };
@@ -148,7 +151,7 @@ static const struct qemu_chip qemu_chips[] = {
 	.qemu_prog = "qemu-system-xtensa",
 	.machine = "esp32",
 	.memory = "4M",
-	.strap_global = "driver=esp32.gpio,property=strap_mode,value=0x0f",
+	.boot_mode_strap = "driver=esp32.gpio,property=strap_mode,value=0x0f",
 	.default_efuse = default_efuse_esp32,
 	.default_efuse_len = sizeof default_efuse_esp32,
     },
@@ -157,7 +160,7 @@ static const struct qemu_chip qemu_chips[] = {
 	.qemu_prog = "qemu-system-riscv32",
 	.machine = "esp32c3",
 	.memory = NULL,
-	.strap_global = "driver=esp32c3.gpio,property=strap_mode,value=0x02",
+	.boot_mode_strap = "driver=esp32c3.gpio,property=strap_mode,value=0x02",
 	.default_efuse = default_efuse_esp32c3,
 	.default_efuse_len = sizeof default_efuse_esp32c3,
     },
@@ -166,7 +169,7 @@ static const struct qemu_chip qemu_chips[] = {
 	.qemu_prog = "qemu-system-xtensa",
 	.machine = "esp32s3",
 	.memory = "32M",
-	.strap_global = "driver=esp32s3.gpio,property=strap_mode,value=0x07",
+	.boot_mode_strap = "driver=esp32s3.gpio,property=strap_mode,value=0x07",
 	.default_efuse = default_efuse_esp32s3,
 	.default_efuse_len = sizeof default_efuse_esp32s3,
     },
@@ -421,16 +424,25 @@ static void build_qemu_argv(struct svec *v, const struct qemu_chip *chip,
 	push_argvf(v, "driver=timer.%s.timg,property=wdt_disable,value=true",
 		   chip->name);
 
-	push_argv(v, "-global");
-	push_argv(v, chip->strap_global);
+	/* No strap_mode override for normal boot: qemu's default puts the
+	 * chip in @c SPI_FAST_FLASH_BOOT, which is what we want.  The
+	 * @c boot_mode_strap field on @ref qemu_chip is the value we'd
+	 * pass to FORCE download mode (chip->boot_mode_strap), reserved
+	 * for a future @c{--download} flag. */
+	(void)chip->boot_mode_strap;
 
 	push_argv(v, "-nic");
 	push_argv(v, "user,model=open_eth");
 
-	push_argv(v, "-nographic");
-
-	/* Plain stdio (not mon:stdio) so the user's keystrokes go straight
-	 * to the emulated UART without qemu's monitor stealing Ctrl-A. */
+	/* @c -nographic is convenient but secretly implies @c{-serial
+	 * mon:stdio}, which collides with the explicit @c{-serial stdio}
+	 * below ("cannot use stdio by multiple character devices").
+	 * Spell out the pieces individually: no display, no QEMU monitor,
+	 * stdio dedicated to the emulated UART. */
+	push_argv(v, "-display");
+	push_argv(v, "none");
+	push_argv(v, "-monitor");
+	push_argv(v, "none");
 	push_argv(v, "-serial");
 	push_argv(v, "stdio");
 }
@@ -705,10 +717,12 @@ int cmd_qemu(int argc, const char **argv)
 	const char *qemu_bin = opt_qemu_bin ? opt_qemu_bin : chip->qemu_prog;
 
 	/* ---- build argv ---- */
+	/* svec_push keeps a NULL sentinel after the last entry, so the
+	 * vector is already correctly terminated for argv-style consumers
+	 * like process_start. */
 	struct svec qemu_argv = SVEC_INIT;
 	build_qemu_argv(&qemu_argv, chip, qemu_bin, flash_path.buf,
 			efuse_path.buf);
-	svec_push(&qemu_argv, NULL);
 
 	/* ---- spawn qemu ---- */
 	struct process proc = PROCESS_INIT;
