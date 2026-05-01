@@ -46,6 +46,60 @@ struct vt100_cell; /* defined in vt100.h */
 void tui_flush(struct sbuf *out);
 
 /* ================================================================== */
+/*  Rectangles + layout helpers                                       */
+/* ================================================================== */
+
+/**
+ * @brief A 1-based axis-aligned rectangle on the terminal grid.
+ *
+ * Used to express "this widget occupies rows @c y..y+h-1, columns
+ * @c x..x+w-1."  Each widget has its own @c origin_x / @c origin_y
+ * and @c width / @c height; @ref tui_rect groups them so layout code
+ * stays compact when computing splits.
+ */
+struct tui_rect {
+	int x; /**< 1-based leftmost column. */
+	int y; /**< 1-based topmost row. */
+	int w; /**< Width in cells (>= 0). */
+	int h; /**< Height in rows (>= 0). */
+};
+
+/**
+ * @brief Split @p parent into a left and a right rectangle.
+ *
+ * @p left_w columns go to @p left; the remaining columns go to @p right.
+ * Negative or out-of-range @p left_w is clamped to @c [0, parent->w].
+ * The two output rectangles together cover @p parent exactly with no
+ * gap; if a divider column is desired, the caller subtracts it from
+ * @p left_w (or from one of the outputs) and draws it in the freed
+ * cell.  Both outputs are filled even when one ends up zero-width;
+ * callers can detect that and skip rendering that pane.
+ */
+void tui_rect_split_v(const struct tui_rect *parent, struct tui_rect *left,
+		      struct tui_rect *right, int left_w);
+
+/**
+ * @brief Split @p parent into a top and a bottom rectangle.
+ *
+ * Mirror of @ref tui_rect_split_v: @p top_h rows go to @p top, the rest
+ * to @p bottom.  Same clamping and "covers exactly" rules apply.
+ */
+void tui_rect_split_h(const struct tui_rect *parent, struct tui_rect *top,
+		      struct tui_rect *bottom, int top_h);
+
+/**
+ * @brief Carve margins off all sides of @p r.
+ *
+ * Returns @p r shrunk by @p top rows from the top, @p bottom rows from
+ * the bottom, @p left columns from the left, and @p right columns from
+ * the right.  Useful for reserving a 1-cell border or a divider row.
+ * If the margins exceed the rectangle's dimensions, the result has
+ * @c w or @c h clamped to 0.
+ */
+struct tui_rect tui_rect_inset(struct tui_rect r, int top, int right,
+			       int bottom, int left);
+
+/* ================================================================== */
 /*  Scrollable list                                                   */
 /* ================================================================== */
 
@@ -75,8 +129,10 @@ struct tui_list {
 	const char *footer; /**< Hint row at the bottom (may be NULL). */
 	const struct tui_list_item *items;
 	int n_items;
-	int cursor; /**< Index of highlighted item. */
-	int top;    /**< Index of the first visible item (scroll). */
+	int cursor;   /**< Index of highlighted item. */
+	int top;      /**< Index of the first visible item (scroll). */
+	int origin_x; /**< 1-based leftmost column on the screen. */
+	int origin_y; /**< 1-based topmost row on the screen. */
 	int width;
 	int height;
 };
@@ -96,6 +152,12 @@ void tui_list_set_footer(struct tui_list *L, const char *footer);
  *         @c TK_RESIZE events.  Adjusts scroll if the new height
  *         would hide the cursor. */
 void tui_list_resize(struct tui_list *L, int width, int height);
+
+/** @brief Place the widget's top-left cell at terminal column @p x,
+ *         row @p y (both 1-based).  Default after @ref tui_list_init
+ *         is (1, 1) -- the entire screen.  Call before rendering when
+ *         composing two or more widgets side by side. */
+void tui_list_set_origin(struct tui_list *L, int x, int y);
 
 /**
  * @brief Feed an input event to the list.
@@ -128,6 +190,8 @@ struct tui_prompt {
 	char buf[TUI_PROMPT_CAP + 1]; /**< NUL-terminated. */
 	int len;		      /**< @c strlen(buf). */
 	int cursor;		      /**< Byte index into buf. */
+	int origin_x; /**< 1-based leftmost column on the screen. */
+	int origin_y; /**< 1-based topmost row on the screen. */
 	int width;
 	int height;
 };
@@ -137,6 +201,12 @@ void tui_prompt_init(struct tui_prompt *P, const char *title,
 		     const char *initial);
 
 void tui_prompt_resize(struct tui_prompt *P, int width, int height);
+
+/** @brief Place the modal box's reference rectangle at terminal column
+ *         @p x, row @p y (both 1-based).  The widget centres its box
+ *         within the @c width x @c height rectangle anchored at the
+ *         origin.  Default after @ref tui_prompt_init is (1, 1). */
+void tui_prompt_set_origin(struct tui_prompt *P, int x, int y);
 
 /**
  * @brief Feed an input event to the prompt.
@@ -174,6 +244,8 @@ struct tui_info {
 	int *line_lens;	    /**< Byte length of each line (newline stripped). */
 	int n_lines;
 	int top_line; /**< Index of the first visible line. */
+	int origin_x; /**< 1-based leftmost column on the screen. */
+	int origin_y; /**< 1-based topmost row on the screen. */
 	int width;
 	int height;
 };
@@ -191,6 +263,12 @@ void tui_info_init(struct tui_info *I, const char *title, const char *body);
 void tui_info_release(struct tui_info *I);
 
 void tui_info_resize(struct tui_info *I, int width, int height);
+
+/** @brief Place the modal box's reference rectangle at terminal column
+ *         @p x, row @p y (both 1-based).  The widget centres its box
+ *         within the @c width x @c height rectangle anchored at the
+ *         origin.  Default after @ref tui_info_init is (1, 1). */
+void tui_info_set_origin(struct tui_info *I, int x, int y);
 
 /**
  * @brief Feed an input event.
@@ -342,6 +420,8 @@ struct tui_log {
 	 * can therefore see the snapshot's oldest lines disappear. */
 	long long ceiling;
 
+	int origin_x; /**< 1-based leftmost column on the screen. */
+	int origin_y; /**< 1-based topmost row on the screen. */
 	int width;
 	int height;
 
@@ -390,6 +470,12 @@ void tui_log_release(struct tui_log *L);
 /** @brief Update frame dimensions.  Call on startup and on
  *         @c TK_RESIZE events. */
 void tui_log_resize(struct tui_log *L, int width, int height);
+
+/** @brief Place the widget's top-left cell at terminal column @p x,
+ *         row @p y (both 1-based).  Default after @ref tui_log_init
+ *         is (1, 1) -- the entire screen.  Set this before composing
+ *         two or more @c tui_log panes side by side. */
+void tui_log_set_origin(struct tui_log *L, int x, int y);
 
 /**
  * @brief Freeze the visible / searchable range to @c [oldest, total_pushed).
