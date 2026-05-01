@@ -59,6 +59,15 @@ static const char bash_script[] =
 	"# entry as 'name  -- desc' (aligned), but on a single match we strip\n"
 	"# the description so only the bare name is inserted on the command\n"
 	"# line.  Same trick Cobra uses for gh/kubectl/helm.\n"
+	"#\n"
+	"# Guard: refuse to install in a non-bash shell.  Without this the\n"
+	"# function body (which uses bash-only ${!array[@]} and other\n"
+	"# COMP_* machinery) gets wired up in zsh via bashcompinit and dies\n"
+	"# with 'bad substitution' on every TAB.\n"
+	"if [ -z \"${BASH_VERSION:-}\" ]; then\n"
+	"    printf 'ice: bash completion sourced from a non-bash shell\\n' >&2\n"
+	"    printf 'ice: hint -- eval \"$(ice completion zsh)\" (or fish / powershell)\\n' >&2\n"
+	"else\n"
 	"_ice_complete() {\n"
 	"    local cur=\"${COMP_WORDS[COMP_CWORD]}\"\n"
 	"    local tab=$'\\t'\n"
@@ -87,10 +96,19 @@ static const char bash_script[] =
 	"        COMPREPLY[i]=\"$name  -- ${line#*$tab}\"\n"
 	"    done\n"
 	"}\n"
-	"complete -o default -o nosort -F _ice_complete ice\n";
+	"complete -o default -o nosort -F _ice_complete ice\n"
+	"fi\n";
 
 static const char zsh_script[] =
 	"# ice zsh completion (install: eval \"$(ice completion zsh)\")\n"
+	"#\n"
+	"# Guard: refuse to install in a non-zsh shell.  The function body\n"
+	"# below uses zsh-only flags like ${(f)...} and ${(r:N:)...} that\n"
+	"# error out under bash with a misleading 'bad substitution'.\n"
+	"if [ -z \"${ZSH_VERSION:-}\" ]; then\n"
+	"    printf 'ice: zsh completion sourced from a non-zsh shell\\n' >&2\n"
+	"    printf 'ice: hint -- eval \"$(ice completion bash)\" (or fish / powershell)\\n' >&2\n"
+	"else\n"
 	"(( $+functions[compdef] )) || { autoload -Uz compinit && compinit -u; }\n"
 	"_ice() {\n"
 	"    # Parse the backend's 'name[\\tdescription]' lines into two\n"
@@ -126,7 +144,8 @@ static const char zsh_script[] =
 	"    done\n"
 	"    compadd -V unsorted -l -d disp -a names\n"
 	"}\n"
-	"compdef _ice ice\n";
+	"compdef _ice ice\n"
+	"fi\n";
 
 static const char fish_script[] =
 	"# ice fish completion (install: ice completion fish | source)\n"

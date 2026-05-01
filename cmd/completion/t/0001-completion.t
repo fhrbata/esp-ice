@@ -40,6 +40,37 @@ tap_done "ice completion powershell emits Register-ArgumentCompleter registratio
 tap_check ! "$BINARY" completion nushell 2>/dev/null
 tap_done "unknown shell is rejected with non-zero exit"
 
+# ---- guard: refuse to install in the wrong shell ----
+#
+# zsh users who source the bash script (often via bashcompinit) used to
+# get '_ice_complete:21: bad substitution' on every TAB because the
+# function body uses ${!array[@]}.  Same trap in reverse for bash users
+# who source the zsh script.  The guard should bail before defining
+# anything; we verify by sourcing the script in the wrong shell and
+# checking that the function name is NOT in the namespace.
+
+tap_check grep -q 'BASH_VERSION' bash.out
+tap_check grep -q 'ZSH_VERSION'  zsh.out
+tap_done "completion scripts carry a shell-version guard"
+
+if command -v zsh >/dev/null 2>&1; then
+	tap_check ! zsh -c "eval \"\$(cat '$PWD/bash.out')\" 2>/dev/null; \
+	                    typeset -f _ice_complete >/dev/null"
+	tap_done "bash script refuses to install in zsh"
+
+	tap_check zsh -c "eval \"\$(cat '$PWD/zsh.out')\" 2>/dev/null; \
+	                  typeset -f _ice >/dev/null"
+	tap_done "zsh script installs cleanly in zsh"
+fi
+
+tap_check ! bash -c "eval \"\$(cat '$PWD/zsh.out')\" 2>/dev/null; \
+                     declare -f _ice >/dev/null"
+tap_done "zsh script refuses to install in bash"
+
+tap_check bash -c "eval \"\$(cat '$PWD/bash.out')\" 2>/dev/null; \
+                   declare -f _ice_complete >/dev/null"
+tap_done "bash script installs cleanly in bash"
+
 # ---- `ice __complete`: subcommand-name candidates ----
 
 "$BINARY" __complete 1 ice "" >cmds.out
