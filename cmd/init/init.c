@@ -405,13 +405,18 @@ static int cmake_configure(void)
 /* Python venv + ice_shim -- dispatch IDF's host Python scripts to     */
 /* their native ice equivalents                                        */
 /*                                                                     */
-/*   ldgen.py            -> ice idf ldgen                              */
-/*   gen_esp32part.py    -> ice idf partition-table  (generate form)   */
-/*   gen_esp32part.py    -> exit 0                   (display form)    */
-/*   gen_crt_bundle.py   -> ice idf crt-bundle                         */
-/*   esptool.py          -> ice image create         (elf2image only)  */
-/*   python -m esptool   -> ice image create         (elf2image only)  */
-/*   python -m kconfgen  -> ice idf kconfgen                           */
+/*   ldgen.py                  -> ice idf ldgen                        */
+/*   gen_esp32part.py          -> ice idf partition-table  (generate)  */
+/*   gen_esp32part.py          -> exit 0                   (display)   */
+/*   gen_crt_bundle.py         -> ice idf crt-bundle                   */
+/*   check_sizes.py bootloader -> ice idf partition-table check-bootloader */
+/*   check_sizes.py partition  -> ice idf partition-table check-partition */
+/*   gen_empty_partition.py    -> ice idf partition-table empty        */
+/*   gen_extra_subtypes_inc.py -> ice idf partition-table subtypes-header */
+/*   parttool.py               -> ice target partition <verb>          */
+/*   esptool.py                -> ice image create         (elf2image) */
+/*   python -m esptool         -> ice image create         (elf2image) */
+/*   python -m kconfgen        -> ice idf kconfgen                     */
 /*                                                                     */
 /* IDF wires these scripts into its cmake rules (and thus into         */
 /* build.ninja, or Makefiles when -G "Unix Makefiles") as              */
@@ -606,6 +611,69 @@ static void write_python_shim(const char *site_packages, const char *ice_path)
 	    "    elif base == \"gen_crt_bundle.py\":\n"
 	    "        os.execv(_ICE,\n"
 	    "                 [_ICE, \"idf\", \"crt-bundle\", *sys.argv[1:]])\n"
+	    "    elif base == \"check_sizes.py\":\n"
+	    "        # check_sizes.py <main-opts> {bootloader,partition} "
+	    "<sub-args>\n"
+	    "        # Translate the argparse subcommand into an ice "
+	    "subcommand,\n"
+	    "        # rewrite Python's underscore flag to ice's hyphen form,\n"
+	    "        # and pass everything else through unchanged.\n"
+	    "        args = list(sys.argv[1:])\n"
+	    "        try:\n"
+	    "            i = next(j for j, a in enumerate(args)\n"
+	    "                     if a in (\"bootloader\", \"partition\"))\n"
+	    "        except StopIteration:\n"
+	    "            os._exit(2)\n"
+	    "        subcmd = (\"check-bootloader\"\n"
+	    "                  if args[i] == \"bootloader\"\n"
+	    "                  else \"check-partition\")\n"
+	    "        rest = [(\"--allow-failures\" if a == "
+	    "\"--allow_failures\"\n"
+	    "                 else a) for a in args[:i] + args[i + 1:]]\n"
+	    "        os.execv(_ICE,\n"
+	    "                 [_ICE, \"idf\", \"partition-table\", subcmd,\n"
+	    "                  *rest])\n"
+	    "    elif base == \"gen_empty_partition.py\":\n"
+	    "        os.execv(_ICE,\n"
+	    "                 [_ICE, \"idf\", \"partition-table\", \"empty\",\n"
+	    "                  *sys.argv[1:]])\n"
+	    "    elif base == \"gen_extra_subtypes_inc.py\":\n"
+	    "        os.execv(_ICE,\n"
+	    "                 [_ICE, \"idf\", \"partition-table\",\n"
+	    "                  \"subtypes-header\", *sys.argv[1:]])\n"
+	    "    elif base == \"parttool.py\":\n"
+	    "        # parttool.py [main-opts] "
+	    "{read,write,erase,info}_partition\n"
+	    "        # Map the verb and rewrite "
+	    "--partition-{name,type,subtype,\n"
+	    "        # boot-default} to ice's "
+	    "--{name,type,subtype,boot-default}.\n"
+	    "        verb_map = {\n"
+	    "            \"read_partition\": \"read\",\n"
+	    "            \"write_partition\": \"write\",\n"
+	    "            \"erase_partition\": \"erase\",\n"
+	    "            \"get_partition_info\": \"info\",\n"
+	    "        }\n"
+	    "        flag_map = {\n"
+	    "            \"--partition-name\": \"--name\",\n"
+	    "            \"--partition-type\": \"--type\",\n"
+	    "            \"--partition-subtype\": \"--subtype\",\n"
+	    "            \"--partition-boot-default\": \"--boot-default\",\n"
+	    "        }\n"
+	    "        args = list(sys.argv[1:])\n"
+	    "        try:\n"
+	    "            i = next(j for j, a in enumerate(args)\n"
+	    "                     if a in verb_map)\n"
+	    "        except StopIteration:\n"
+	    "            os._exit(2)\n"
+	    "        rest = [flag_map.get(a, a)\n"
+	    "                for a in args[:i] + args[i + 1:]]\n"
+	    "        os.execv(_ICE,\n"
+	    "                 [_ICE, \"target\", \"partition\",\n"
+	    "                  verb_map[args[i]], *rest])\n",
+	    ice_path);
+	sbuf_addstr(
+	    &content,
 	    "    elif base == \"esptool.py\":\n"
 	    "        _esptool_dispatch(sys.argv[1:])\n"
 	    "    elif sys.argv[0] == \"-m\" and \"elf2image\" in "
@@ -652,8 +720,7 @@ static void write_python_shim(const char *site_packages, const char *ice_path)
 	    "    _main()\n"
 	    "except BaseException as _exc:\n"
 	    "    sys.stderr.write(\"ice shim: \" + repr(_exc) + "
-	    "\"\\n\")\n",
-	    ice_path);
+	    "\"\\n\")\n");
 
 	if (write_file_atomic(path.buf, content.buf, content.len) < 0)
 		die_errno("write '%s'", path.buf);
