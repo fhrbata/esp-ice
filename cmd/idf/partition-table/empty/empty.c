@@ -47,13 +47,29 @@ const struct cmd_desc cmd_idf_pt_empty_desc = {
     .manual = &idf_pt_empty_manual,
 };
 
+/* Write @p size bytes of 0xFF to @p out. */
+static int write_blank(FILE *out, uint32_t size, const char *label)
+{
+	uint8_t buf[4096];
+
+	memset(buf, 0xFF, sizeof(buf));
+	for (uint32_t remaining = size; remaining > 0;) {
+		size_t chunk =
+		    remaining > sizeof(buf) ? sizeof(buf) : remaining;
+		if (fwrite(buf, 1, chunk, out) != chunk) {
+			err_errno("write error on '%s'", label);
+			return -1;
+		}
+		remaining -= (uint32_t)chunk;
+	}
+	return 0;
+}
+
 int cmd_idf_pt_empty(int argc, const char **argv)
 {
 	const char *output_path;
 	uint32_t size;
 	char *end;
-	FILE *out;
-	uint8_t buf[4096];
 
 	argc = parse_options(argc, argv, &cmd_idf_pt_empty_desc);
 
@@ -66,32 +82,22 @@ int cmd_idf_pt_empty(int argc, const char **argv)
 
 	output_path = (argc >= 2) ? argv[1] : "-";
 
-	if (!strcmp(output_path, "-")) {
-		out = stdout;
-	} else {
-		mkdirp_for_file(output_path);
-		out = fopen(output_path, "wb");
-		if (!out) {
+	/* Two distinct paths so the static analyzer can prove no fclose
+	 * is missed: stdout is never closed, the fopen'd file always is. */
+	if (!strcmp(output_path, "-"))
+		return write_blank(stdout, size, output_path) < 0 ? 1 : 0;
+
+	mkdirp_for_file(output_path);
+	{
+		FILE *fp = fopen(output_path, "wb");
+		int rc;
+
+		if (!fp) {
 			err_errno("cannot write '%s'", output_path);
 			return 1;
 		}
+		rc = write_blank(fp, size, output_path);
+		fclose(fp);
+		return rc < 0 ? 1 : 0;
 	}
-
-	memset(buf, 0xFF, sizeof(buf));
-	for (uint32_t remaining = size; remaining > 0;) {
-		size_t chunk =
-		    remaining > sizeof(buf) ? sizeof(buf) : remaining;
-		if (fwrite(buf, 1, chunk, out) != chunk) {
-			err_errno("write error on '%s'", output_path);
-			if (out != stdout)
-				fclose(out);
-			return 1;
-		}
-		remaining -= (uint32_t)chunk;
-	}
-
-	if (out != stdout)
-		fclose(out);
-
-	return 0;
 }
