@@ -14,7 +14,9 @@
 #ifndef PARTITION_TABLE_H
 #define PARTITION_TABLE_H
 
+#include <stddef.h>
 #include <stdint.h>
+#include <stdio.h>
 
 /* Binary layout constants */
 #define PT_ENTRY_SIZE 32
@@ -80,5 +82,135 @@ int pt_parse_csv(const char *path, struct pt_entry *entries, int *count,
  */
 int pt_to_binary(const struct pt_entry *entries, int count,
 		 const struct pt_options *opts, uint8_t out[PT_DATA_SIZE]);
+
+/**
+ * @brief Parse a serialised partition table back into entries.
+ *
+ * Walks 32-byte slots; stops at the first all-0xFF slot.  Skips the
+ * MD5 entry (magic 0xEB 0xEB), verifying its digest when @p
+ * verify_md5 is non-zero.  Rejects unknown magic words.
+ *
+ * Each filled @c pt_entry has @c offset_set = 1 and @c
+ * size_is_end_addr = 0 (binary entries are always fully resolved).
+ *
+ * @return 0 on success, -1 on error (message printed via err()).
+ */
+int pt_from_binary(const uint8_t *bin, size_t len, struct pt_entry *entries,
+		   int *count, int verify_md5);
+
+/**
+ * @brief Auto-detect CSV vs binary by looking at the first two bytes.
+ *
+ * On binary magic (0xAA 0x50 or 0xEB 0xEB) parses with @c
+ * pt_from_binary (MD5 verified iff @p opts->md5sum); otherwise
+ * forwards to @c pt_parse_csv.
+ *
+ * @return 0 on success, -1 on error.
+ */
+int pt_load(const char *path, struct pt_entry *entries, int *count,
+	    const struct pt_options *opts);
+
+/**
+ * @brief Emit a partition table as canonical CSV.
+ *
+ * Format mirrors @b{gen_esp32part.py}'s @c PartitionTable.to_csv()
+ * byte-for-byte:
+ *
+ * @code
+ *   # ESP-IDF Partition Table
+ *   # Name, Type, SubType, Offset, Size, Flags
+ *   nvs,data,nvs,0x9000,24K,
+ *   factory,app,factory,0x10000,1M,
+ * @endcode
+ *
+ * Sizes use @c K / @c M when exactly divisible, otherwise hex.
+ * Offsets are always hex.  The Flags column has a trailing comma
+ * even when empty.  A trailing newline follows the last row.
+ *
+ * @return 0 on success, -1 on I/O error.
+ */
+int pt_to_csv(const struct pt_entry *entries, int count, FILE *out);
+
+/**
+ * @brief Format a partition type symbolically into @p buf.
+ *
+ * Writes the registered name (e.g. "app", "data") when known; falls
+ * back to a decimal numeric formatting (matching gen_esp32part.py's
+ * @c lookup_keyword default).
+ *
+ * @p buflen should be at least 16.  Returns @p buf for chaining.
+ */
+const char *pt_format_type(uint8_t type, char *buf, size_t buflen);
+
+/**
+ * @brief Format a partition subtype symbolically into @p buf.
+ *
+ * Handles the two synthetic ranges:
+ *   - app subtype 0x10..0x1F   -> "ota_0".."ota_15"
+ *   - app subtype 0x30..0x31   -> "tee_0".."tee_1"
+ *
+ * Then consults the static name table; falls back to decimal when
+ * unknown (matching gen_esp32part.py).
+ *
+ * @p buflen should be at least 16.  Returns @p buf.
+ */
+const char *pt_format_subtype(uint8_t type, uint8_t subtype, char *buf,
+			      size_t buflen);
+
+/**
+ * @brief Format a size with M/K suffix when divisible, hex otherwise.
+ *
+ * Mirrors gen_esp32part.py's @c addr_format(a, include_sizes=True).
+ *
+ * @p buflen should be at least 16.  Returns @p buf.
+ */
+const char *pt_format_size(uint32_t size, char *buf, size_t buflen);
+
+/**
+ * @brief Parse a partition type name to its numeric value.
+ *
+ * Accepts the symbolic names (@b{app}, @b{data}, @b{bootloader},
+ * @b{partition_table}) or any numeric form @c strtoul(_, _, 0)
+ * understands (decimal, @b{0x}-hex).
+ *
+ * @return 0 on success, -1 if @p s does not parse.
+ */
+int pt_parse_type(const char *s, uint8_t *out);
+
+/**
+ * @brief Parse a partition subtype name (in the context of @p type) to
+ * its numeric value.
+ *
+ * Honours the synthetic ranges (app @c ota_0..ota_15, app
+ * @c tee_0..tee_1), the static name table, any names registered via
+ * pt_register_subtype(), and finally a numeric fallback.
+ *
+ * @return 0 on success, -1 if @p s does not parse.
+ */
+int pt_parse_subtype(uint8_t type, const char *s, uint8_t *out);
+
+/**
+ * @brief Register a custom subtype name for runtime lookup.
+ *
+ * Mirrors @b{gen_esp32part.py}'s @c add_extra_subtypes mechanism:
+ * the (@p type, @p name, @p val) triple becomes recognised by
+ * pt_parse_subtype() and emitted by pt_format_subtype() on the
+ * matching numeric value.
+ *
+ * Duplicates of an existing static or extra entry are tolerated
+ * silently when they match in value; conflicts (same name,
+ * different value) are reported and rejected.
+ *
+ * @return 0 on success, -1 on a name/value conflict.
+ */
+int pt_register_subtype(uint8_t type, const char *name, uint8_t val);
+
+/**
+ * @brief Drop every entry registered via pt_register_subtype.
+ *
+ * Useful in tests and when re-running the parser within a single
+ * process for different partition tables with different extras.
+ */
+void pt_clear_extras(void);
 
 #endif /* PARTITION_TABLE_H */
