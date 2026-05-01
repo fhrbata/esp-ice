@@ -210,6 +210,73 @@ static const struct qemu_chip *find_chip(const char *name)
 }
 
 /* ------------------------------------------------------------------ */
+/*  Tool resolution: ~/.ice/tools/<package>/<version>/                */
+/* ------------------------------------------------------------------ */
+
+/*
+ * Pick a "best" version directory under @p tool_dir.  Newest-by-name
+ * is good enough for v1: ice tools install names directories like
+ * @c{esp_develop_9.2.2_20250817} so lexicographic order gets us the
+ * latest installed.  Returns the chosen name in @p out (caller-owned)
+ * or 0 if @p tool_dir is empty or absent.
+ */
+struct pick_version_ctx {
+	struct sbuf *out;
+};
+
+static int pick_version_cb(const char *name, void *ud)
+{
+	struct pick_version_ctx *ctx = ud;
+	if (name[0] == '.')
+		return 0;
+	if (ctx->out->len == 0 || strcmp(name, ctx->out->buf) > 0) {
+		sbuf_reset(ctx->out);
+		sbuf_addstr(ctx->out, name);
+	}
+	return 0;
+}
+
+/*
+ * Resolve a tool binary by walking @c{ice_home()/tools/<package>/} for
+ * the latest installed version and joining the export sub-path.  The
+ * @p subpath argument is the relative path inside the version dir
+ * (e.g. @c{"qemu/bin/qemu-system-xtensa"}); for Espressif's qemu fork
+ * this matches the tools.json @c export_paths entry.
+ *
+ * Returns a malloc'd absolute path on success (caller frees), NULL if
+ * no matching install is found.  Verifies the binary is actually
+ * executable before returning.
+ */
+static char *resolve_tool(const char *package, const char *subpath)
+{
+	struct sbuf tool_dir = SBUF_INIT;
+	struct sbuf version = SBUF_INIT;
+	struct sbuf full = SBUF_INIT;
+	char *result = NULL;
+	struct pick_version_ctx ctx = {.out = &version};
+
+	sbuf_addf(&tool_dir, "%s/tools/%s", ice_home(), package);
+	if (!is_directory(tool_dir.buf))
+		goto done;
+
+	dir_foreach(tool_dir.buf, pick_version_cb, &ctx);
+	if (version.len == 0)
+		goto done;
+
+	sbuf_addf(&full, "%s/%s/%s", tool_dir.buf, version.buf, subpath);
+	if (access(full.buf, X_OK) != 0)
+		goto done;
+
+	result = sbuf_strdup(full.buf);
+
+done:
+	sbuf_release(&full);
+	sbuf_release(&version);
+	sbuf_release(&tool_dir);
+	return result;
+}
+
+/* ------------------------------------------------------------------ */
 /*  Flash-image building                                              */
 /* ------------------------------------------------------------------ */
 
@@ -813,7 +880,23 @@ static void draw_status_bar(struct sbuf *out, const struct tui_rect *r,
 static int run_debug(struct process *qemu_proc, const struct qemu_chip *chip,
 		     const char *qemu_bin)
 {
-	const char *gdb_bin = opt_gdb_bin ? opt_gdb_bin : chip->gdb_prog;
+	/* Same resolution rule as the qemu binary above: --gdb-bin >
+	 * installed under ice_home/tools/ > PATH.  Different package
+	 * name and a different layout under <version>/ -- the chip-
+	 * specific binaries live in <package>/bin/. */
+	char *gdb_bin_owned = NULL;
+	const char *gdb_bin = opt_gdb_bin;
+	if (!gdb_bin) {
+		const char *pkg =
+		    !strcmp(chip->qemu_prog, "qemu-system-riscv32")
+			? "riscv32-esp-elf-gdb"
+			: "xtensa-esp-elf-gdb";
+		struct sbuf sub = SBUF_INIT;
+		sbuf_addf(&sub, "%s/bin/%s", pkg, chip->gdb_prog);
+		gdb_bin_owned = resolve_tool(pkg, sub.buf);
+		sbuf_release(&sub);
+		gdb_bin = gdb_bin_owned ? gdb_bin_owned : chip->gdb_prog;
+	}
 	const char *elf = config_get("_project.elf");
 	if (!elf || !*elf)
 		die("ice qemu --debug: no ELF resolved (run 'ice build' "
@@ -876,6 +959,7 @@ static int run_debug(struct process *qemu_proc, const struct qemu_chip *chip,
 		tui_log_release(&uart_p.L);
 		vt100_free(gdb_p.V);
 		vt100_free(uart_p.V);
+		free(gdb_bin_owned);
 		return 1;
 	}
 
@@ -1012,6 +1096,7 @@ static int run_debug(struct process *qemu_proc, const struct qemu_chip *chip,
 	vt100_free(gdb_p.V);
 	vt100_free(uart_p.V);
 	sbuf_release(&gdb_remote);
+	free(gdb_bin_owned);
 	return 0;
 }
 
@@ -1088,7 +1173,22 @@ int cmd_qemu(int argc, const char **argv)
 	}
 
 	/* ---- qemu binary ---- */
-	const char *qemu_bin = opt_qemu_bin ? opt_qemu_bin : chip->qemu_prog;
+	/* Resolution order: --qemu-bin > installed under ice_home/tools/ >
+	 * fall through to PATH (chip->qemu_prog).  The installed-tools
+	 * lookup matches the layout that ice tools install / esp-idf's
+	 * idf_tools.py both produce ("<version>/qemu/bin/<binary>"). */
+	char *qemu_bin_owned = NULL;
+	const char *qemu_bin = opt_qemu_bin;
+	if (!qemu_bin) {
+		const char *pkg = !strcmp(chip->qemu_prog, "qemu-system-xtensa")
+				      ? "qemu-xtensa"
+				      : "qemu-riscv32";
+		struct sbuf sub = SBUF_INIT;
+		sbuf_addf(&sub, "qemu/bin/%s", chip->qemu_prog);
+		qemu_bin_owned = resolve_tool(pkg, sub.buf);
+		sbuf_release(&sub);
+		qemu_bin = qemu_bin_owned ? qemu_bin_owned : chip->qemu_prog;
+	}
 
 	/* ---- build argv ---- */
 	/* svec_push keeps a NULL sentinel after the last entry, so the
@@ -1152,5 +1252,6 @@ int cmd_qemu(int argc, const char **argv)
 	svec_clear(&qemu_argv);
 	sbuf_release(&flash_path);
 	sbuf_release(&efuse_path);
+	free(qemu_bin_owned);
 	return rc;
 }
