@@ -131,6 +131,12 @@ int cmd_repo___clone(int argc, const char **argv)
 
 	svec_push(&args, "git");
 	svec_push(&args, "clone");
+	/* Force progress output even when stderr is piped (it always
+	 * is here -- process_run_progress captures the child's
+	 * stdout+stderr).  Without this git stays silent during the
+	 * fetch and the user has nothing to look at when they hit
+	 * Ctrl-v expecting live progress. */
+	svec_push(&args, "--progress");
 	if (clone_reference) {
 		svec_push(&args, "--reference-if-able");
 		svec_push(&args, clone_reference);
@@ -158,10 +164,11 @@ int cmd_repo___clone(int argc, const char **argv)
 	 * any SHA once fetched stays for every subsequent checkout.
 	 */
 	{
-		const char *argv[] = {
-		    "git",    "submodule",   "update",
-		    "--init", "--recursive", "--no-recommend-shallow",
-		    "--jobs", jobs_str,	     NULL};
+		const char *argv[] = {"git",	     "submodule",
+				      "update",	     "--init",
+				      "--recursive", "--no-recommend-shallow",
+				      "--jobs",	     jobs_str,
+				      "--progress",  NULL};
 		if (git_run(repo_reference_path(), argv) != 0)
 			die("git submodule update failed");
 	}

@@ -107,7 +107,12 @@ int cmd_repo___pull(int argc, const char **argv)
 	}
 
 	{
-		const char *argv[] = {"git", "pull", "--ff-only", NULL};
+		/* --progress: stderr is piped (process_run_progress
+		 * captures the child) so git would otherwise stay silent
+		 * during the fetch and Ctrl-v would have nothing to
+		 * mirror. */
+		const char *argv[] = {"git", "pull", "--ff-only", "--progress",
+				      NULL};
 		if (git_run(base, argv) != 0)
 			die("git pull failed");
 	}
@@ -122,6 +127,7 @@ int cmd_repo___pull(int argc, const char **argv)
 				      "--no-recommend-shallow",
 				      "--jobs",
 				      jobs_str,
+				      "--progress",
 				      NULL};
 		if (git_run(base, argv) != 0)
 			warn("some submodules failed to update");

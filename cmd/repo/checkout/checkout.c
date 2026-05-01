@@ -224,13 +224,19 @@ static void prepare_reference(const char *ref, int jobs)
 	}
 
 	if (!ref_exists(base, ref)) {
-		const char *argv[] = {"git", "fetch", "origin", ref, NULL};
+		/* --progress: stderr is piped (process_run_progress
+		 * captures the child) so git would otherwise stay silent
+		 * during the network fetch and Ctrl-v would have nothing
+		 * to mirror. */
+		const char *argv[] = {"git", "fetch",	   "origin",
+				      ref,   "--progress", NULL};
 		if (git_run(base, argv) != 0)
 			die("git fetch '%s' failed", ref);
 	}
 
 	{
-		const char *argv[] = {"git", "checkout", "--force", ref, NULL};
+		const char *argv[] = {"git", "checkout",   "--force",
+				      ref,   "--progress", NULL};
 		if (git_run(base, argv) != 0)
 			die("git checkout '%s' failed", ref);
 	}
@@ -245,6 +251,7 @@ static void prepare_reference(const char *ref, int jobs)
 				      "--no-recommend-shallow",
 				      "--jobs",
 				      jobs_str,
+				      "--progress",
 				      NULL};
 		if (git_run(base, argv) != 0)
 			warn("some submodules failed to update");
@@ -542,15 +549,17 @@ int cmd_repo___checkout(int argc, const char **argv)
 	}
 
 	{
-		const char *argv[] = {"git", "checkout", "--force", ref, NULL};
+		const char *argv[] = {"git", "checkout",   "--force",
+				      ref,   "--progress", NULL};
 		if (git_run(dest, argv) != 0)
 			die("git checkout '%s' in '%s' failed", ref, dest);
 	}
 
 	{
-		const char *argv[] = {
-		    "git",     "submodule",  "update", "--init", "--recursive",
-		    "--force", "--no-fetch", "--jobs", jobs_str, NULL};
+		const char *argv[] = {"git",	    "submodule",   "update",
+				      "--init",	    "--recursive", "--force",
+				      "--no-fetch", "--jobs",	   jobs_str,
+				      "--progress", NULL};
 		if (git_run(dest, argv) != 0)
 			warn("some submodules failed to update");
 	}
