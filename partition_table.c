@@ -113,7 +113,18 @@ static int parse_int(const char *s, uint32_t *out)
 	return 0;
 }
 
-static int parse_type(const char *s, uint8_t *out)
+/* Runtime "extras" table populated by pt_register_subtype() — append-only,
+ * lives for the lifetime of the process or until pt_clear_extras(). */
+struct extra_subtype {
+	uint8_t type;
+	uint8_t val;
+	char *name; /* heap-owned */
+};
+static struct extra_subtype *extras;
+static size_t extras_nr;
+static size_t extras_alloc;
+
+int pt_parse_type(const char *s, uint8_t *out)
 {
 	int i;
 
@@ -135,7 +146,7 @@ static int parse_type(const char *s, uint8_t *out)
 	return -1;
 }
 
-static int parse_subtype(uint8_t type, const char *s, uint8_t *out)
+int pt_parse_subtype(uint8_t type, const char *s, uint8_t *out)
 {
 	int i;
 
@@ -159,11 +170,19 @@ static int parse_subtype(uint8_t type, const char *s, uint8_t *out)
 		return -1;
 	}
 
-	/* named subtypes */
+	/* static named subtypes */
 	for (i = 0; subtype_names[i].name; i++) {
 		if (subtype_names[i].type == type &&
 		    !strcmp(s, subtype_names[i].name)) {
 			*out = subtype_names[i].val;
+			return 0;
+		}
+	}
+
+	/* runtime extras */
+	for (size_t j = 0; j < extras_nr; j++) {
+		if (extras[j].type == type && !strcmp(s, extras[j].name)) {
+			*out = extras[j].val;
 			return 0;
 		}
 	}
@@ -177,6 +196,51 @@ static int parse_subtype(uint8_t type, const char *s, uint8_t *out)
 		}
 	}
 	return -1;
+}
+
+int pt_register_subtype(uint8_t type, const char *name, uint8_t val)
+{
+	/* Check the static table for a name collision under this type. */
+	for (int i = 0; subtype_names[i].name; i++) {
+		if (subtype_names[i].type == type &&
+		    !strcmp(name, subtype_names[i].name)) {
+			if (subtype_names[i].val == val)
+				return 0; /* idempotent re-register */
+			err("subtype name '%s' already registered for type %u "
+			    "with value 0x%02x; cannot redefine to 0x%02x",
+			    name, type, subtype_names[i].val, val);
+			return -1;
+		}
+	}
+
+	/* Check existing extras for the same name. */
+	for (size_t j = 0; j < extras_nr; j++) {
+		if (extras[j].type == type && !strcmp(name, extras[j].name)) {
+			if (extras[j].val == val)
+				return 0;
+			err("subtype name '%s' already registered for type %u "
+			    "with value 0x%02x; cannot redefine to 0x%02x",
+			    name, type, extras[j].val, val);
+			return -1;
+		}
+	}
+
+	ALLOC_GROW(extras, extras_nr + 1, extras_alloc);
+	extras[extras_nr].type = type;
+	extras[extras_nr].val = val;
+	extras[extras_nr].name = sbuf_strdup(name);
+	extras_nr++;
+	return 0;
+}
+
+void pt_clear_extras(void)
+{
+	for (size_t j = 0; j < extras_nr; j++)
+		free(extras[j].name);
+	free(extras);
+	extras = NULL;
+	extras_nr = 0;
+	extras_alloc = 0;
 }
 
 /* Right/left trim in place; used for the ':'-separated flag tokens. */
@@ -272,14 +336,15 @@ int pt_parse_csv(const char *path, struct pt_entry *entries, int *count,
 		strncpy(e->name, name_f, 16);
 
 		/* type */
-		if (parse_type(type_f, &e->type) != 0) {
+		if (pt_parse_type(type_f, &e->type) != 0) {
 			err("line %d: unknown type '%s'", r->lineno, type_f);
 			goto out;
 		}
 
 		/* subtype */
 		if (sub_f[0]) {
-			if (parse_subtype(e->type, sub_f, &e->subtype) != 0) {
+			if (pt_parse_subtype(e->type, sub_f, &e->subtype) !=
+			    0) {
 				err("line %d: unknown subtype '%s'", r->lineno,
 				    sub_f);
 				goto out;
@@ -565,6 +630,234 @@ int pt_to_binary(const struct pt_entry *entries, int count,
 
 		memcpy(p, md5_entry, PT_ENTRY_SIZE);
 		/* p += PT_ENTRY_SIZE; — rest already 0xFF from memset */
+	}
+
+	return 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* Reverse name lookup / formatting helpers                            */
+/* ------------------------------------------------------------------ */
+
+const char *pt_format_type(uint8_t type, char *buf, size_t buflen)
+{
+	for (int i = 0; type_names[i].name; i++) {
+		if (type_names[i].val == type) {
+			snprintf(buf, buflen, "%s", type_names[i].name);
+			return buf;
+		}
+	}
+	snprintf(buf, buflen, "%u", type);
+	return buf;
+}
+
+const char *pt_format_subtype(uint8_t type, uint8_t subtype, char *buf,
+			      size_t buflen)
+{
+	/* app ota_0..ota_15 */
+	if (type == PT_TYPE_APP && subtype >= 0x10 && subtype <= 0x1F) {
+		snprintf(buf, buflen, "ota_%u", subtype - 0x10);
+		return buf;
+	}
+
+	/* app tee_0..tee_1 */
+	if (type == PT_TYPE_APP && (subtype == 0x30 || subtype == 0x31)) {
+		snprintf(buf, buflen, "tee_%u", subtype - 0x30);
+		return buf;
+	}
+
+	for (int i = 0; subtype_names[i].name; i++) {
+		if (subtype_names[i].type == type &&
+		    subtype_names[i].val == subtype) {
+			snprintf(buf, buflen, "%s", subtype_names[i].name);
+			return buf;
+		}
+	}
+
+	/* runtime extras */
+	for (size_t j = 0; j < extras_nr; j++) {
+		if (extras[j].type == type && extras[j].val == subtype) {
+			snprintf(buf, buflen, "%s", extras[j].name);
+			return buf;
+		}
+	}
+
+	snprintf(buf, buflen, "%u", subtype);
+	return buf;
+}
+
+const char *pt_format_size(uint32_t size, char *buf, size_t buflen)
+{
+	if (size % 0x100000 == 0)
+		snprintf(buf, buflen, "%uM", size / 0x100000);
+	else if (size % 0x400 == 0)
+		snprintf(buf, buflen, "%uK", size / 0x400);
+	else
+		snprintf(buf, buflen, "0x%x", size);
+	return buf;
+}
+
+/* ------------------------------------------------------------------ */
+/* Binary parser (inverse of pt_to_binary)                             */
+/* ------------------------------------------------------------------ */
+
+static uint32_t read_le32(const uint8_t *p)
+{
+	return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) |
+	       ((uint32_t)p[3] << 24);
+}
+
+int pt_from_binary(const uint8_t *bin, size_t len, struct pt_entry *entries,
+		   int *count, int verify_md5)
+{
+	struct md5_ctx md5;
+	int n = 0;
+
+	md5_init(&md5);
+
+	for (size_t off = 0; off + PT_ENTRY_SIZE <= len; off += PT_ENTRY_SIZE) {
+		const uint8_t *slot = bin + off;
+		struct pt_entry *e;
+		uint32_t flags;
+		int i, all_ff = 1;
+
+		for (i = 0; i < PT_ENTRY_SIZE; i++) {
+			if (slot[i] != 0xFF) {
+				all_ff = 0;
+				break;
+			}
+		}
+		if (all_ff)
+			break;
+
+		/* MD5 entry: magic 0xEB 0xEB, digest at bytes 16..31. */
+		if (slot[0] == 0xEB && slot[1] == 0xEB) {
+			if (verify_md5) {
+				struct md5_ctx tmp = md5;
+				uint8_t digest[16];
+
+				md5_final(&tmp, digest);
+				if (memcmp(digest, slot + 16, 16) != 0) {
+					err("partition table MD5 mismatch at "
+					    "offset 0x%zx",
+					    off);
+					return -1;
+				}
+			}
+			continue;
+		}
+
+		/* Real entry: magic 0xAA 0x50. */
+		if (slot[0] != 0xAA || slot[1] != 0x50) {
+			err("invalid partition entry magic 0x%02x%02x at "
+			    "offset "
+			    "0x%zx",
+			    slot[0], slot[1], off);
+			return -1;
+		}
+
+		if (n >= PT_MAX_ENTRIES) {
+			err("too many partition entries (max %d)",
+			    PT_MAX_ENTRIES);
+			return -1;
+		}
+
+		e = &entries[n++];
+		memset(e, 0, sizeof(*e));
+		e->type = slot[2];
+		e->subtype = slot[3];
+		e->offset = read_le32(slot + 4);
+		e->size = read_le32(slot + 8);
+		memcpy(e->name, slot + 12, 16);
+		e->name[16] = '\0';
+		flags = read_le32(slot + 28);
+		e->encrypted = (flags & (1u << 0)) ? 1 : 0;
+		e->readonly = (flags & (1u << 1)) ? 1 : 0;
+		e->offset_set = 1;
+
+		md5_update(&md5, slot, PT_ENTRY_SIZE);
+	}
+
+	*count = n;
+	return 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* Auto-detecting loader (CSV vs binary)                               */
+/* ------------------------------------------------------------------ */
+
+int pt_load(const char *path, struct pt_entry *entries, int *count,
+	    const struct pt_options *opts)
+{
+	FILE *fp;
+	uint8_t magic[2];
+	size_t got;
+	int rc;
+
+	fp = fopen(path, "rb");
+	if (!fp) {
+		err_errno("cannot open '%s'", path);
+		return -1;
+	}
+
+	got = fread(magic, 1, sizeof(magic), fp);
+
+	if (got == 2 && ((magic[0] == 0xAA && magic[1] == 0x50) ||
+			 (magic[0] == 0xEB && magic[1] == 0xEB))) {
+		uint8_t buf[PT_DATA_SIZE];
+		size_t total;
+
+		if (fseek(fp, 0, SEEK_SET) != 0) {
+			err_errno("seek failed on '%s'", path);
+			fclose(fp);
+			return -1;
+		}
+		total = fread(buf, 1, sizeof(buf), fp);
+		fclose(fp);
+		rc = pt_from_binary(buf, total, entries, count,
+				    opts ? opts->md5sum : 1);
+		return rc;
+	}
+
+	fclose(fp);
+	return pt_parse_csv(path, entries, count, opts);
+}
+
+/* ------------------------------------------------------------------ */
+/* CSV emitter (inverse of pt_parse_csv)                               */
+/* ------------------------------------------------------------------ */
+
+static void format_flags(const struct pt_entry *e, char *buf, size_t buflen)
+{
+	int n = 0;
+
+	buf[0] = '\0';
+	if (e->encrypted)
+		n += snprintf(buf + n, buflen - (size_t)n, "encrypted");
+	if (e->readonly)
+		snprintf(buf + n, buflen - (size_t)n, "%sreadonly",
+			 n ? ":" : "");
+}
+
+int pt_to_csv(const struct pt_entry *entries, int count, FILE *out)
+{
+	if (fputs("# ESP-IDF Partition Table\n", out) == EOF)
+		return -1;
+	if (fputs("# Name, Type, SubType, Offset, Size, Flags\n", out) == EOF)
+		return -1;
+
+	for (int i = 0; i < count; i++) {
+		const struct pt_entry *e = &entries[i];
+		char tbuf[16], sbuf[16], szbuf[16], fbuf[32];
+
+		pt_format_type(e->type, tbuf, sizeof(tbuf));
+		pt_format_subtype(e->type, e->subtype, sbuf, sizeof(sbuf));
+		pt_format_size(e->size, szbuf, sizeof(szbuf));
+		format_flags(e, fbuf, sizeof(fbuf));
+
+		if (fprintf(out, "%s,%s,%s,0x%x,%s,%s\n", e->name, tbuf, sbuf,
+			    e->offset, szbuf, fbuf) < 0)
+			return -1;
 	}
 
 	return 0;
