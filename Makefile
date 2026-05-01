@@ -183,6 +183,10 @@ LIB_SRCS := \
 	cmd/repo/checkout/checkout.c \
 	cmd/repo/info/info.c \
 	cmd/size/size.c \
+	cmd/size/files/files.c \
+	cmd/size/components/components.c \
+	cmd/size/symbols/symbols.c \
+	cmd/size/deps/deps.c \
 	cmd/status/status.c \
 	cmd/target/target.c \
 	cmd/monitor/monitor.c \
