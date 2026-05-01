@@ -95,6 +95,30 @@ int cmd_monitor(int argc, const char **argv)
 	if (opt_no_reset && !opt_port)
 		die("--no-reset requires -p/--port");
 
+	/* Host-target builds (linux) have no serial device -- the
+	 * "device" is the compiled ELF.  Match esp_idf_monitor's
+	 * LinuxMonitor by spawning the binary with our stdio inherited
+	 * so its output streams to the user's terminal and Ctrl-C
+	 * kills it the same way as any host program. */
+	const char *target = config_get("_project.target");
+	if (target && !strcmp(target, "linux")) {
+		const char *elf = config_get("_project.elf");
+		struct process proc = PROCESS_INIT;
+		const char *elf_argv[2];
+
+		if (!elf || !*elf)
+			die("no ELF resolved for the linux target "
+			    "(run @b{ice build} first)");
+
+		printf("@b{Running} %s @[2]{(Ctrl-C to exit)}\n", elf);
+		fflush(stdout);
+
+		elf_argv[0] = elf;
+		elf_argv[1] = NULL;
+		proc.argv = elf_argv;
+		return process_run(&proc);
+	}
+
 	const char *chip_str = config_get("_project.chip");
 	const char *port = opt_port;
 	unsigned baud = (unsigned)opt_baud;

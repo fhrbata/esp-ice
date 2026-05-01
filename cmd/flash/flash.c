@@ -90,15 +90,18 @@ static const struct cmd_manual manual = {
 int cmd_flash(int argc, const char **argv);
 int cmd___flash(int argc, const char **argv);
 
-/* No .needs: the porcelain wrapper does no setup_project of its own.
- * The build runs inside the spawned __flash child (which carries
- * .needs = PROJECT_BUILT), so all output -- cmake, port scan, flash
- * protocol -- lands in a single log written by the parent. */
+/* PROJECT_CONFIGURED (not BUILT): the porcelain wrapper needs the
+ * profile loaded so it can read @c _project.target and short-circuit
+ * the flash on host (linux) builds.  PROJECT_BUILT is left to the
+ * spawned __flash child so the cmake/ninja output it triggers stays
+ * captured in the log written by the parent's process_run_progress.
+ */
 const struct cmd_desc cmd_flash_desc = {
     .name = "flash",
     .fn = cmd_flash,
     .opts = cmd_flash_opts,
     .manual = &manual,
+    .needs = PROJECT_CONFIGURED,
 };
 
 /* Hidden plumbing: does the actual work.  The porcelain cmd_flash
@@ -136,6 +139,16 @@ int cmd_flash(int argc, const char **argv)
 	/* Parse for --help / -h / --ice-complete handling and for early
 	 * rejection of bad flags, but discard the mutated argv. */
 	parse_options(argc, argv, &cmd_flash_desc);
+
+	/* Host-target builds (linux) have no device to flash to -- short
+	 * circuit before launching the spinner so the user gets a clear
+	 * one-liner instead of a port scan that's bound to fail. */
+	const char *target = config_get("_project.target");
+	if (target && !strcmp(target, "linux")) {
+		printf("@y{ice flash: skipping (target = linux)}\n");
+		svec_clear(&cmd);
+		return 0;
+	}
 
 	/* Propagate --profile to the child via ICE_PROFILE; plain env
 	 * inheritance already covers the ICE_PROFILE / config / default
