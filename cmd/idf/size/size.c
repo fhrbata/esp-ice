@@ -554,6 +554,12 @@ int cmd_idf_size(int argc, const char **argv)
 	args_init(&args, argv[0]);
 	validate_args(&args);
 
+	/* The formatters embed @x{...} color tokens in their output; the
+	 * platform fprintf shim auto-strips them when the underlying fd is
+	 * not a tty.  --no-color forces them off even on a tty. */
+	if (args.no_color)
+		use_color = 0;
+
 	/* Open the output stream early so we can fail fast. */
 	out = stdout;
 	if (args.output_file) {

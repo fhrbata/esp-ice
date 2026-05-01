@@ -92,11 +92,57 @@ void tab_release(struct tab *t)
 /* Width helpers (counts UTF-8 code points)                           */
 /* ------------------------------------------------------------------ */
 
+/*
+ * Counts visible code points, skipping the @x{...} / @[name]{...}
+ * color tokens that the platform fprintf shim expands at write time.
+ * Cell text may embed these tokens for inline coloring, so column
+ * alignment must measure the text the user actually sees.
+ *
+ * Recognized:
+ *   @@         literal '@' (counts as 1)
+ *   @}         literal '}' (counts as 1)
+ *   @[spec]{   open color block (skipped, depth++)
+ *   @x{        open color block for x in r/g/y/b/c/R/G/Y (depth++)
+ *   }          close color block (skipped) when depth > 0
+ */
 static int utf8_width(const char *s)
 {
 	int n = 0;
+	int depth = 0;
+
 	while (*s) {
-		unsigned char c = (unsigned char)*s++;
+		unsigned char c = (unsigned char)*s;
+
+		if (c == '@') {
+			char nx = s[1];
+			if (nx == '@' || nx == '}') {
+				n++;
+				s += 2;
+				continue;
+			}
+			if (nx == '[') {
+				const char *e = strchr(s + 2, ']');
+				if (e && e[1] == '{') {
+					depth++;
+					s = e + 2;
+					continue;
+				}
+			}
+			if (nx && s[2] == '{' &&
+			    (nx == 'r' || nx == 'g' || nx == 'y' || nx == 'b' ||
+			     nx == 'c' || nx == 'R' || nx == 'G' ||
+			     nx == 'Y')) {
+				depth++;
+				s += 3;
+				continue;
+			}
+		}
+		if (c == '}' && depth > 0) {
+			depth--;
+			s++;
+			continue;
+		}
+		s++;
 		if ((c & 0xC0) == 0x80)
 			continue;
 		n++;
@@ -195,10 +241,17 @@ void tab_render_box(const struct tab *t, FILE *out)
 
 	fputs(VH, out);
 	for (int i = 0; i < t->nr_cols; i++) {
+		struct sbuf h = SBUF_INIT;
+
+		/* Bold the header text.  Headers may already carry a color
+		 * token (e.g. @y{Flash Code}); nesting bold on top works
+		 * because expand_colors stacks the codes. */
+		sbuf_addf(&h, "@b{%s}", t->headers[i]);
 		fputc(' ', out);
-		put_cell(out, t->headers[i], w[i], i == 0 ? 0 : 1);
+		put_cell(out, h.buf, w[i], i == 0 ? 0 : 1);
 		fputc(' ', out);
 		fputs(VH, out);
+		sbuf_release(&h);
 	}
 	fputc('\n', out);
 
@@ -229,9 +282,17 @@ void tab_render_box(const struct tab *t, FILE *out)
  * Mirror upstream's CSV emitter: strip leading/trailing whitespace
  * from each cell before quoting (the indented row labels don't make
  * sense in spreadsheet output).
+ *
+ * The cell text may contain embedded @x{...} color tokens (cells are
+ * built once and reused for both box and CSV output).  Build the
+ * quoted cell into an sbuf and emit via fputs so the platform shim
+ * either expands the tokens (tty) or strips them (file/pipe) — that
+ * keeps the emitted CSV clean for spreadsheet consumers when piped
+ * but adds color when the user just dumps to a terminal.
  */
 static void csv_emit_cell(FILE *out, const char *s)
 {
+	struct sbuf cell = SBUF_INIT;
 	const char *end;
 
 	while (*s == ' ' || *s == '\t')
@@ -240,13 +301,15 @@ static void csv_emit_cell(FILE *out, const char *s)
 	while (end > s && (end[-1] == ' ' || end[-1] == '\t'))
 		end--;
 
-	fputc('"', out);
+	sbuf_addch(&cell, '"');
 	for (const char *p = s; p < end; p++) {
 		if (*p == '"')
-			fputc('"', out);
-		fputc(*p, out);
+			sbuf_addch(&cell, '"');
+		sbuf_addch(&cell, *p);
 	}
-	fputc('"', out);
+	sbuf_addch(&cell, '"');
+	fputs(cell.buf, out);
+	sbuf_release(&cell);
 }
 
 void tab_render_csv(const struct tab *t, FILE *out)
@@ -269,6 +332,37 @@ void tab_render_csv(const struct tab *t, FILE *out)
 }
 
 /* ------------------------------------------------------------------ */
+/* Color helpers                                                       */
+/* ------------------------------------------------------------------ */
+
+/*
+ * Inline @x{...} tokens get expanded by the platform fprintf shim or
+ * stripped when writing to a non-tty.  We stick to the basic 16-color
+ * palette (@r/@g/@y/@b/@c) so legacy Windows console rendering looks
+ * the same as a modern xterm.
+ *
+ * Row-color convention used throughout this file:
+ *   y  yellow  -- memory-type rows / pivoted mem-type columns / archives
+ *                 in the deps table.
+ *   c  cyan    -- section sub-rows / pivoted section columns / dep
+ *                 names in the deps table.
+ *   r  red     -- diff suffix when current build grew (or "remain" /
+ *                 "total" shrank).
+ *   g  green   -- inverse of r.
+ *   b  bold    -- column headers.
+ */
+
+/* Choose color for a numeric diff suffix.  growth_is_bad=1 for "used"
+ * / "pct" cells (red on growth); 0 for "remain" / "total" (green on
+ * growth, since bigger = more headroom). */
+static char diff_color(int64_t sign, int growth_is_bad)
+{
+	if (growth_is_bad)
+		return sign > 0 ? 'r' : 'g';
+	return sign > 0 ? 'g' : 'r';
+}
+
+/* ------------------------------------------------------------------ */
 /* Helpers                                                             */
 /* ------------------------------------------------------------------ */
 
@@ -278,20 +372,24 @@ static void int_to_str(char *buf, size_t bufsz, int64_t n)
 	snprintf(buf, bufsz, "%lld", (long long)n);
 }
 
-/* Format diff-inline cell: "value diff" with sign prefix. */
+/* Format diff-inline cell: "value diff" with sign prefix.  The diff
+ * suffix is wrapped in @r{...} (growth_is_bad && diff>0) or @g{...}
+ * (the inverse) so it shows red/green on a tty.  diff==0 stays
+ * uncolored to match the visual "no change" case in upstream. */
 static void diff_inline(char *buf, size_t bufsz, int64_t value, int64_t diff,
-			int show_diff)
+			int show_diff, int growth_is_bad)
 {
 	if (!show_diff) {
 		int_to_str(buf, bufsz, value);
 		return;
 	}
-	if (diff != 0)
-		snprintf(buf, bufsz, "%lld %+6lld", (long long)value,
-			 (long long)diff);
-	else
+	if (diff == 0) {
 		snprintf(buf, bufsz, "%lld %6lld", (long long)value,
 			 (long long)diff);
+		return;
+	}
+	snprintf(buf, bufsz, "%lld @%c{%+6lld}", (long long)value,
+		 diff_color(diff, growth_is_bad), (long long)diff);
 }
 
 /* Format percentage stripping trailing zeros (matches upstream
@@ -350,14 +448,23 @@ static void emit_pct_diff_suffix(char *out, size_t outsz, double pct_diff)
 }
 
 static void fmt_pct_diff(char *buf, size_t bufsz, double pct, double pct_diff,
-			 int show_diff)
+			 int show_diff, int growth_is_bad)
 {
-	int len;
+	int len = fmt_pct(buf, bufsz, pct);
 
-	len = fmt_pct(buf, bufsz, pct);
 	if (!show_diff)
 		return;
-	emit_pct_diff_suffix(buf + len, bufsz - (size_t)len, pct_diff);
+	if (pct_diff == 0.0) {
+		emit_pct_diff_suffix(buf + len, bufsz - (size_t)len, pct_diff);
+		return;
+	}
+	{
+		char tmp[32];
+		char letter = diff_color(pct_diff > 0 ? 1 : -1, growth_is_bad);
+		emit_pct_diff_suffix(tmp, sizeof(tmp), pct_diff);
+		snprintf(buf + len, bufsz - (size_t)len, "@%c{%s}", letter,
+			 tmp);
+	}
 }
 
 /* ------------------------------------------------------------------ */
@@ -430,12 +537,17 @@ void build_summary_tab(const struct memmap *mm, const struct mm_args *args,
 		struct mm_type *t = types[i];
 		struct mm_section **secs = NULL;
 		char used[64], pct[32], remain[64], total[64];
+		/* Wrapped buffers carry the row-color token around the
+		 * raw value+diff strings.  Sized to fit "@y{...}" plus
+		 * the original. */
+		char name_w[80], used_w[96], pct_w[64], remain_w[96],
+		    total_w[96];
 		const char *cells[5];
 		int64_t free_b;
 		double pct_v;
 
 		diff_inline(used, sizeof(used), t->used, t->used_diff,
-			    args->diff != NULL);
+			    args->diff != NULL, 1);
 
 		if (t->size) {
 			double pct_diff = 0.0;
@@ -457,23 +569,38 @@ void build_summary_tab(const struct memmap *mm, const struct mm_args *args,
 				}
 			}
 			fmt_pct_diff(pct, sizeof(pct), pct_v, pct_diff,
-				     args->diff != NULL);
+				     args->diff != NULL, 1);
 			diff_inline(remain, sizeof(remain), free_b,
 				    t->size_diff - t->used_diff,
-				    args->diff != NULL);
+				    args->diff != NULL, 0);
 			diff_inline(total, sizeof(total), t->size, t->size_diff,
-				    args->diff != NULL);
+				    args->diff != NULL, 0);
 		} else {
 			pct[0] = '\0';
 			remain[0] = '\0';
 			total[0] = '\0';
 		}
 
-		cells[0] = t->name;
-		cells[1] = used;
-		cells[2] = pct;
-		cells[3] = remain;
-		cells[4] = total;
+		snprintf(name_w, sizeof(name_w), "@y{%s}", t->name);
+		snprintf(used_w, sizeof(used_w), "@y{%s}", used);
+		if (*pct)
+			snprintf(pct_w, sizeof(pct_w), "@y{%s}", pct);
+		else
+			pct_w[0] = '\0';
+		if (*remain)
+			snprintf(remain_w, sizeof(remain_w), "@y{%s}", remain);
+		else
+			remain_w[0] = '\0';
+		if (*total)
+			snprintf(total_w, sizeof(total_w), "@y{%s}", total);
+		else
+			total_w[0] = '\0';
+
+		cells[0] = name_w;
+		cells[1] = used_w;
+		cells[2] = pct_w;
+		cells[3] = remain_w;
+		cells[4] = total_w;
 		tab_add_row(out, cells, aligns);
 
 		secs = calloc((size_t)t->nr_sections, sizeof(*secs));
@@ -490,9 +617,10 @@ void build_summary_tab(const struct memmap *mm, const struct mm_args *args,
 			char pct2[32];
 			char sused[64];
 			char name[64];
+			char name_sw[80], sused_w[96], pct2_w[64];
 
 			diff_inline(sused, sizeof(sused), s->size, s->size_diff,
-				    args->diff != NULL);
+				    args->diff != NULL, 1);
 
 			if (t->size) {
 				double sp =
@@ -512,16 +640,26 @@ void build_summary_tab(const struct memmap *mm, const struct mm_args *args,
 					}
 				}
 				fmt_pct_diff(pct2, sizeof(pct2), sp, sp_diff,
-					     args->diff != NULL);
+					     args->diff != NULL, 1);
 			} else {
 				pct2[0] = '\0';
 			}
 
-			snprintf(name, sizeof(name), "   %s",
+			/* Indent stays outside @c{...} so CSV's
+			 * leading-whitespace strip still cleans the cell. */
+			snprintf(name, sizeof(name), "%s",
 				 args->abbrev ? s->abbrev_name : s->name);
-			cells[0] = name;
-			cells[1] = sused;
-			cells[2] = pct2;
+			snprintf(name_sw, sizeof(name_sw), "   @c{%s}", name);
+			snprintf(sused_w, sizeof(sused_w), "@c{%s}", sused);
+			if (*pct2)
+				snprintf(pct2_w, sizeof(pct2_w), "@c{%s}",
+					 pct2);
+			else
+				pct2_w[0] = '\0';
+
+			cells[0] = name_sw;
+			cells[1] = sused_w;
+			cells[2] = pct2_w;
 			cells[3] = "";
 			cells[4] = "";
 			tab_add_row(out, cells, aligns);
@@ -546,26 +684,47 @@ void print_summary_notes(const struct memmap *mm, const struct mm_args *args)
 		"Total image size: %lld bytes (.bin may be padded larger)\n",
 		(long long)mm->image_size);
 	fprintf(stderr,
-		"Note: The reported total sizes may be smaller than those "
+		"@y{Note: The reported total sizes may be smaller than those "
 		"in the technical reference manual due to reserved memory and "
 		"application configuration. The total flash size available for "
 		"the application is not included by default, as it cannot be "
 		"reliably determined due to the presence of other data like "
 		"the bootloader, partition table, and application partition "
-		"size.\n");
+		"size.}\n");
 }
 
 /* ------------------------------------------------------------------ */
 /* Pivoted table (archives / files / symbols)                          */
 /* ------------------------------------------------------------------ */
 
+/* Format a value+diff cell wrapped in the row/column color token. dst
+ * is sized large enough to hold "@y{value @r{+45}}" plus NUL. */
+static char *fmt_cell_styled(int64_t value, int64_t diff, int show_diff,
+			     int growth_is_bad, char wrap)
+{
+	char raw[64];
+	char *out = malloc(96);
+
+	if (!out)
+		die_errno("malloc");
+	diff_inline(raw, sizeof(raw), value, diff, show_diff, growth_is_bad);
+	if (wrap)
+		snprintf(out, 96, "@%c{%s}", wrap, raw);
+	else
+		snprintf(out, 96, "%s", raw);
+	return out;
+}
+
 void build_pivoted_tab(const struct sv_summary *s, const char *title,
 		       const char *item_label, const struct mm_args *args,
 		       struct tab *out)
 {
 	const char **headers;
+	char **header_bufs;
 	int nr_cols = 2;
 	int *aligns;
+	/* Style letter per column ('y' mem-type, 'c' section, 0 plain). */
+	char *col_style;
 
 	if (s->nr_entries == 0) {
 		const char *h[] = {item_label, "Total Size"};
@@ -584,31 +743,54 @@ void build_pivoted_tab(const struct sv_summary *s, const char *title,
 	}
 
 	headers = calloc((size_t)nr_cols, sizeof(*headers));
+	header_bufs = calloc((size_t)nr_cols, sizeof(*header_bufs));
 	aligns = calloc((size_t)nr_cols, sizeof(*aligns));
-	if (!headers || !aligns)
+	col_style = calloc((size_t)nr_cols, sizeof(*col_style));
+	if (!headers || !header_bufs || !aligns || !col_style)
 		die_errno("calloc");
 
 	headers[0] = item_label;
 	headers[1] = "Total Size";
 	aligns[0] = 0;
 	aligns[1] = 1;
+	col_style[0] = 0;
+	col_style[1] = 0;
 	{
 		int c = 2;
 		const struct sv_entry *first = s->entries[0];
 		for (int i = 0; i < first->nr_types; i++) {
-			headers[c] = first->types[i]->name;
-			aligns[c++] = 1;
+			header_bufs[c] =
+			    malloc(strlen(first->types[i]->name) + 8);
+			if (!header_bufs[c])
+				die_errno("malloc");
+			sprintf(header_bufs[c], "@y{%s}",
+				first->types[i]->name);
+			headers[c] = header_bufs[c];
+			aligns[c] = 1;
+			col_style[c] = 'y';
+			c++;
 			for (int j = 0; j < first->types[i]->nr_sections; j++) {
 				const struct sv_section *ss =
 				    first->types[i]->sections[j];
-				headers[c] =
+				const char *nm =
 				    args->abbrev ? ss->abbrev_name : ss->name;
-				aligns[c++] = 1;
+				header_bufs[c] = malloc(strlen(nm) + 8);
+				if (!header_bufs[c])
+					die_errno("malloc");
+				sprintf(header_bufs[c], "@c{%s}", nm);
+				headers[c] = header_bufs[c];
+				aligns[c] = 1;
+				col_style[c] = 'c';
+				c++;
 			}
 		}
 	}
 
 	tab_init(out, title, headers, nr_cols);
+
+	for (int i = 0; i < nr_cols; i++)
+		free(header_bufs[i]);
+	free(header_bufs);
 
 	for (int e = 0; e < s->nr_entries; e++) {
 		const struct sv_entry *en = s->entries[e];
@@ -623,32 +805,25 @@ void build_pivoted_tab(const struct sv_summary *s, const char *title,
 		    sbuf_strdup(args->abbrev ? en->abbrev_name : en->name);
 		cells[c++] = bufs[0];
 
-		bufs[c] = malloc(64);
-		if (!bufs[c])
-			die_errno("malloc");
-		diff_inline(bufs[c], 64, en->size, en->size_diff,
-			    args->diff != NULL);
+		bufs[c] = fmt_cell_styled(en->size, en->size_diff,
+					  args->diff != NULL, 1, 0);
 		cells[c] = bufs[c];
 		c++;
 
 		for (int i = 0; i < en->nr_types; i++) {
 			const struct sv_type *st = en->types[i];
 
-			bufs[c] = malloc(64);
-			if (!bufs[c])
-				die_errno("malloc");
-			diff_inline(bufs[c], 64, st->size, st->size_diff,
-				    args->diff != NULL);
+			bufs[c] = fmt_cell_styled(st->size, st->size_diff,
+						  args->diff != NULL, 1,
+						  col_style[c]);
 			cells[c] = bufs[c];
 			c++;
 
 			for (int j = 0; j < st->nr_sections; j++) {
 				const struct sv_section *ss = st->sections[j];
-				bufs[c] = malloc(64);
-				if (!bufs[c])
-					die_errno("malloc");
-				diff_inline(bufs[c], 64, ss->size,
-					    ss->size_diff, args->diff != NULL);
+				bufs[c] = fmt_cell_styled(
+				    ss->size, ss->size_diff, args->diff != NULL,
+				    1, col_style[c]);
 				cells[c] = bufs[c];
 				c++;
 			}
@@ -664,6 +839,7 @@ void build_pivoted_tab(const struct sv_summary *s, const char *title,
 
 	free(headers);
 	free(aligns);
+	free(col_style);
 }
 
 /* ------------------------------------------------------------------ */
@@ -706,32 +882,34 @@ void build_deps_tab(const struct dep_summary *d, const struct mm_args *args,
 	for (int i = 0; i < d->nr_entries; i++) {
 		struct dep_entry *e = d->entries[i];
 		const char *arch_name = args->abbrev ? e->abbrev_name : e->name;
-		char arch_size[32];
+		char arch_w[128], arch_size_w[48];
 
-		snprintf(arch_size, sizeof(arch_size), "%lld",
+		snprintf(arch_w, sizeof(arch_w), "@y{%s}", arch_name);
+		snprintf(arch_size_w, sizeof(arch_size_w), "@y{%lld}",
 			 (long long)e->size);
 
 		for (int j = 0; j < e->nr_archives; j++) {
 			struct dep_archive *da = e->archives[j];
 			const char *dep_name =
 			    args->abbrev ? da->abbrev_name : da->name;
-			char dep_size_str[32];
+			char dep_w[128], dep_size_w[48];
 			const char *cells4[4];
 			const char *cells5[5];
 			struct sbuf syms = SBUF_INIT;
 
-			snprintf(dep_size_str, sizeof(dep_size_str), "%lld",
+			snprintf(dep_w, sizeof(dep_w), "@c{%s}", dep_name);
+			snprintf(dep_size_w, sizeof(dep_size_w), "%lld",
 				 (long long)da->size);
 
 			if (j == 0) {
-				cells4[0] = arch_name;
-				cells4[1] = arch_size;
+				cells4[0] = arch_w;
+				cells4[1] = arch_size_w;
 			} else {
 				cells4[0] = "";
 				cells4[1] = "";
 			}
-			cells4[2] = dep_name;
-			cells4[3] = dep_size_str;
+			cells4[2] = dep_w;
+			cells4[3] = dep_size_w;
 
 			cells5[0] = cells4[0];
 			cells5[1] = cells4[1];

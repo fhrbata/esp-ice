@@ -38,13 +38,100 @@ static void put_str(struct json_value *obj, const char *key, const char *s)
 	json_set(obj, key, json_new_string(s ? s : ""));
 }
 
+/* ------------------------------------------------------------------ */
+/* JSON syntax highlighter                                             */
+/* ------------------------------------------------------------------ */
+
+/*
+ * Walks the serialized JSON byte stream and rewrites it with @x{...}
+ * color tokens.  The platform fprintf shim expands the tokens on a
+ * tty and strips them when writing to a file or pipe, so piping into
+ * `jq` still gets clean JSON.
+ *
+ * Recognized tokens:
+ *   "..."  followed by ':'  -> key,             @c{}
+ *   "..."  otherwise         -> string value,    @g{}
+ *   -? digit ...             -> number,          @y{}
+ *   true / false / null      -> literal,         @Y{}
+ *   { } [ ] : , whitespace   -> structural,      passed through
+ */
+static void colorize_json(struct sbuf *out, const char *s, size_t len)
+{
+	const char *end = s + len;
+
+	while (s < end) {
+		char c = *s;
+
+		if (c == '"') {
+			const char *p = s + 1;
+			const char *q;
+			int is_key;
+
+			while (p < end) {
+				if (*p == '\\' && p + 1 < end) {
+					p += 2;
+					continue;
+				}
+				if (*p == '"')
+					break;
+				p++;
+			}
+			/* Look ahead past whitespace for ':' to detect keys. */
+			q = (p < end) ? p + 1 : p;
+			while (q < end && (*q == ' ' || *q == '\t' ||
+					   *q == '\n' || *q == '\r'))
+				q++;
+			is_key = (q < end && *q == ':');
+
+			sbuf_addstr(out, is_key ? "@c{" : "@g{");
+			sbuf_add(out, s, (size_t)((p < end ? p + 1 : p) - s));
+			sbuf_addch(out, '}');
+			s = (p < end) ? p + 1 : end;
+			continue;
+		}
+
+		if (c == '-' || (c >= '0' && c <= '9')) {
+			const char *p = s + (c == '-' ? 1 : 0);
+			while (p < end && ((*p >= '0' && *p <= '9') ||
+					   *p == '.' || *p == 'e' ||
+					   *p == 'E' || *p == '+' || *p == '-'))
+				p++;
+			sbuf_addstr(out, "@y{");
+			sbuf_add(out, s, (size_t)(p - s));
+			sbuf_addch(out, '}');
+			s = p;
+			continue;
+		}
+
+		if ((c == 't' && end - s >= 4 && !memcmp(s, "true", 4)) ||
+		    (c == 'f' && end - s >= 5 && !memcmp(s, "false", 5)) ||
+		    (c == 'n' && end - s >= 4 && !memcmp(s, "null", 4))) {
+			size_t n = (c == 'f') ? 5 : 4;
+			sbuf_addstr(out, "@Y{");
+			sbuf_add(out, s, n);
+			sbuf_addch(out, '}');
+			s += n;
+			continue;
+		}
+
+		sbuf_addch(out, c);
+		s++;
+	}
+}
+
 static void emit(const struct json_value *root, const struct mm_args *args)
 {
-	struct sbuf out = SBUF_INIT;
-	json_serialize_pretty(root, &out, 4);
-	fwrite(out.buf, 1, out.len, args->out);
+	struct sbuf raw = SBUF_INIT;
+	struct sbuf colored = SBUF_INIT;
+
+	json_serialize_pretty(root, &raw, 4);
+	colorize_json(&colored, raw.buf, raw.len);
+	/* fputs goes through the platform shim, which strips color tokens
+	 * when args->out isn't a tty -- so piped JSON stays parseable. */
+	fputs(colored.buf, args->out);
 	fputc('\n', args->out);
-	sbuf_release(&out);
+	sbuf_release(&colored);
+	sbuf_release(&raw);
 }
 
 /* ------------------------------------------------------------------ */
