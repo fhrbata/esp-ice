@@ -274,5 +274,235 @@ int main(void)
 		tap_done("empty data subtype defaults to 'undefined' (0x06)");
 	}
 
+	/* ------------------------------------------------------------------ */
+	/* New surface: parse helpers, binary parser, CSV emitter, runtime */
+	/* extras, format helpers, auto-detecting loader. */
+	/* ------------------------------------------------------------------ */
+
+	/* pt_parse_type accepts both symbolic names and numerics. */
+	{
+		uint8_t v;
+		tap_check(pt_parse_type("app", &v) == 0 && v == PT_TYPE_APP);
+		tap_check(pt_parse_type("data", &v) == 0 && v == PT_TYPE_DATA);
+		tap_check(pt_parse_type("0x42", &v) == 0 && v == 0x42);
+		tap_check(pt_parse_type("99", &v) == 0 && v == 99);
+		tap_check(pt_parse_type("nope", &v) == -1);
+		tap_check(pt_parse_type("0x100", &v) == -1); /* > 0xFF */
+		tap_done("pt_parse_type: names, numerics, error cases");
+	}
+
+	/* pt_parse_subtype handles synthetic ranges, names, and numerics. */
+	{
+		uint8_t v;
+		tap_check(pt_parse_subtype(PT_TYPE_APP, "ota_0", &v) == 0 &&
+			  v == 0x10);
+		tap_check(pt_parse_subtype(PT_TYPE_APP, "ota_15", &v) == 0 &&
+			  v == 0x1F);
+		tap_check(pt_parse_subtype(PT_TYPE_APP, "tee_1", &v) == 0 &&
+			  v == 0x31);
+		tap_check(pt_parse_subtype(PT_TYPE_DATA, "nvs", &v) == 0 &&
+			  v == 0x02);
+		tap_check(pt_parse_subtype(PT_TYPE_DATA, "0x83", &v) == 0 &&
+			  v == 0x83);
+		tap_check(pt_parse_subtype(PT_TYPE_APP, "ota_16", &v) == -1);
+		tap_check(pt_parse_subtype(PT_TYPE_APP, "tee_2", &v) == -1);
+		tap_done("pt_parse_subtype: ota_N, tee_N, names, numerics");
+	}
+
+	/* pt_register_subtype: extras are visible to pt_parse_subtype. */
+	{
+		uint8_t v;
+		tap_check(pt_parse_subtype(PT_TYPE_DATA, "myfs", &v) == -1);
+		tap_check(pt_register_subtype(PT_TYPE_DATA, "myfs", 0x80) == 0);
+		tap_check(pt_parse_subtype(PT_TYPE_DATA, "myfs", &v) == 0 &&
+			  v == 0x80);
+		/* Idempotent re-register with same value succeeds. */
+		tap_check(pt_register_subtype(PT_TYPE_DATA, "myfs", 0x80) == 0);
+		/* Conflicting re-register fails. */
+		tap_check(pt_register_subtype(PT_TYPE_DATA, "myfs", 0x81) ==
+			  -1);
+		/* Conflict with the static table is also rejected. */
+		tap_check(pt_register_subtype(PT_TYPE_DATA, "nvs", 0x70) == -1);
+		pt_clear_extras();
+		tap_check(pt_parse_subtype(PT_TYPE_DATA, "myfs", &v) == -1);
+		tap_done("pt_register_subtype: visibility, conflicts, clear");
+	}
+
+	/* pt_format_type / pt_format_subtype / pt_format_size. */
+	{
+		char buf[16];
+		tap_check(strcmp(pt_format_type(PT_TYPE_APP, buf, sizeof(buf)),
+				 "app") == 0);
+		tap_check(strcmp(pt_format_type(PT_TYPE_DATA, buf, sizeof(buf)),
+				 "data") == 0);
+		tap_check(
+		    strcmp(pt_format_type(0x42, buf, sizeof(buf)), "66") == 0);
+
+		tap_check(strcmp(pt_format_subtype(PT_TYPE_APP, 0x10, buf,
+						   sizeof(buf)),
+				 "ota_0") == 0);
+		tap_check(strcmp(pt_format_subtype(PT_TYPE_APP, 0x1F, buf,
+						   sizeof(buf)),
+				 "ota_15") == 0);
+		tap_check(strcmp(pt_format_subtype(PT_TYPE_APP, 0x30, buf,
+						   sizeof(buf)),
+				 "tee_0") == 0);
+		tap_check(strcmp(pt_format_subtype(PT_TYPE_DATA, 0x02, buf,
+						   sizeof(buf)),
+				 "nvs") == 0);
+		tap_check(strcmp(pt_format_subtype(PT_TYPE_DATA, 0xFE, buf,
+						   sizeof(buf)),
+				 "254") == 0);
+
+		tap_check(strcmp(pt_format_size(0x100000, buf, sizeof(buf)),
+				 "1M") == 0);
+		tap_check(strcmp(pt_format_size(0x6000, buf, sizeof(buf)),
+				 "24K") == 0);
+		tap_check(strcmp(pt_format_size(0x55, buf, sizeof(buf)),
+				 "0x55") == 0);
+		tap_done(
+		    "pt_format_{type,subtype,size}: names, ota_N, K/M/hex");
+	}
+
+	/* Round-trip: pt_parse_csv -> pt_to_binary -> pt_from_binary. */
+	{
+		struct pt_entry in[16], out[16];
+		int n_in = 0, n_out = 0;
+		struct pt_options o = default_opts();
+		uint8_t bin[PT_DATA_SIZE];
+		const char *csv = write_csv(
+		    100, "nvs,      data, nvs,     0x9000,  0x6000,\n"
+			 "phy_init, data, phy,     0xf000,  0x1000,\n"
+			 "factory,  app,  factory, 0x10000, 0x100000,\n");
+
+		tap_check(pt_parse_csv(csv, in, &n_in, &o) == 0);
+		tap_check(pt_to_binary(in, n_in, &o, bin) == 0);
+		tap_check(pt_from_binary(bin, sizeof(bin), out, &n_out, 1) ==
+			  0);
+		tap_check(n_out == n_in);
+		for (int i = 0; i < n_in; i++) {
+			tap_check(strcmp(in[i].name, out[i].name) == 0);
+			tap_check(in[i].type == out[i].type);
+			tap_check(in[i].subtype == out[i].subtype);
+			tap_check(in[i].offset == out[i].offset);
+			tap_check(in[i].size == out[i].size);
+			tap_check(in[i].encrypted == out[i].encrypted);
+			tap_check(in[i].readonly == out[i].readonly);
+			tap_check(out[i].offset_set == 1);
+			tap_check(out[i].size_is_end_addr == 0);
+		}
+		tap_done("pt_to_binary -> pt_from_binary round-trip");
+	}
+
+	/* pt_from_binary: tampered MD5 is detected with verify=1. */
+	{
+		struct pt_entry in[16], out[16];
+		int n_in = 0, n_out = 0;
+		struct pt_options o = default_opts();
+		uint8_t bin[PT_DATA_SIZE];
+		const char *csv =
+		    write_csv(101, "nvs, data, nvs, 0x9000, 0x6000,\n");
+
+		tap_check(pt_parse_csv(csv, in, &n_in, &o) == 0);
+		tap_check(pt_to_binary(in, n_in, &o, bin) == 0);
+
+		/* Find MD5 entry, flip a digest byte. */
+		for (size_t off = 0; off + PT_ENTRY_SIZE <= PT_DATA_SIZE;
+		     off += PT_ENTRY_SIZE) {
+			if (bin[off] == 0xEB && bin[off + 1] == 0xEB) {
+				bin[off + 16] ^= 0x01;
+				break;
+			}
+		}
+		tap_check(pt_from_binary(bin, sizeof(bin), out, &n_out, 1) ==
+			  -1);
+		/* With verify_md5=0, the tampered binary still parses. */
+		tap_check(pt_from_binary(bin, sizeof(bin), out, &n_out, 0) ==
+			  0);
+		tap_done("pt_from_binary: MD5 verification toggle");
+	}
+
+	/* pt_from_binary: invalid magic is rejected. */
+	{
+		struct pt_entry out[16];
+		int n_out = 0;
+		uint8_t bin[PT_DATA_SIZE];
+		memset(bin, 0xFF, sizeof(bin));
+		bin[0] = 0xCA; /* not 0xAA50, not 0xEBEB, not all-FF */
+		bin[1] = 0xFE;
+		tap_check(pt_from_binary(bin, sizeof(bin), out, &n_out, 0) ==
+			  -1);
+		tap_done("pt_from_binary: rejects invalid entry magic");
+	}
+
+	/* pt_to_csv: matches gen_esp32part.py output verbatim for the
+	 * canonical singleapp table (header + 3 rows + trailing newline). */
+	{
+		struct pt_entry in[16];
+		int n_in = 0;
+		struct pt_options o = default_opts();
+		FILE *fp;
+		char buf[1024];
+		size_t len;
+		const char *expected =
+		    "# ESP-IDF Partition Table\n"
+		    "# Name, Type, SubType, Offset, Size, Flags\n"
+		    "nvs,data,nvs,0x9000,24K,\n"
+		    "phy_init,data,phy,0xf000,4K,\n"
+		    "factory,app,factory,0x10000,1M,\n";
+
+		const char *csv = write_csv(
+		    102, "nvs,      data, nvs,     0x9000,  0x6000,\n"
+			 "phy_init, data, phy,     0xf000,  0x1000,\n"
+			 "factory,  app,  factory, 0x10000, 0x100000,\n");
+
+		tap_check(pt_parse_csv(csv, in, &n_in, &o) == 0);
+
+		fp = fopen("test_pt_csv.out", "w");
+		tap_check(fp != NULL);
+		tap_check(pt_to_csv(in, n_in, fp) == 0);
+		fclose(fp);
+
+		fp = fopen("test_pt_csv.out", "r");
+		tap_check(fp != NULL);
+		len = fread(buf, 1, sizeof(buf) - 1, fp);
+		buf[len] = '\0';
+		fclose(fp);
+
+		tap_check(strcmp(buf, expected) == 0);
+		tap_done("pt_to_csv: byte-exact match against expected CSV");
+	}
+
+	/* pt_load: auto-detect CSV vs binary by first two bytes. */
+	{
+		struct pt_entry in[16], out[16];
+		int n_in = 0, n_out = 0;
+		struct pt_options o = default_opts();
+		uint8_t bin[PT_DATA_SIZE];
+		FILE *fp;
+		const char *csv =
+		    write_csv(103, "nvs, data, nvs, 0x9000, 0x6000,\n"
+				   "factory, app, factory, 0x10000, 1M,\n");
+
+		/* Sanity: pt_load on a CSV path defers to pt_parse_csv. */
+		tap_check(pt_load(csv, out, &n_out, &o) == 0);
+		tap_check(n_out == 2);
+
+		/* Same logical table written as binary. */
+		tap_check(pt_parse_csv(csv, in, &n_in, &o) == 0);
+		tap_check(pt_to_binary(in, n_in, &o, bin) == 0);
+		fp = fopen("test_pt_load.bin", "wb");
+		tap_check(fp != NULL);
+		tap_check(fwrite(bin, 1, sizeof(bin), fp) == sizeof(bin));
+		fclose(fp);
+
+		n_out = 0;
+		tap_check(pt_load("test_pt_load.bin", out, &n_out, &o) == 0);
+		tap_check(n_out == 2);
+		tap_check(strcmp(out[0].name, "nvs") == 0);
+		tap_check(strcmp(out[1].name, "factory") == 0);
+		tap_done("pt_load: dispatches by magic to CSV or binary path");
+	}
+
 	return tap_result();
 }
