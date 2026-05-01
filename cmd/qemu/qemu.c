@@ -79,6 +79,8 @@ static const char *opt_efuse_file;
 static int opt_scrollback = 10000;
 static int opt_no_tui;
 static int opt_gdb;
+static int opt_debug;
+static const char *opt_gdb_bin;
 
 /*
  * Port the QEMU GDB stub listens on when @c --gdb is set.  Matches the
@@ -105,6 +107,12 @@ static const struct option cmd_qemu_opts[] = {
 	OPT_BOOL('d', "gdb", &opt_gdb,
 		 "wait for gdb on tcp::3333 before booting "
 		 "(attach with the chip's gdb in another terminal)"),
+	OPT_BOOL('D', "debug", &opt_debug,
+		 "dual-pane: spawn the chip's gdb in one pane, UART in the "
+		 "other (implies --gdb)"),
+	OPT_STRING(0, "gdb-bin", &opt_gdb_bin, "path",
+		   "gdb binary (default: chip-specific xtensa-* / riscv32-* "
+		   "from PATH)", NULL),
 	OPT_END(),
 };
 /* clang-format on */
@@ -674,6 +682,340 @@ static int run_tui(struct process *proc, const char *qemu_bin,
 }
 
 /* ------------------------------------------------------------------ */
+/*  --debug: dual-pane gdb + UART                                     */
+/* ------------------------------------------------------------------ */
+
+/*
+ * One pane's worth of bookkeeping: a vt100 grid feeding a tui_log,
+ * with the rect that says where on the screen the log lives.  Used
+ * symmetrically for the gdb pane and the UART pane.
+ */
+struct dpane {
+	struct vt100 *V;
+	struct tui_log L;
+	struct tui_rect rect; /* outer rect including any chrome */
+};
+
+/*
+ * Lay out the screen for the dual-pane debug view.  Top row is the
+ * status bar; bottom row is the key-binding hint; the body is split
+ * evenly between gdb (top half) and UART (bottom half) with a
+ * one-row divider in between.  Stores the rects on the @ref dpane
+ * structs and resizes their tui_log + vt100 accordingly.  Returns
+ * the divider's row and the body width via out-params for the
+ * caller's manual chrome paint.
+ */
+static void debug_layout(int rows, int cols, struct dpane *gdb_p,
+			 struct dpane *uart_p, struct tui_rect *status_r,
+			 struct tui_rect *divider_r, struct tui_rect *footer_r)
+{
+	struct tui_rect screen = {.x = 1, .y = 1, .w = cols, .h = rows};
+	struct tui_rect rest1, body, after_status;
+
+	/* status row at the top */
+	tui_rect_split_h(&screen, status_r, &after_status, 1);
+	/* footer row at the bottom */
+	tui_rect_split_h(&after_status, &rest1, footer_r,
+			 after_status.h > 1 ? after_status.h - 1 : 0);
+	/* split the body evenly with a 1-row divider in between */
+	int gdb_h = rest1.h / 2;
+	tui_rect_split_h(&rest1, &gdb_p->rect, &body, gdb_h);
+	tui_rect_split_h(&body, divider_r, &uart_p->rect, 1);
+
+	/* Apply the rects to the log widgets and resize the vt100 grids
+	 * so the chip / gdb get a faithful column count.  The grid is
+	 * one column narrower than the pane to leave room for the
+	 * scrollbar tui_log_render reserves on the right edge. */
+	tui_log_set_origin(&gdb_p->L, gdb_p->rect.x, gdb_p->rect.y);
+	tui_log_resize(&gdb_p->L, gdb_p->rect.w, gdb_p->rect.h);
+	int gdb_inner_w = gdb_p->rect.w > 1 ? gdb_p->rect.w - 1 : gdb_p->rect.w;
+	int gdb_inner_h = gdb_p->rect.h > 0 ? gdb_p->rect.h : 1;
+	vt100_resize(gdb_p->V, gdb_inner_h, gdb_inner_w);
+
+	tui_log_set_origin(&uart_p->L, uart_p->rect.x, uart_p->rect.y);
+	tui_log_resize(&uart_p->L, uart_p->rect.w, uart_p->rect.h);
+	int uart_inner_w =
+	    uart_p->rect.w > 1 ? uart_p->rect.w - 1 : uart_p->rect.w;
+	int uart_inner_h = uart_p->rect.h > 0 ? uart_p->rect.h : 1;
+	vt100_resize(uart_p->V, uart_inner_h, uart_inner_w);
+}
+
+/*
+ * Read available bytes from @p fd, feed them through @p V, drain V's
+ * device-bound reply back to @p write_fd, and pull scrolled-off rows
+ * into @p L.  Returns 1 if the visible frame might have changed (so
+ * the caller should re-render), 0 if nothing happened, -1 on EOF or
+ * read error (the child has gone away).
+ */
+static int pump_byte_source(int fd, int write_fd, struct vt100 *V,
+			    struct tui_log *L, unsigned timeout_ms)
+{
+	uint8_t buf[4096];
+	ssize_t n = pipe_read_timed(fd, buf, sizeof buf, timeout_ms);
+	if (n < 0)
+		return -1;
+	if (n == 0)
+		return 0;
+	vt100_input(V, buf, (size_t)n);
+	struct sbuf *r = vt100_reply(V);
+	if (r->len) {
+		(void)write(write_fd, r->buf, r->len);
+		sbuf_reset(r);
+	}
+	if (!tui_log_is_frozen(L))
+		tui_log_pull_from_vt100(L, V);
+	return 1;
+}
+
+/*
+ * Paint one row of @c {U+2500} (light horizontal) characters across
+ * the rect at row @p row_y, columns @p row_x..row_x+row_w-1.  Used to
+ * draw the divider line between the two panes.  SGR is reset before
+ * and after so the line doesn't carry stale styles.
+ */
+static void draw_hrule(struct sbuf *out, int row_y, int row_x, int row_w)
+{
+	if (row_w <= 0)
+		return;
+	sbuf_addf(out, "\x1b[%d;%dH\x1b[2m", row_y, row_x);
+	for (int i = 0; i < row_w; i++)
+		sbuf_addstr(out, "\xe2\x94\x80"); /* U+2500 */
+	sbuf_addstr(out, "\x1b[0m");
+}
+
+static void draw_status_bar(struct sbuf *out, const struct tui_rect *r,
+			    const char *text, const char *sgr)
+{
+	if (r->h < 1 || r->w < 1)
+		return;
+	sbuf_addf(out, "\x1b[%d;%dH\x1b[%sm ", r->y, r->x, sgr);
+	int w = r->w - 1;
+	int len = (int)strlen(text);
+	if (len > w)
+		len = w;
+	sbuf_add(out, text, (size_t)len);
+	for (int i = len; i < w; i++)
+		sbuf_addch(out, ' ');
+	sbuf_addstr(out, "\x1b[0m");
+}
+
+/*
+ * Drive the dual-pane view: gdb pane (top), UART pane (bottom),
+ * status bar, key-binding hint footer, and a one-row divider.  The
+ * user types in whichever pane has focus -- @c Ctrl-T is the prefix:
+ *
+ *   Ctrl-T Tab     Toggle focus.
+ *   Ctrl-T x       Quit (alias for Ctrl-]).
+ *   Ctrl-T Ctrl-T  Send a literal Ctrl-T to the focused pane.
+ *
+ * Ctrl-] is a panic-eject from any state.
+ */
+static int run_debug(struct process *qemu_proc, const struct qemu_chip *chip,
+		     const char *qemu_bin)
+{
+	const char *gdb_bin = opt_gdb_bin ? opt_gdb_bin : chip->gdb_prog;
+	const char *elf = config_get("_project.elf");
+	if (!elf || !*elf)
+		die("ice qemu --debug: no ELF resolved (run 'ice build' "
+		    "first)");
+
+	int rc = term_raw_enter(0);
+	if (rc < 0)
+		die("cannot set terminal to raw mode: %s", strerror(-rc));
+	term_screen_enter();
+
+	int cols = 80, rows = 24;
+	term_size(&cols, &rows);
+
+	/* Per-pane scrollback + vt100 grid.  Set origin to (1,1)
+	 * temporarily; debug_layout overwrites it once we've sized the
+	 * rectangles. */
+	struct dpane gdb_p = {0}, uart_p = {0};
+	gdb_p.V = vt100_new(24, 80);
+	uart_p.V = vt100_new(24, 80);
+	tui_log_init(&gdb_p.L, opt_scrollback);
+	tui_log_init(&uart_p.L, opt_scrollback);
+	if (use_color)
+		tui_log_set_decorator(&uart_p.L, decorate_idf_level, NULL);
+	tui_log_set_grid(&gdb_p.L, gdb_p.V);
+	tui_log_set_grid(&uart_p.L, uart_p.V);
+
+	struct tui_rect status_r, divider_r, footer_r;
+	debug_layout(rows, cols, &gdb_p, &uart_p, &status_r, &divider_r,
+		     &footer_r);
+
+	/* Spawn gdb in a pty pre-loaded with target remote :3333 + ELF.
+	 * The pty is sized to the gdb pane so readline wrapping matches
+	 * what we'll render. */
+	struct sbuf gdb_remote = SBUF_INIT;
+	sbuf_addf(&gdb_remote, "target remote :%d", ICE_QEMU_GDB_PORT);
+	/* @c -q skips the boilerplate splash; @c{set pagination off}
+	 * stops gdb's pager from blocking on "Press RETURN" mid-stream
+	 * (we own the scrolling, not gdb).  @c{set confirm off} keeps
+	 * shutdown / quit clean. */
+	const char *gdb_argv[] = {gdb_bin, "-q",
+				  "-ex",   "set pagination off",
+				  "-ex",   "set confirm off",
+				  "-ex",   gdb_remote.buf,
+				  elf,	   NULL};
+	struct process gdb_proc = PROCESS_INIT;
+	gdb_proc.argv = gdb_argv;
+	gdb_proc.use_pty = 1;
+	gdb_proc.pty_rows = gdb_p.rect.h;
+	gdb_proc.pty_cols = gdb_p.rect.w;
+
+	if (process_start(&gdb_proc) < 0) {
+		term_screen_leave();
+		term_raw_leave();
+		fprintf(stderr,
+			"ice qemu --debug: cannot launch %s\n"
+			"  Pass --gdb-bin or add the chip's gdb to PATH.\n",
+			gdb_bin);
+		sbuf_release(&gdb_remote);
+		tui_log_release(&gdb_p.L);
+		tui_log_release(&uart_p.L);
+		vt100_free(gdb_p.V);
+		vt100_free(uart_p.V);
+		return 1;
+	}
+
+	int focus = 0; /* 0 = gdb pane, 1 = UART pane */
+	int in_prefix = 0;
+	int quit = 0;
+
+	while (!quit) {
+		int dirty = 0;
+
+		if (term_resize_pending()) {
+			term_size(&cols, &rows);
+			debug_layout(rows, cols, &gdb_p, &uart_p, &status_r,
+				     &divider_r, &footer_r);
+			pty_resize(&gdb_proc, gdb_p.rect.h, gdb_p.rect.w);
+			dirty = 1;
+		}
+
+		/* gdb pty is the most latency-sensitive (user prompts),
+		 * give it the timeout slot. */
+		int rg = pump_byte_source(gdb_proc.out, gdb_proc.in, gdb_p.V,
+					  &gdb_p.L, 30);
+		if (rg < 0) {
+			/* gdb exited; we can keep showing UART but the user
+			 * probably wants out. */
+			quit = 1;
+			break;
+		}
+		if (rg > 0)
+			dirty = 1;
+
+		int ru = pump_byte_source(qemu_proc->out, qemu_proc->in,
+					  uart_p.V, &uart_p.L, 0);
+		if (ru < 0) {
+			/* qemu died; same logic. */
+			quit = 1;
+			break;
+		}
+		if (ru > 0)
+			dirty = 1;
+
+		struct term_event ev;
+		int got = term_read_event(&ev, 0);
+		if (got > 0 && ev.key != TK_NONE) {
+			if (ev.key == TK_RESIZE) {
+				cols = ev.cols;
+				rows = ev.rows;
+				debug_layout(rows, cols, &gdb_p, &uart_p,
+					     &status_r, &divider_r, &footer_r);
+				pty_resize(&gdb_proc, gdb_p.rect.h,
+					   gdb_p.rect.w);
+				dirty = 1;
+			} else if (ev.key == 0x1d) { /* Ctrl-] panic */
+				quit = 1;
+			} else if (in_prefix) {
+				in_prefix = 0;
+				if (ev.key == TK_TAB) {
+					focus = !focus;
+				} else if (ev.key == 'x' || ev.key == 'q') {
+					quit = 1;
+				} else if (ev.key == 0x14) {
+					/* Ctrl-T Ctrl-T: literal Ctrl-T to
+					 * the focused child. */
+					uint8_t k = 0x14;
+					int wfd = focus == 0 ? gdb_proc.in
+							     : qemu_proc->in;
+					(void)write(wfd, &k, 1);
+				}
+				dirty = 1;
+			} else if (ev.key == 0x14) { /* Ctrl-T -> prefix */
+				in_prefix = 1;
+				dirty = 1;
+			} else if (ev.key < 0x100) {
+				uint8_t k = (uint8_t)ev.key;
+				int wfd =
+				    focus == 0 ? gdb_proc.in : qemu_proc->in;
+				(void)write(wfd, &k, 1);
+			}
+		}
+
+		if (dirty) {
+			struct sbuf frame = SBUF_INIT;
+			char status_buf[256];
+
+			snprintf(status_buf, sizeof status_buf,
+				 "ice qemu --debug: %s + %s @ :%d  "
+				 "\xe2\x80\xa2  %s",
+				 chip->name, qemu_bin, ICE_QEMU_GDB_PORT,
+				 in_prefix ? "[Ctrl-T] prefix" : "");
+			draw_status_bar(&frame, &status_r, status_buf,
+					"1;37;44");
+
+			/* Render unfocused pane first so the focused one's
+			 * cursor placement wins at the end of the frame. */
+			if (focus == 0) {
+				tui_log_render(&frame, &uart_p.L);
+				tui_log_render(&frame, &gdb_p.L);
+			} else {
+				tui_log_render(&frame, &gdb_p.L);
+				tui_log_render(&frame, &uart_p.L);
+			}
+			draw_hrule(&frame, divider_r.y, divider_r.x,
+				   divider_r.w);
+
+			char hint_buf[256];
+			snprintf(hint_buf, sizeof hint_buf,
+				 "Focus: [%s]   Ctrl-T Tab=switch   "
+				 "Ctrl-]=quit",
+				 focus == 0 ? "gdb" : "UART");
+			draw_status_bar(&frame, &footer_r, hint_buf, "37;44");
+
+			tui_flush(&frame);
+		}
+	}
+
+	/* ---- teardown ---- */
+	term_screen_leave();
+	term_raw_leave();
+
+	/* Detach gdb politely first (it will close the GDB-RSP session
+	 * and unpause qemu's CPU on the way out -- but we'll kill qemu
+	 * anyway).  Closing the master sends EOF to gdb's stdin; gdb
+	 * exits cleanly on EOF. */
+	close(gdb_proc.in);
+	gdb_proc.in = -1;
+	gdb_proc.out = -1;
+	process_finish(&gdb_proc);
+
+	kill(qemu_proc->pid, SIGTERM);
+	process_finish(qemu_proc);
+
+	tui_log_release(&gdb_p.L);
+	tui_log_release(&uart_p.L);
+	vt100_free(gdb_p.V);
+	vt100_free(uart_p.V);
+	sbuf_release(&gdb_remote);
+	return 0;
+}
+
+/* ------------------------------------------------------------------ */
 /*  Entry point                                                       */
 /* ------------------------------------------------------------------ */
 
@@ -682,6 +1024,11 @@ int cmd_qemu(int argc, const char **argv)
 	argc = parse_options(argc, argv, &cmd_qemu_desc);
 	if (argc > 0)
 		die("too many arguments");
+
+	/* --debug folds in the gdb stub (-gdb tcp::3333 -S) plus the
+	 * dual-pane UI; -d / --gdb on its own is the two-terminal flow. */
+	if (opt_debug)
+		opt_gdb = 1;
 
 	const char *target = config_get("_project.target");
 	const char *chip_name = config_get("_project.chip");
@@ -773,8 +1120,10 @@ int cmd_qemu(int argc, const char **argv)
 	/* Tell the user how to attach gdb in another terminal.  Printed
 	 * before screen_enter so the message stays in the user's terminal
 	 * scrollback (alt-screen output is discarded on screen_leave).
-	 * The chip is halted at reset until gdb connects and continues. */
-	if (opt_gdb) {
+	 * The chip is halted at reset until gdb connects and continues.
+	 * Skipped under --debug: that mode owns the dual-pane UI and is
+	 * already showing the gdb prompt directly. */
+	if (opt_gdb && !opt_debug) {
 		const char *elf = config_get("_project.elf");
 		fprintf(stderr,
 			"@y{ice qemu: chip halted, waiting for gdb on "
@@ -789,10 +1138,16 @@ int cmd_qemu(int argc, const char **argv)
 	int interactive =
 	    !opt_no_tui && isatty(STDIN_FILENO) && isatty(STDOUT_FILENO);
 	int rc;
-	if (interactive)
+	if (opt_debug) {
+		if (!interactive)
+			die("ice qemu --debug requires an interactive "
+			    "terminal");
+		rc = run_debug(&proc, chip, qemu_bin);
+	} else if (interactive) {
 		rc = run_tui(&proc, qemu_bin, chip->name);
-	else
+	} else {
 		rc = run_dumb(&proc);
+	}
 
 	svec_clear(&qemu_argv);
 	sbuf_release(&flash_path);
