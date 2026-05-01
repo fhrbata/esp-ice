@@ -81,13 +81,12 @@ static int opt_no_tui;
 static int opt_gdb;
 static int opt_debug;
 static const char *opt_gdb_bin;
-
-/*
- * Port the QEMU GDB stub listens on when @c --gdb is set.  Matches the
- * idf.py / OpenOCD convention so existing user muscle memory works.
- * Hardcoded for v1; a future @c --gdb-port flag can override.
- */
-#define ICE_QEMU_GDB_PORT 3333
+/* Port the QEMU GDB stub listens on when @c --gdb / @c --debug is set.
+ * Defaults to 3333 to match the idf.py / OpenOCD convention so existing
+ * user muscle memory works; overridden via @c --gdb-port for users who
+ * already have something on 3333 (e.g. OpenOCD for real hardware in a
+ * neighbouring window). */
+static int opt_gdb_port = 3333;
 
 /* clang-format off */
 static const struct option cmd_qemu_opts[] = {
@@ -113,6 +112,8 @@ static const struct option cmd_qemu_opts[] = {
 	OPT_STRING(0, "gdb-bin", &opt_gdb_bin, "path",
 		   "gdb binary (default: chip-specific xtensa-* / riscv32-* "
 		   "from PATH)", NULL),
+	OPT_INT(0, "gdb-port", &opt_gdb_port, "port",
+		"TCP port for the QEMU GDB stub (default: 3333)", NULL),
 	OPT_END(),
 };
 /* clang-format on */
@@ -541,7 +542,7 @@ static void build_qemu_argv(struct svec *v, const struct qemu_chip *chip,
 		 * and continues -- the user gets to set breakpoints before
 		 * the first instruction runs. */
 		push_argv(v, "-gdb");
-		push_argvf(v, "tcp::%d", ICE_QEMU_GDB_PORT);
+		push_argvf(v, "tcp::%d", opt_gdb_port);
 		push_argv(v, "-S");
 	}
 }
@@ -641,7 +642,7 @@ static int run_tui(struct process *proc, const char *qemu_bin,
 	sbuf_addf(&status, "ice qemu: %s @ %s", chip_name, qemu_bin);
 	if (opt_gdb)
 		sbuf_addf(&status, "  \xe2\x80\xa2  [GDB :%d, halted]",
-			  ICE_QEMU_GDB_PORT);
+			  opt_gdb_port);
 	sbuf_addstr(&status, "  \xe2\x80\xa2  Ctrl-] exit");
 	tui_log_set_status(&L, status.buf);
 
@@ -931,7 +932,7 @@ static int run_debug(struct process *qemu_proc, const struct qemu_chip *chip,
 	 * The pty is sized to the gdb pane so readline wrapping matches
 	 * what we'll render. */
 	struct sbuf gdb_remote = SBUF_INIT;
-	sbuf_addf(&gdb_remote, "target remote :%d", ICE_QEMU_GDB_PORT);
+	sbuf_addf(&gdb_remote, "target remote :%d", opt_gdb_port);
 	/* @c -q skips the boilerplate splash; @c{set pagination off}
 	 * stops gdb's pager from blocking on "Press RETURN" mid-stream
 	 * (we own the scrolling, not gdb).  @c{set confirm off} keeps
@@ -1047,7 +1048,7 @@ static int run_debug(struct process *qemu_proc, const struct qemu_chip *chip,
 			snprintf(status_buf, sizeof status_buf,
 				 "ice qemu --debug: %s + %s @ :%d  "
 				 "\xe2\x80\xa2  %s",
-				 chip->name, qemu_bin, ICE_QEMU_GDB_PORT,
+				 chip->name, qemu_bin, opt_gdb_port,
 				 in_prefix ? "[Ctrl-T] prefix" : "");
 			draw_status_bar(&frame, &status_r, status_buf,
 					"1;37;44");
@@ -1230,9 +1231,8 @@ int cmd_qemu(int argc, const char **argv)
 			"tcp::%d}\n"
 			"  In another terminal:\n"
 			"    %s%s%s -ex \"target remote :%d\"\n",
-			ICE_QEMU_GDB_PORT, chip->gdb_prog,
-			elf && *elf ? " " : "", elf && *elf ? elf : "",
-			ICE_QEMU_GDB_PORT);
+			opt_gdb_port, chip->gdb_prog, elf && *elf ? " " : "",
+			elf && *elf ? elf : "", opt_gdb_port);
 	}
 
 	int interactive =
