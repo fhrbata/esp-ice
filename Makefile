@@ -181,6 +181,7 @@ LIB_SRCS := \
 	cmd/init/init.c \
 	cmd/log/log.c \
 	cmd/menuconfig/menuconfig.c \
+	cmd/qemu/qemu.c \
 	cmd/repo/repo.c \
 	cmd/repo/clone/clone.c \
 	cmd/repo/pull/pull.c \
