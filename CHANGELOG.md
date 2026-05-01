@@ -1,3 +1,29 @@
+## v0.11.0 (2026-05-01)
+
+### ✨ New Features
+
+- **progress**: mirror recent output and show a banner on Ctrl-v *(Frantisek Hrbata - 9612653)*
+- **size**: colorize table / tree / csv / json / dot output *(Frantisek Hrbata - a17b74e)*
+- **size**: add files / components / symbols / deps subcommands *(Frantisek Hrbata - 5920386)*
+- **idf,size**: expose --format and --archive-details completers *(Frantisek Hrbata - 6b95e63)*
+- **idf,size**: rewrite as a 1:1 esp-idf-size replacement *(Frantisek Hrbata - 3b73900)*
+- **json**: add json_serialize_pretty + integer-aware numbers *(Frantisek Hrbata - 4855a43)*
+- **elf**: add SHT_SYMTAB symbol-table reader *(Frantisek Hrbata - 1bc1cbc)*
+- **map**: parse the Cross Reference Table *(Frantisek Hrbata - 7de09cd)*
+
+### 🐛 Bug Fixes
+
+- **flash,monitor**: handle linux target without scanning serial ports *(Frantisek Hrbata - bd67fdc)*
+- **repo**: pass --progress to git so output mirrors during clone/fetch *(Frantisek Hrbata - e7521ac)*
+- **completion**: refuse to install in the wrong shell *(Frantisek Hrbata - a830bd2)*
+- **dispatch**: skip setup_project on --ice-complete *(Frantisek Hrbata - f6e408e)*
+
+### 🔧 Code Refactoring
+
+- **dispatch**: split --help / --ice-complete handling *(Frantisek Hrbata - fc179b9)*
+- **platform**: promote glob_match to a platform abstraction *(Frantisek Hrbata - 24716a8)*
+
+
 ## v0.10.0 (2026-04-28)
 
 ### ✨ New Features
