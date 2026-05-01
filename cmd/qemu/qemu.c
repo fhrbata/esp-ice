@@ -458,10 +458,12 @@ static int run_dumb(struct process *proc)
 			fflush(stdout);
 		}
 
-		/* Forward stdin without modification. */
+		/* Forward stdin without modification.  The buffer is small
+		 * (well under PIPE_BUF), so a single write(2) is atomic and
+		 * either completes fully or fails -- no retry loop needed. */
 		ssize_t k = term_read(buf, sizeof buf, 0);
 		if (k > 0) {
-			if (pipe_write_all(proc->in, buf, (size_t)k) < 0)
+			if (write(proc->in, buf, (size_t)k) < 0)
 				break;
 		}
 	}
@@ -568,10 +570,12 @@ static int run_tui(struct process *proc, const char *qemu_bin,
 			struct sbuf *r = vt100_reply(V);
 			if (r->len) {
 				/* DSR replies and the like need to go back
-				 * to the chip; ignore write errors -- the
+				 * to the chip; reply payloads are tiny
+				 * (atomic under PIPE_BUF) so a single
+				 * write(2) is enough.  Ignore errors -- the
 				 * next iteration will see EOF on the read
 				 * side and bail. */
-				(void)pipe_write_all(proc->in, r->buf, r->len);
+				(void)write(proc->in, r->buf, r->len);
 				sbuf_reset(r);
 			}
 			if (!tui_log_is_frozen(&L))
@@ -599,9 +603,10 @@ static int run_tui(struct process *proc, const char *qemu_bin,
 					dirty = 1;
 			} else if (ev.key < 0x100) {
 				/* Plain printable / C0 control: forward to
-				 * qemu's UART RX. */
+				 * qemu's UART RX.  Single-byte writes to a
+				 * pipe are always atomic. */
 				uint8_t k = (uint8_t)ev.key;
-				if (pipe_write_all(proc->in, &k, 1) < 0) {
+				if (write(proc->in, &k, 1) < 0) {
 					quit = 1;
 				}
 			}

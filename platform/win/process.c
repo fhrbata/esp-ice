@@ -336,30 +336,6 @@ int kill_w(pid_t pid, int sig)
 	return 0;
 }
 
-ssize_t pipe_write_all(int fd, const void *buf, size_t n)
-{
-	/* NOLINTNEXTLINE(performance-no-int-to-ptr) */
-	HANDLE h = (HANDLE)_get_osfhandle(fd);
-	const char *p = buf;
-	size_t left = n;
-
-	if (h == INVALID_HANDLE_VALUE)
-		return -1;
-
-	while (left > 0) {
-		DWORD chunk = left > (size_t)0xffff0000u ? (DWORD)0xffff0000u
-							 : (DWORD)left;
-		DWORD wrote = 0;
-		if (!WriteFile(h, p, chunk, &wrote, NULL))
-			return -1;
-		if (wrote == 0)
-			return -1;
-		p += wrote;
-		left -= wrote;
-	}
-	return (ssize_t)n;
-}
-
 unsigned long long mono_ms(void)
 {
 	return (unsigned long long)GetTickCount64();

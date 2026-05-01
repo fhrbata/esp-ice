@@ -411,21 +411,6 @@ static inline int process_run(struct process *proc)
 ssize_t pipe_read_timed(int fd, void *buf, size_t n, unsigned timeout_ms);
 
 /**
- * @brief Write all @p n bytes to a pipe file descriptor.
- *
- * Retries on partial writes and @c EINTR.  Designed for sending bytes
- * to the input side of a pipe created by @ref process_start (proc->in)
- * — typically forwarding the user's keystrokes to a child process, the
- * mirror image of @ref pipe_read_timed for child output.
- *
- * @param fd   Write end of the pipe (e.g. proc->in).
- * @param buf  Source buffer.
- * @param n    Bytes to write.
- * @return n on success, -1 on error (EOF / EPIPE / errno set).
- */
-ssize_t pipe_write_all(int fd, const void *buf, size_t n);
-
-/**
  * @brief Return a monotonic timestamp in milliseconds.
  *
  * Suitable for measuring elapsed intervals inside a single process

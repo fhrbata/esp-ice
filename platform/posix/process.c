@@ -239,26 +239,6 @@ ssize_t pipe_read_timed(int fd, void *buf, size_t n, unsigned timeout_ms)
 	return got;
 }
 
-ssize_t pipe_write_all(int fd, const void *buf, size_t n)
-{
-	const char *p = buf;
-	size_t left = n;
-
-	while (left > 0) {
-		ssize_t w = write(fd, p, left);
-		if (w < 0) {
-			if (errno == EINTR)
-				continue;
-			return -1;
-		}
-		if (w == 0)
-			return -1;
-		p += w;
-		left -= (size_t)w;
-	}
-	return (ssize_t)n;
-}
-
 unsigned long long mono_ms(void)
 {
 	struct timespec ts;
