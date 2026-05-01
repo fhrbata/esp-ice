@@ -85,16 +85,22 @@ static int try_expand_alias(int *argcp, const char ***argvp)
 }
 
 /*
- * Return 1 if argv contains --help or -h before the first "--"
- * separator.  Used to skip setup_project() for help/usage requests
- * so @b{ice build --help} works outside a configured project.
+ * Return 1 if argv contains an introspection flag (--help, -h, or
+ * --ice-complete) before the first "--" separator.  These all cause
+ * the leaf's parse_options() to short-circuit -- print the manual or
+ * dump completion candidates -- without reaching the handler body,
+ * so the dispatcher should skip setup_project() too.  Otherwise
+ * `ice build --help` would demand a configured project just to
+ * render its usage, and TAB-completion on `ice size <TAB>` would
+ * trigger a real build for every keystroke.
  */
-static int argv_wants_help(int argc, const char **argv)
+static int argv_skip_setup(int argc, const char **argv)
 {
 	for (int i = 1; i < argc; i++) {
 		if (!strcmp(argv[i], "--"))
 			return 0;
-		if (!strcmp(argv[i], "--help") || !strcmp(argv[i], "-h"))
+		if (!strcmp(argv[i], "--help") || !strcmp(argv[i], "-h") ||
+		    !strcmp(argv[i], "--ice-complete"))
 			return 1;
 	}
 	return 0;
@@ -169,14 +175,11 @@ static void complete_aliases(void)
 int ice_dispatch(int argc, const char **argv, const struct cmd_desc *desc)
 {
 	if (!desc->subcommands) {
-		/*
-		 * --help / -h short-circuits to the manual inside
-		 * parse_options before the handler does any real work,
-		 * so skip setup_project() for that path -- otherwise
-		 * @b{ice build --help} would demand a configured project
-		 * just to render its usage.
-		 */
-		if (!argv_wants_help(argc, argv))
+		/* See argv_skip_setup() -- introspection flags
+		 * (--help / -h / --ice-complete) short-circuit the leaf
+		 * before it touches the project, so don't pay for
+		 * setup_project() either. */
+		if (!argv_skip_setup(argc, argv))
 			setup_project(desc->needs);
 		return desc->fn(argc, argv);
 	}
@@ -192,7 +195,7 @@ int ice_dispatch(int argc, const char **argv, const struct cmd_desc *desc)
 	}
 
 	if (desc->fn) {
-		if (!argv_wants_help(argc, argv))
+		if (!argv_skip_setup(argc, argv))
 			setup_project(desc->needs);
 		return desc->fn(argc, argv);
 	}
