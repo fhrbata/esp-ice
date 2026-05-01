@@ -78,6 +78,14 @@ static const char *opt_flash_file;
 static const char *opt_efuse_file;
 static int opt_scrollback = 10000;
 static int opt_no_tui;
+static int opt_gdb;
+
+/*
+ * Port the QEMU GDB stub listens on when @c --gdb is set.  Matches the
+ * idf.py / OpenOCD convention so existing user muscle memory works.
+ * Hardcoded for v1; a future @c --gdb-port flag can override.
+ */
+#define ICE_QEMU_GDB_PORT 3333
 
 /* clang-format off */
 static const struct option cmd_qemu_opts[] = {
@@ -94,6 +102,9 @@ static const struct option cmd_qemu_opts[] = {
 	OPT_BOOL(0, "no-tui", &opt_no_tui,
 		 "dumb passthrough; no alt-screen, no scroll "
 		 "(auto when stdout/stdin isn't a tty)"),
+	OPT_BOOL('d', "gdb", &opt_gdb,
+		 "wait for gdb on tcp::3333 before booting "
+		 "(attach with the chip's gdb in another terminal)"),
 	OPT_END(),
 };
 /* clang-format on */
@@ -135,6 +146,7 @@ static const unsigned char default_efuse_esp32s3[1024] = {
 struct qemu_chip {
 	const char *name;	     /* "esp32", "esp32c3", "esp32s3" */
 	const char *qemu_prog;	     /* default binary name */
+	const char *gdb_prog;	     /* matching gdb for the @c --gdb hint */
 	const char *machine;	     /* -M argument */
 	const char *memory;	     /* -m argument, NULL to omit */
 	const char *boot_mode_strap; /* strap_mode value for forced download
@@ -149,6 +161,7 @@ static const struct qemu_chip qemu_chips[] = {
     {
 	.name = "esp32",
 	.qemu_prog = "qemu-system-xtensa",
+	.gdb_prog = "xtensa-esp32-elf-gdb",
 	.machine = "esp32",
 	.memory = "4M",
 	.boot_mode_strap = "driver=esp32.gpio,property=strap_mode,value=0x0f",
@@ -158,6 +171,7 @@ static const struct qemu_chip qemu_chips[] = {
     {
 	.name = "esp32c3",
 	.qemu_prog = "qemu-system-riscv32",
+	.gdb_prog = "riscv32-esp-elf-gdb",
 	.machine = "esp32c3",
 	.memory = NULL,
 	.boot_mode_strap = "driver=esp32c3.gpio,property=strap_mode,value=0x02",
@@ -167,6 +181,7 @@ static const struct qemu_chip qemu_chips[] = {
     {
 	.name = "esp32s3",
 	.qemu_prog = "qemu-system-xtensa",
+	.gdb_prog = "xtensa-esp32s3-elf-gdb",
 	.machine = "esp32s3",
 	.memory = "32M",
 	.boot_mode_strap = "driver=esp32s3.gpio,property=strap_mode,value=0x07",
@@ -445,6 +460,15 @@ static void build_qemu_argv(struct svec *v, const struct qemu_chip *chip,
 	push_argv(v, "none");
 	push_argv(v, "-serial");
 	push_argv(v, "stdio");
+
+	if (opt_gdb) {
+		/* @c -S halts the virtual CPU at reset until gdb attaches
+		 * and continues -- the user gets to set breakpoints before
+		 * the first instruction runs. */
+		push_argv(v, "-gdb");
+		push_argvf(v, "tcp::%d", ICE_QEMU_GDB_PORT);
+		push_argv(v, "-S");
+	}
 }
 
 /* ------------------------------------------------------------------ */
@@ -539,8 +563,11 @@ static int run_tui(struct process *proc, const char *qemu_bin,
 	tui_log_resize(&L, cols, rows);
 
 	struct sbuf status = SBUF_INIT;
-	sbuf_addf(&status, "ice qemu: %s @ %s  \xe2\x80\xa2  Ctrl-] exit",
-		  chip_name, qemu_bin);
+	sbuf_addf(&status, "ice qemu: %s @ %s", chip_name, qemu_bin);
+	if (opt_gdb)
+		sbuf_addf(&status, "  \xe2\x80\xa2  [GDB :%d, halted]",
+			  ICE_QEMU_GDB_PORT);
+	sbuf_addstr(&status, "  \xe2\x80\xa2  Ctrl-] exit");
 	tui_log_set_status(&L, status.buf);
 
 	/* Inner-terminal vt100: same scaling rule as cmd/target/monitor.
@@ -741,6 +768,22 @@ int cmd_qemu(int argc, const char **argv)
 		sbuf_release(&flash_path);
 		sbuf_release(&efuse_path);
 		return 1;
+	}
+
+	/* Tell the user how to attach gdb in another terminal.  Printed
+	 * before screen_enter so the message stays in the user's terminal
+	 * scrollback (alt-screen output is discarded on screen_leave).
+	 * The chip is halted at reset until gdb connects and continues. */
+	if (opt_gdb) {
+		const char *elf = config_get("_project.elf");
+		fprintf(stderr,
+			"@y{ice qemu: chip halted, waiting for gdb on "
+			"tcp::%d}\n"
+			"  In another terminal:\n"
+			"    %s%s%s -ex \"target remote :%d\"\n",
+			ICE_QEMU_GDB_PORT, chip->gdb_prog,
+			elf && *elf ? " " : "", elf && *elf ? elf : "",
+			ICE_QEMU_GDB_PORT);
 	}
 
 	int interactive =
