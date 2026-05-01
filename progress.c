@@ -80,6 +80,63 @@ static const char *const spinner_frames[] = {
  * combo. */
 #define PROGRESS_CTRLV_HINT " @[2]{[Ctrl-v shows live output]}"
 
+/* Banner printed once when the user toggles into verbose mode.  Stays
+ * visible in the scrollback when they toggle back out, so it doubles
+ * as a marker of when live mirroring started.  "\xe2\x94\x80\xe2\x94\x80"
+ * is the UTF-8 byte sequence for two horizontal box characters
+ * (U+2500), matching the @b{──} divider style used elsewhere. */
+#define PROGRESS_VERBOSE_BANNER                                                \
+	"@[2]{\xe2\x94\x80\xe2\x94\x80 live output (Ctrl-v to hide) "          \
+	"\xe2\x94\x80\xe2\x94\x80}\n"
+
+/* A small ring buffer that mirrors recent child output.  Dumped when
+ * the user presses Ctrl-v so the toggle is useful even mid-silent
+ * phase (git counting/enumerating objects, etc.) -- without this the
+ * spinner clears and the screen stays blank until the child speaks
+ * again, which the user reads as "the keypress did nothing". */
+#define PROGRESS_PEEK_BYTES 4096
+struct peek_ring {
+	char buf[PROGRESS_PEEK_BYTES];
+	size_t pos; /* next write offset, mod sizeof buf */
+	size_t len; /* bytes currently in the ring, capped at sizeof buf */
+};
+
+static void peek_append(struct peek_ring *r, const char *src, size_t n)
+{
+	size_t first;
+
+	/* Incoming chunk bigger than the whole ring: keep the tail. */
+	if (n >= sizeof r->buf) {
+		memcpy(r->buf, src + n - sizeof r->buf, sizeof r->buf);
+		r->pos = 0;
+		r->len = sizeof r->buf;
+		return;
+	}
+
+	first = sizeof r->buf - r->pos;
+	if (n <= first) {
+		memcpy(r->buf + r->pos, src, n);
+		r->pos = (r->pos + n) % sizeof r->buf;
+	} else {
+		memcpy(r->buf + r->pos, src, first);
+		memcpy(r->buf, src + first, n - first);
+		r->pos = n - first;
+	}
+	r->len += n;
+	if (r->len > sizeof r->buf)
+		r->len = sizeof r->buf;
+}
+
+static void peek_dump(const struct peek_ring *r, FILE *out)
+{
+	if (r->len < sizeof r->buf) {
+		fwrite(r->buf, 1, r->len, out);
+	} else {
+		fwrite(r->buf + r->pos, 1, sizeof r->buf - r->pos, out);
+		fwrite(r->buf, 1, r->pos, out);
+	}
+}
+
 static int progress_interactive(void) { return isatty(STDOUT_FILENO); }
 
 static void format_elapsed(char *out, size_t cap, unsigned long long ms)
@@ -253,6 +310,7 @@ int process_run_progress(struct process *proc, const char *msg,
 	int wrapped = global_wrapped;
 	int verbose = (wrapped || !interactive) ? 1 : global_verbose;
 	int raw_active = 0;
+	struct peek_ring peek = {0};
 	unsigned long long start;
 	unsigned long long duration_ms;
 
@@ -331,8 +389,17 @@ int process_run_progress(struct process *proc, const char *msg,
 				if (verbose) {
 					/* Spinner row → live tail: wipe
 					 * the spinner so the first child
-					 * bytes start at column 0. */
+					 * bytes start at column 0, then
+					 * print a banner and dump the
+					 * recent-output ring so the user
+					 * sees context immediately even
+					 * if the child is currently
+					 * silent (e.g., git counting
+					 * objects on the remote side). */
 					progress_clear();
+					printf("%s", PROGRESS_VERBOSE_BANNER);
+					peek_dump(&peek, stdout);
+					fflush(stdout);
 				} else {
 					/* Live tail → spinner: child output
 					 * may have left the cursor mid-line
@@ -358,6 +425,8 @@ int process_run_progress(struct process *proc, const char *msg,
 		}
 		if (log)
 			fwrite(buf, 1, (size_t)n, log);
+		if (raw_active)
+			peek_append(&peek, buf, (size_t)n);
 		if (verbose) {
 			fwrite(buf, 1, (size_t)n, stdout);
 			fflush(stdout);
