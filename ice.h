@@ -159,6 +159,23 @@ extern const struct cmd_desc ice_root_desc;
 void setup_project(enum project_need needs);
 
 /**
+ * @brief Best-effort project load for completion handlers.
+ *
+ * Same shape as @c setup_project(PROJECT_CONFIGURED) but never dies:
+ * if there's no @c .ice/config in cwd, just returns; if the build
+ * directory exists, derive the @c _project.* keys (mapfile / target /
+ * elf) so completion can read them; if not, return with whatever
+ * partial state was loaded.  No build is ever triggered.
+ *
+ * Call this from the dispatcher when --ice-complete is in argv,
+ * before invoking the leaf's .fn -- completion handlers can then
+ * use @c config_get("_project.mapfile") etc. to enumerate
+ * project-derived candidates without paying for setup_project()'s
+ * configure / build / die paths.
+ */
+void setup_project_lenient(void);
+
+/**
  * @brief Run the default build target for the active profile.
  *
  * Acquires @c <build>/.ice/lock, invokes @c cmake --build via

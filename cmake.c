@@ -222,6 +222,16 @@ static const char *resolve_profile_name(void)
 	return "default";
 }
 
+void setup_project_lenient(void)
+{
+	/* Caller (the dispatcher's --ice-complete path) already accepted
+	 * that we may be outside an ice project; bail silently in that
+	 * case rather than dying like setup_project() does. */
+	if (access(local_config_path(), F_OK) != 0)
+		return;
+	config_load_profile(resolve_profile_name());
+}
+
 void setup_project(enum project_need needs)
 {
 	const char *name;

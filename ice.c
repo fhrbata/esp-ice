@@ -84,26 +84,50 @@ static int try_expand_alias(int *argcp, const char ***argvp)
 	return 1;
 }
 
-/*
- * Return 1 if argv contains an introspection flag (--help, -h, or
- * --ice-complete) before the first "--" separator.  These all cause
- * the leaf's parse_options() to short-circuit -- print the manual or
- * dump completion candidates -- without reaching the handler body,
- * so the dispatcher should skip setup_project() too.  Otherwise
- * `ice build --help` would demand a configured project just to
- * render its usage, and TAB-completion on `ice size <TAB>` would
- * trigger a real build for every keystroke.
- */
-static int argv_skip_setup(int argc, const char **argv)
+/* Helpers for "argv contains <introspection-flag> before --".  Both
+ * cause the leaf's parse_options() to short-circuit, but they need
+ * different setup treatment: --help wants no project state at all
+ * (so `ice build --help` works outside a project), while
+ * --ice-complete still wants a *lenient* profile load so
+ * completion handlers can read _project.mapfile etc. without
+ * triggering a reconfigure or build. */
+static int argv_has_flag(int argc, const char **argv, const char *a,
+			 const char *b)
 {
 	for (int i = 1; i < argc; i++) {
 		if (!strcmp(argv[i], "--"))
 			return 0;
-		if (!strcmp(argv[i], "--help") || !strcmp(argv[i], "-h") ||
-		    !strcmp(argv[i], "--ice-complete"))
+		if (!strcmp(argv[i], a) || (b && !strcmp(argv[i], b)))
 			return 1;
 	}
 	return 0;
+}
+
+static int argv_wants_help(int argc, const char **argv)
+{
+	return argv_has_flag(argc, argv, "--help", "-h");
+}
+
+static int argv_wants_complete(int argc, const char **argv)
+{
+	return argv_has_flag(argc, argv, "--ice-complete", NULL);
+}
+
+/* Set up project state for the matched leaf.  Help skips entirely;
+ * completion does a lenient load (resolve profile, derive
+ * _project.* keys when available, no build, no die) so completion
+ * handlers can read project-derived config.  Everything else gets
+ * the leaf's full setup_project() at the requested level. */
+static void prepare_project(int argc, const char **argv,
+			    enum project_need needs)
+{
+	if (argv_wants_help(argc, argv))
+		return;
+	if (argv_wants_complete(argc, argv)) {
+		setup_project_lenient();
+		return;
+	}
+	setup_project(needs);
 }
 
 /* Dispatch: parse globals then fire the matched subcommand. */
@@ -175,12 +199,7 @@ static void complete_aliases(void)
 int ice_dispatch(int argc, const char **argv, const struct cmd_desc *desc)
 {
 	if (!desc->subcommands) {
-		/* See argv_skip_setup() -- introspection flags
-		 * (--help / -h / --ice-complete) short-circuit the leaf
-		 * before it touches the project, so don't pay for
-		 * setup_project() either. */
-		if (!argv_skip_setup(argc, argv))
-			setup_project(desc->needs);
+		prepare_project(argc, argv, desc->needs);
 		return desc->fn(argc, argv);
 	}
 
@@ -195,8 +214,7 @@ int ice_dispatch(int argc, const char **argv, const struct cmd_desc *desc)
 	}
 
 	if (desc->fn) {
-		if (!argv_skip_setup(argc, argv))
-			setup_project(desc->needs);
+		prepare_project(argc, argv, desc->needs);
 		return desc->fn(argc, argv);
 	}
 
