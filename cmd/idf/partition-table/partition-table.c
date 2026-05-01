@@ -11,6 +11,12 @@
 #include "ice.h"
 #include "partition_table.h"
 
+extern const struct cmd_desc cmd_idf_pt_check_bootloader_desc;
+extern const struct cmd_desc cmd_idf_pt_check_partition_desc;
+extern const struct cmd_desc cmd_idf_pt_decode_desc;
+extern const struct cmd_desc cmd_idf_pt_empty_desc;
+extern const struct cmd_desc cmd_idf_pt_subtypes_header_desc;
+
 /* clang-format off */
 static const struct cmd_manual idf_partition_table_manual = {
 	.name = "ice idf partition-table",
@@ -33,12 +39,19 @@ static const struct cmd_manual idf_partition_table_manual = {
 	       "address\") are all supported.  Lines starting with @b{#} "
 	       "are comments; blank lines are ignored.  Missing offsets are "
 	       "auto-filled using IDF's alignment rules (0x10000 for app, "
-	       "0x1000 otherwise)."),
+	       "0x1000 otherwise).")
+	H_PARA("Subcommands cover the inverse direction and the small "
+	       "Python helpers IDF ships alongside @b{gen_esp32part.py} "
+	       "(@b{decode}, @b{empty}, @b{check-bootloader}, "
+	       "@b{check-partition}, @b{subtypes-header}); the bare form "
+	       "stays the default CSV->bin path."),
 
 	.examples =
 	H_EXAMPLE("ice idf partition-table partitions.csv build/partition-table.bin")
 	H_EXAMPLE("ice idf partition-table --flash-size 4MB partitions.csv build/pt.bin")
-	H_EXAMPLE("ice idf partition-table --disable-md5sum partitions.csv out.bin"),
+	H_EXAMPLE("ice idf partition-table --disable-md5sum partitions.csv out.bin")
+	H_EXAMPLE("ice idf partition-table decode pt.bin")
+	H_EXAMPLE("ice idf partition-table empty 0x1000 blank.bin"),
 
 	.extras =
 	H_SECTION("SEE ALSO")
@@ -47,6 +60,12 @@ static const struct cmd_manual idf_partition_table_manual = {
 	       "build pipeline; usually the way end users reach it."),
 };
 /* clang-format on */
+
+static const struct cmd_desc *const idf_partition_table_subs[] = {
+    &cmd_idf_pt_check_bootloader_desc, &cmd_idf_pt_check_partition_desc,
+    &cmd_idf_pt_decode_desc,	       &cmd_idf_pt_empty_desc,
+    &cmd_idf_pt_subtypes_header_desc,  NULL,
+};
 
 /*
  * File-scope so the completion backend can walk the option table via
@@ -89,6 +108,7 @@ const struct cmd_desc cmd_idf_partition_table_desc = {
     .fn = cmd_idf_partition_table,
     .opts = cmd_idf_partition_table_opts,
     .manual = &idf_partition_table_manual,
+    .subcommands = idf_partition_table_subs,
 };
 
 int cmd_idf_partition_table(int argc, const char **argv)
@@ -101,7 +121,12 @@ int cmd_idf_partition_table(int argc, const char **argv)
 	const char *output_path;
 	FILE *fp;
 
-	argc = parse_options(argc, argv, &cmd_idf_partition_table_desc);
+	/*
+	 * The namespace dispatcher already ran parse_options() with this
+	 * descriptor before falling through to .fn -- options are stripped,
+	 * static option-storage variables populated, argv contains only the
+	 * remaining positionals.
+	 */
 
 	if (argc < 2)
 		die("usage: ice idf partition-table [options] <input.csv> "

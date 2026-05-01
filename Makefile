@@ -159,6 +159,11 @@ LIB_SRCS := \
 	cmd/idf/ldgen/sinfo.c \
 	cmd/idf/menuconfig/menuconfig.c \
 	cmd/idf/partition-table/partition-table.c \
+	cmd/idf/partition-table/check-bootloader/check-bootloader.c \
+	cmd/idf/partition-table/check-partition/check-partition.c \
+	cmd/idf/partition-table/decode/decode.c \
+	cmd/idf/partition-table/empty/empty.c \
+	cmd/idf/partition-table/subtypes-header/subtypes-header.c \
 	cmd/idf/size/mem.c \
 	cmd/idf/size/memmap.c \
 	cmd/idf/size/memmap_ops.c \
