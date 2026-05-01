@@ -13,6 +13,12 @@
  *   - ellipses (azure) for archives that only appear as dependencies
  *   - one edge per (user, provider) pair (or reversed when --dep-reverse)
  *   - edge label lists symbols when --dep-symbols is set
+ *
+ * The textual DOT output also embeds @x{...} terminal-color tokens that
+ * the platform fprintf shim expands on a tty and strips when piped.
+ * Pipes into `dot -Tsvg` get clean text; dumping to a terminal gets
+ * basic syntax highlighting (keywords yellow, string literals green,
+ * numbers cyan, fillcolor names bold).
  */
 #include "ice.h"
 
@@ -38,7 +44,7 @@ void fmt_dot_deps(const struct map_file *mf, const struct memmap *mm,
 	dep_build(mf, mm, syms, args, &d);
 	dep_filter(&d, args);
 
-	fprintf(args->out, "strict digraph {\n");
+	fprintf(args->out, "@y{strict digraph} {\n");
 
 	for (int i = 0; i < d.nr_entries; i++) {
 		struct dep_entry *e = d.entries[i];
@@ -46,8 +52,10 @@ void fmt_dot_deps(const struct map_file *mf, const struct memmap *mm,
 
 		if (!seen_has(seen, nr_seen, e->name)) {
 			fprintf(args->out,
-				"\"%s\" [shape=box, label=\"%s (%lld)\", "
-				"style=filled, fillcolor=\"darkorange3\"]\n",
+				"@g{\"%s\"} [@y{shape}=@b{box}, "
+				"@y{label}=@g{\"%s (@c{%lld})\"}, "
+				"@y{style}=@b{filled}, "
+				"@y{fillcolor}=@g{\"darkorange3\"}]\n",
 				e->name, e_name, (long long)e->size);
 			ALLOC_GROW(seen, nr_seen + 1, alloc_seen);
 			seen[nr_seen++] = e->name;
@@ -69,29 +77,39 @@ void fmt_dot_deps(const struct map_file *mf, const struct memmap *mm,
 						break;
 					}
 				}
-				fprintf(
-				    args->out,
-				    "\"%s\" [shape=%s, label=\"%s (%lld)\", "
-				    "style=filled, fillcolor=\"%s\"]\n",
-				    da->name, is_box ? "box" : "ellipse",
-				    da_name, (long long)da->size,
-				    is_box ? "darkorange3" : "azure");
+				fprintf(args->out,
+					"@g{\"%s\"} [@y{shape}=@b{%s}, "
+					"@y{label}=@g{\"%s (@c{%lld})\"}, "
+					"@y{style}=@b{filled}, "
+					"@y{fillcolor}=@g{\"%s\"}]\n",
+					da->name, is_box ? "box" : "ellipse",
+					da_name, (long long)da->size,
+					is_box ? "darkorange3" : "azure");
 				ALLOC_GROW(seen, nr_seen + 1, alloc_seen);
 				seen[nr_seen++] = da->name;
 			}
 
-			fprintf(args->out, "\"%s\" -> \"%s\"",
+			fprintf(args->out, "@g{\"%s\"} -> @g{\"%s\"}",
 				args->dep_reverse ? da->name : e->name,
 				args->dep_reverse ? e->name : da->name);
 
 			if (args->dep_symbols) {
-				fputs(" [label=\"", args->out);
+				/* Build the label as one fputs so the
+				 * @y{...} / @g{...} blocks open and close
+				 * inside a single expand_colors pass.
+				 * Splitting across multiple stdio calls
+				 * leaks state because the depth stack does
+				 * not persist between them. */
+				struct sbuf lbl = SBUF_INIT;
+				sbuf_addstr(&lbl, " [@y{label}=@g{\"");
 				for (int k = 0; k < da->nr_symbols; k++) {
 					if (k)
-						fputc('\n', args->out);
-					fputs(da->symbols[k], args->out);
+						sbuf_addch(&lbl, '\n');
+					sbuf_addstr(&lbl, da->symbols[k]);
 				}
-				fputs("\"]", args->out);
+				sbuf_addstr(&lbl, "\"}]");
+				fputs(lbl.buf, args->out);
+				sbuf_release(&lbl);
 			}
 			fputc('\n', args->out);
 		}
