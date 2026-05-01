@@ -113,7 +113,8 @@ static const struct option cmd_idf_size_opts[] = {
     OPT_STRING('t', "target", &opt_target, "chip",
 	       "target chip override (e.g. esp32s3)", NULL),
     OPT_STRING(0, "format", &opt_format, "fmt",
-	       "output format: table, text, tree, csv, json2, raw, dot", NULL),
+	       "output format: table, text, tree, csv, json2, raw, dot",
+	       idf_size_complete_format),
     OPT_BOOL(0, "archives", &opt_archives, "print per-archive sizes"),
     OPT_BOOL(0, "archive-dependencies", &opt_archive_deps,
 	     "show archive dependency graph"),
@@ -126,7 +127,8 @@ static const struct option cmd_idf_size_opts[] = {
 	     "show reverse dependencies (def -> users)"),
     OPT_BOOL(0, "dep-rev", &opt_dep_reverse, "alias for --dep-reverse"),
     OPT_STRING(0, "archive-details", &opt_archive_details, "ARCHIVE",
-	       "print per-symbol sizes for one archive", NULL),
+	       "print per-symbol sizes for one archive",
+	       idf_size_complete_archive),
     OPT_BOOL(0, "files", &opt_files, "print per-file sizes"),
     OPT_STRING(0, "diff", &opt_diff, "MAP",
 	       "compare against another linker map file", NULL),
@@ -162,6 +164,98 @@ const struct cmd_desc cmd_idf_size_desc = {
     .opts = cmd_idf_size_opts,
     .manual = &idf_size_manual,
 };
+
+/* ------------------------------------------------------------------ */
+/* Completion helpers (shared with the porcelain via size.h)          */
+/* ------------------------------------------------------------------ */
+
+void idf_size_complete_format(void)
+{
+	static const struct {
+		const char *name;
+		const char *desc;
+	} formats[] = {
+	    {"table", "Unicode box-drawing table (default)"},
+	    {"text", "alias for table"},
+	    {"tree", "indented hierarchy"},
+	    {"csv", "comma-separated values"},
+	    {"json2", "versioned JSON summary (1.2)"},
+	    {"raw", "full memory map dumped as JSON"},
+	    {"dot", "Graphviz DOT (deps only)"},
+	};
+	for (size_t i = 0; i < sizeof(formats) / sizeof(formats[0]); i++)
+		complete_emit(formats[i].name, formats[i].desc);
+}
+
+void idf_size_walk_archives(idf_size_archive_emit emit, void *ud)
+{
+	const char *mapfile;
+	struct sbuf body = SBUF_INIT;
+	struct map_file mf;
+	struct svec seen = SVEC_INIT;
+
+	/* The dispatcher's --ice-complete path runs setup_project_lenient
+	 * already, but make this helper standalone-callable so other
+	 * callers (tests, future tools) don't have to know that detail. */
+	setup_project_lenient();
+
+	mapfile = config_get("_project.mapfile");
+	if (!mapfile)
+		return;
+	if (sbuf_read_file(&body, mapfile) < 0)
+		return;
+
+	memset(&mf, 0, sizeof(mf));
+	map_read(body.buf, body.len, &mf);
+
+	/*
+	 * For each input section's archive, dedupe by basename (an IDF
+	 * project rarely has two archives with the same .a name; if it
+	 * does, callers that care can dedupe further on the emitted
+	 * value).  Skip the synthetic "(exe)" bucket the parser uses
+	 * for directly-linked objects.
+	 */
+	for (int i = 0; i < mf.nr_sections; i++) {
+		for (int j = 0; j < mf.sections[i].nr_inputs; j++) {
+			const char *arch = mf.sections[i].inputs[j].archive;
+			const char *slash;
+			const char *base;
+			int dup = 0;
+
+			if (!arch || !*arch || !strcmp(arch, "(exe)"))
+				continue;
+			slash = strrchr(arch, '/');
+			base = slash ? slash + 1 : arch;
+			if (!*base)
+				continue;
+
+			for (size_t k = 0; k < seen.nr; k++)
+				if (!strcmp(seen.v[k], base)) {
+					dup = 1;
+					break;
+				}
+			if (dup)
+				continue;
+			svec_push(&seen, base);
+			emit(base, ud);
+		}
+	}
+
+	svec_clear(&seen);
+	map_release(&mf);
+	sbuf_release(&body);
+}
+
+static void emit_archive_verbatim(const char *archive, void *ud)
+{
+	(void)ud;
+	complete_emit(archive, NULL);
+}
+
+void idf_size_complete_archive(void)
+{
+	idf_size_walk_archives(emit_archive_verbatim, NULL);
+}
 
 /* ------------------------------------------------------------------ */
 /* Helpers                                                             */
