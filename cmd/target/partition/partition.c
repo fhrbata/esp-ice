@@ -79,6 +79,7 @@ int pt_opt_boot_default;
 const char *pt_opt_primary_boot_offset;
 const char *pt_opt_recovery_boot_offset;
 struct svec pt_opt_extra_subtypes = SVEC_INIT;
+int pt_opt_quiet;
 struct svec pt_opt_esptool_args = SVEC_INIT;
 struct svec pt_opt_esptool_write_args = SVEC_INIT;
 struct svec pt_opt_esptool_read_args = SVEC_INIT;
@@ -96,6 +97,7 @@ void pt_target_reset_opts(void)
 	pt_opt_boot_default = 0;
 	pt_opt_primary_boot_offset = NULL;
 	pt_opt_recovery_boot_offset = NULL;
+	pt_opt_quiet = 0;
 	svec_clear(&pt_opt_extra_subtypes);
 	svec_clear(&pt_opt_esptool_args);
 	svec_clear(&pt_opt_esptool_write_args);

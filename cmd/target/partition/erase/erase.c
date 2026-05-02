@@ -56,6 +56,8 @@ static const struct option cmd_target_partition_erase_opts[] = {
     OPT_STRING_LIST(0, "extra-partition-subtypes", &pt_opt_extra_subtypes,
 		    "T,N,V", "register custom subtypes (e.g. data,foo,0x80)",
 		    NULL),
+    OPT_BOOL('q', "quiet", &pt_opt_quiet,
+	     "suppress progress chatter (parttool.py compat; no-op for now)"),
     OPT_STRING_LIST(0, "esptool-args", &pt_opt_esptool_args, "arg",
 		    "rejected; ice does not delegate to esptool", NULL),
     OPT_STRING_LIST(0, "esptool-write-args", &pt_opt_esptool_write_args, "arg",
