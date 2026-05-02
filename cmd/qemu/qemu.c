@@ -1184,10 +1184,13 @@ int cmd_qemu(int argc, const char **argv)
 	}
 
 	/* ---- qemu binary ---- */
-	/* Resolution order: --qemu-bin > installed under ice_home/tools/ >
-	 * fall through to PATH (chip->qemu_prog).  The installed-tools
-	 * lookup matches the layout that ice tools install / esp-idf's
-	 * idf_tools.py both produce ("<version>/qemu/bin/<binary>"). */
+	/* Resolution order: --qemu-bin > installed under ice_home/tools/.
+	 * The installed-tools lookup matches the layout that ice tools
+	 * install / esp-idf's idf_tools.py both produce
+	 * ("<version>/qemu/bin/<binary>").  If the tool isn't installed
+	 * yet we run @b{ice tools install --tool <pkg>} against the
+	 * project's IDF manifest -- qemu is @c install:on_request, so a
+	 * fresh @b{ice init} never grabs it -- and re-resolve. */
 	char *qemu_bin_owned = NULL;
 	const char *qemu_bin = opt_qemu_bin;
 	if (!qemu_bin) {
@@ -1197,8 +1200,52 @@ int cmd_qemu(int argc, const char **argv)
 		struct sbuf sub = SBUF_INIT;
 		sbuf_addf(&sub, "qemu/bin/%s", chip->qemu_prog);
 		qemu_bin_owned = resolve_tool(pkg, sub.buf);
+
+		if (!qemu_bin_owned) {
+			const char *idf_path = config_get("_project.idf-path");
+			struct sbuf manifest = SBUF_INIT;
+			struct svec icmd = SVEC_INIT;
+			struct process iproc = PROCESS_INIT;
+			const char *exe = process_exe();
+			int irc;
+
+			if (!idf_path || !*idf_path)
+				die("ice qemu: no @b{_project.idf-path}; "
+				    "run @b{ice init} first");
+			sbuf_addf(&manifest, "%s/tools/tools.json", idf_path);
+			if (access(manifest.buf, F_OK) != 0)
+				die("ice qemu: cannot install qemu, "
+				    "'%s' not found",
+				    manifest.buf);
+
+			svec_push(&icmd, exe ? exe : "ice");
+			svec_push(&icmd, "tools");
+			svec_push(&icmd, "install");
+			svec_push(&icmd, "--tool");
+			svec_push(&icmd, pkg);
+			svec_push(&icmd, manifest.buf);
+			iproc.argv = icmd.v;
+
+			irc = process_run_progress(&iproc, "Installing qemu",
+						   "qemu-install", NULL);
+			svec_clear(&icmd);
+			sbuf_release(&manifest);
+			if (irc != 0) {
+				sbuf_release(&sub);
+				sbuf_release(&flash_path);
+				sbuf_release(&efuse_path);
+				return irc;
+			}
+
+			qemu_bin_owned = resolve_tool(pkg, sub.buf);
+			if (!qemu_bin_owned)
+				die("ice qemu: '%s' install completed but "
+				    "'%s' not found under "
+				    "@b{~/.ice/tools/%s/<version>/}",
+				    pkg, chip->qemu_prog, pkg);
+		}
 		sbuf_release(&sub);
-		qemu_bin = qemu_bin_owned ? qemu_bin_owned : chip->qemu_prog;
+		qemu_bin = qemu_bin_owned;
 	}
 
 	/* ---- build argv ---- */
