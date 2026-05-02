@@ -151,14 +151,20 @@ int process_start(struct process *proc)
 					  pty_slave_path);
 				_exit(EXIT_FAILURE);
 			}
-			ioctl(slave, TIOCSCTTY, 0);
+			/* Cast the request to int because musl declares
+			 * ioctl as `int ioctl(int fd, int request, ...)`
+			 * (POSIX-strict), and on ppc64 / mips the kernel
+			 * encodes some request constants with bit 31 set,
+			 * tripping -Werror=overflow at the implicit
+			 * unsigned long → int conversion. */
+			ioctl(slave, (int)TIOCSCTTY, 0);
 			if (proc->pty_rows > 0 && proc->pty_cols > 0) {
 				struct winsize ws;
 
 				memset(&ws, 0, sizeof ws);
 				ws.ws_row = (unsigned short)proc->pty_rows;
 				ws.ws_col = (unsigned short)proc->pty_cols;
-				ioctl(slave, TIOCSWINSZ, &ws);
+				ioctl(slave, (int)TIOCSWINSZ, &ws);
 			}
 			dup2(slave, STDIN_FILENO);
 			dup2(slave, STDOUT_FILENO);
@@ -336,7 +342,7 @@ int pty_resize(struct process *proc, int rows, int cols)
 	memset(&ws, 0, sizeof ws);
 	ws.ws_row = (unsigned short)rows;
 	ws.ws_col = (unsigned short)cols;
-	if (ioctl(proc->in, TIOCSWINSZ, &ws) < 0)
+	if (ioctl(proc->in, (int)TIOCSWINSZ, &ws) < 0)
 		return -1;
 	return 0;
 }

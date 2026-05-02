@@ -30,6 +30,15 @@
  * binary still loads on older Windows; pty mode just fails cleanly. */
 #include <consoleapi.h>
 
+/* Older mingw-w64 SDKs ship the ConPTY function declarations and the
+ * HPCON typedef but not the proc-thread attribute number used to bind
+ * a pseudo-console to a child process at CreateProcess time.  The
+ * macro is defined as ProcThreadAttributeValue(22, FALSE, TRUE, FALSE)
+ * which expands to 22 | 0x20000 = 0x20016. */
+#ifndef PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE
+#define PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE 0x20016
+#endif
+
 #include "ice.h"
 #include "wconv.h"
 
