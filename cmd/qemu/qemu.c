@@ -17,8 +17,10 @@
  * @ref vt100 + @ref tui_log pipeline so panic decode and ANSI rendering
  * work the same way @c{ice monitor} does for real hardware.
  *
- * Quit hotkey is @c Ctrl-]: closes qemu's stdin, sends @c SIGTERM, and
- * leaves the alt-screen.  PgUp / PgDn / Home / End scroll the buffer.
+ * Quit hotkey is @c Ctrl-T+x (matching @c{ice monitor}): closes qemu's
+ * stdin, sends @c SIGTERM, and leaves the alt-screen.  @c Ctrl-] is an
+ * undocumented panic eject kept as a fallback.  PgUp / PgDn / Home /
+ * End scroll the buffer.
  *
  * Defaults to the simple foreground story (single tty, single pane).
  * The dual-pane @c{--debug} mode that drives @c gdb in a second pane
@@ -49,7 +51,7 @@ static const struct cmd_manual qemu_manual = {
 	H_PARA("Output is rendered through the same vt100 / tui pipeline "
 	       "as @b{ice monitor}, so panic backtraces are decoded, log "
 	       "levels are coloured, and PgUp / PgDn scroll history.  "
-	       "Press @b{Ctrl-]} to exit and shut down QEMU.")
+	       "Press @b{Ctrl-T x} to exit and shut down QEMU.")
 	H_PARA("Supported targets: @b{esp32}, @b{esp32c3}, @b{esp32s3}.  "
 	       "Other chips do not currently have an upstream QEMU "
 	       "implementation in the Espressif fork."),
@@ -61,9 +63,10 @@ static const struct cmd_manual qemu_manual = {
 
 	.extras =
 	H_SECTION("KEY BINDINGS")
-	H_ITEM("Ctrl-]",     "Exit and shut down QEMU.")
-	H_ITEM("PgUp/PgDn",  "Scroll the buffer one page at a time.")
-	H_ITEM("Home/End",   "Jump to the oldest line / resume tailing.")
+	H_ITEM("Ctrl-T x",      "Exit and shut down QEMU.")
+	H_ITEM("Ctrl-T Ctrl-T", "Send a literal Ctrl-T to the chip.")
+	H_ITEM("PgUp/PgDn",     "Scroll the buffer one page at a time.")
+	H_ITEM("Home/End",      "Jump to the oldest line / resume tailing.")
 
 	H_SECTION("SEE ALSO")
 	H_ITEM("ice monitor",
@@ -386,9 +389,22 @@ static int build_flash_image(const char *out_path, size_t flash_size)
 		char *end;
 		errno = 0;
 		unsigned long off = strtoul(off_str, &end, 0);
-		if (errno != 0 || *end != '\0') {
-			fprintf(stderr, "ice qemu: bad offset '%s' in '%s'\n",
-				off_str, entry);
+		/* Reject empty offset explicitly: strtoul("") returns 0 with
+		 * errno==0 and *end=='\0', so the parser thinks it's a valid
+		 * 0 and we'd cheerfully drop the app at offset 0, clobbering
+		 * the bootloader.  An empty offset means @c flasher_args.json
+		 * was generated without a partition-table lookup -- usually
+		 * because the parttool.py compat call into ice failed -- and
+		 * we'd rather fail loudly than write a corrupted flash. */
+		if (off_len == 0 || end == off_str || errno != 0 ||
+		    *end != '\0') {
+			fprintf(
+			    stderr,
+			    "ice qemu: %s offset in '%s'\n"
+			    "  flasher_args.json may be missing the app "
+			    "partition offset.  Re-run 'ice build' after "
+			    "making sure the partition table parses cleanly.\n",
+			    off_len == 0 ? "missing" : "bad", entry);
 			free(off_str);
 			rc = -1;
 			goto out;
@@ -621,8 +637,7 @@ static int decorate_idf_level(const char *line, size_t len, void *ctx,
 	return 1;
 }
 
-static int run_tui(struct process *proc, const char *qemu_bin,
-		   const char *chip_name)
+static int run_tui(struct process *proc, const char *chip_name)
 {
 	int rc = term_raw_enter(0);
 	if (rc < 0)
@@ -639,11 +654,11 @@ static int run_tui(struct process *proc, const char *qemu_bin,
 	tui_log_resize(&L, cols, rows);
 
 	struct sbuf status = SBUF_INIT;
-	sbuf_addf(&status, "ice qemu: %s @ %s", chip_name, qemu_bin);
+	sbuf_addf(&status, "ice qemu: %s", chip_name);
 	if (opt_gdb)
 		sbuf_addf(&status, "  \xe2\x80\xa2  [GDB :%d, halted]",
 			  opt_gdb_port);
-	sbuf_addstr(&status, "  \xe2\x80\xa2  Ctrl-] exit");
+	sbuf_addstr(&status, "  \xe2\x80\xa2  Ctrl-T:  x=exit");
 	tui_log_set_status(&L, status.buf);
 
 	/* Inner-terminal vt100: same scaling rule as cmd/target/monitor.
@@ -660,6 +675,7 @@ static int run_tui(struct process *proc, const char *qemu_bin,
 	}
 
 	int quit = 0;
+	int in_prefix = 0;
 	while (!quit) {
 		uint8_t buf[4096];
 		int dirty = 0;
@@ -708,8 +724,28 @@ static int run_tui(struct process *proc, const char *qemu_bin,
 				cols = ev.cols;
 				rows = ev.rows;
 				dirty = 1;
-			} else if (ev.key == 0x1d) { /* Ctrl-] */
+			} else if (ev.key == 0x1d) {
+				/* Ctrl-]: undocumented panic eject, kept as
+				 * a fallback the way @b{ice monitor} does. */
 				quit = 1;
+			} else if (in_prefix) {
+				/* One byte after Ctrl-T.  @c x exits, a second
+				 * Ctrl-T forwards a literal Ctrl-T to the chip,
+				 * anything else cancels the prefix silently --
+				 * mistakes are cheap, just press Ctrl-T again.
+				 */
+				in_prefix = 0;
+				if (ev.key == 'x' || ev.key == 'X') {
+					quit = 1;
+				} else if (ev.key == 0x14) {
+					uint8_t k = 0x14;
+					(void)write(proc->in, &k, 1);
+				}
+				dirty = 1;
+			} else if (ev.key == 0x14) {
+				/* Ctrl-T -> enter one-byte prefix mode. */
+				in_prefix = 1;
+				dirty = 1;
 			} else if (ev.key == TK_PGUP || ev.key == TK_PGDN ||
 				   ev.key == TK_HOME || ev.key == TK_END ||
 				   ev.key == TK_UP || ev.key == TK_DOWN) {
@@ -739,13 +775,17 @@ static int run_tui(struct process *proc, const char *qemu_bin,
 	term_screen_leave();
 	term_raw_leave();
 
-	/* Ask qemu to terminate, then reap.  On POSIX this is plain
-	 * kill(2); on Windows the platform.h shim maps to TerminateProcess
-	 * via the pid_t-cast HANDLE that process_start stored. */
+	/* Ask qemu to terminate (no-op if it already exited), then reap.
+	 * On POSIX this is plain kill(2); on Windows the platform.h shim
+	 * maps to TerminateProcess via the pid_t-cast HANDLE that
+	 * process_start stored.  If we exited the loop because qemu died
+	 * on its own (quit still 0 -- exec failed, internal fault, ...),
+	 * surface its exit code so ice fails non-zero.  When the user
+	 * pressed Ctrl-T x (quit==1) we asked qemu to terminate, so the
+	 * SIGTERM-induced exit is wrapped as a clean 0. */
 	kill(proc->pid, SIGTERM);
 	int exit_code = process_finish(proc);
-	(void)exit_code;
-	return 0;
+	return quit ? 0 : exit_code;
 }
 
 /* ------------------------------------------------------------------ */
@@ -872,13 +912,13 @@ static void draw_status_bar(struct sbuf *out, const struct tui_rect *r,
  * user types in whichever pane has focus -- @c Ctrl-T is the prefix:
  *
  *   Ctrl-T Tab     Toggle focus.
- *   Ctrl-T x       Quit (alias for Ctrl-]).
+ *   Ctrl-T x       Quit.
  *   Ctrl-T Ctrl-T  Send a literal Ctrl-T to the focused pane.
  *
- * Ctrl-] is a panic-eject from any state.
+ * @c Ctrl-] is an undocumented panic eject kept as a fallback (matches
+ * @c{ice monitor} convention).
  */
-static int run_debug(struct process *qemu_proc, const struct qemu_chip *chip,
-		     const char *qemu_bin)
+static int run_debug(struct process *qemu_proc, const struct qemu_chip *chip)
 {
 	/* Same resolution rule as the qemu binary above: --gdb-bin >
 	 * installed under ice_home/tools/ > PATH.  Different package
@@ -1043,9 +1083,9 @@ static int run_debug(struct process *qemu_proc, const struct qemu_chip *chip,
 			char status_buf[256];
 
 			snprintf(status_buf, sizeof status_buf,
-				 "ice qemu --debug: %s + %s @ :%d  "
+				 "ice qemu --debug: %s @ :%d  "
 				 "\xe2\x80\xa2  %s",
-				 chip->name, qemu_bin, opt_gdb_port,
+				 chip->name, opt_gdb_port,
 				 in_prefix ? "[Ctrl-T] prefix" : "");
 			draw_status_bar(&frame, &status_r, status_buf,
 					"1;37;44");
@@ -1064,10 +1104,34 @@ static int run_debug(struct process *qemu_proc, const struct qemu_chip *chip,
 
 			char hint_buf[256];
 			snprintf(hint_buf, sizeof hint_buf,
-				 "Focus: [%s]   Ctrl-T Tab=switch   "
-				 "Ctrl-]=quit",
+				 "Focus: [%s]   Ctrl-T:  Tab=switch  "
+				 "x=quit",
 				 focus == 0 ? "gdb" : "UART");
 			draw_status_bar(&frame, &footer_r, hint_buf, "37;44");
+
+			/* Place the terminal cursor inside the focused pane.
+			 * tui_log_render did this for the last-rendered pane,
+			 * but the divider hrule and footer status bar emitted
+			 * after it left the cursor parked at the end of the
+			 * footer text -- so the user sees no cursor in gdb's
+			 * prompt.  Recompute from the focused pane's vt100
+			 * grid (body fills the grid 1:1, so rect.y / rect.x
+			 * + cursor_row / cursor_col is the screen cell). */
+			{
+				const struct dpane *fp =
+				    focus == 0 ? &gdb_p : &uart_p;
+				if (vt100_cursor_visible(fp->V)) {
+					int row = fp->rect.y +
+						  vt100_cursor_row(fp->V);
+					int col = fp->rect.x +
+						  vt100_cursor_col(fp->V);
+					sbuf_addf(&frame,
+						  "\x1b[%d;%dH\x1b[?25h", row,
+						  col);
+				} else {
+					sbuf_addstr(&frame, "\x1b[?25l");
+				}
+			}
 
 			tui_flush(&frame);
 		}
@@ -1087,7 +1151,7 @@ static int run_debug(struct process *qemu_proc, const struct qemu_chip *chip,
 	process_finish(&gdb_proc);
 
 	kill(qemu_proc->pid, SIGTERM);
-	process_finish(qemu_proc);
+	int qemu_exit = process_finish(qemu_proc);
 
 	tui_log_release(&gdb_p.L);
 	tui_log_release(&uart_p.L);
@@ -1095,7 +1159,9 @@ static int run_debug(struct process *qemu_proc, const struct qemu_chip *chip,
 	vt100_free(uart_p.V);
 	sbuf_release(&gdb_remote);
 	free(gdb_bin_owned);
-	return 0;
+	/* User-quit (Ctrl-] / Ctrl-T q): treat the SIGTERM-induced exit
+	 * as a clean 0.  Otherwise qemu died on its own -- propagate. */
+	return quit ? 0 : qemu_exit;
 }
 
 /* ------------------------------------------------------------------ */
@@ -1171,10 +1237,13 @@ int cmd_qemu(int argc, const char **argv)
 	}
 
 	/* ---- qemu binary ---- */
-	/* Resolution order: --qemu-bin > installed under ice_home/tools/ >
-	 * fall through to PATH (chip->qemu_prog).  The installed-tools
-	 * lookup matches the layout that ice tools install / esp-idf's
-	 * idf_tools.py both produce ("<version>/qemu/bin/<binary>"). */
+	/* Resolution order: --qemu-bin > installed under ice_home/tools/.
+	 * The installed-tools lookup matches the layout that ice tools
+	 * install / esp-idf's idf_tools.py both produce
+	 * ("<version>/qemu/bin/<binary>").  If the tool isn't installed
+	 * yet we run @b{ice tools install --tool <pkg>} against the
+	 * project's IDF manifest -- qemu is @c install:on_request, so a
+	 * fresh @b{ice init} never grabs it -- and re-resolve. */
 	char *qemu_bin_owned = NULL;
 	const char *qemu_bin = opt_qemu_bin;
 	if (!qemu_bin) {
@@ -1184,8 +1253,52 @@ int cmd_qemu(int argc, const char **argv)
 		struct sbuf sub = SBUF_INIT;
 		sbuf_addf(&sub, "qemu/bin/%s", chip->qemu_prog);
 		qemu_bin_owned = resolve_tool(pkg, sub.buf);
+
+		if (!qemu_bin_owned) {
+			const char *idf_path = config_get("_project.idf-path");
+			struct sbuf manifest = SBUF_INIT;
+			struct svec icmd = SVEC_INIT;
+			struct process iproc = PROCESS_INIT;
+			const char *exe = process_exe();
+			int irc;
+
+			if (!idf_path || !*idf_path)
+				die("ice qemu: no @b{_project.idf-path}; "
+				    "run @b{ice init} first");
+			sbuf_addf(&manifest, "%s/tools/tools.json", idf_path);
+			if (access(manifest.buf, F_OK) != 0)
+				die("ice qemu: cannot install qemu, "
+				    "'%s' not found",
+				    manifest.buf);
+
+			svec_push(&icmd, exe ? exe : "ice");
+			svec_push(&icmd, "tools");
+			svec_push(&icmd, "install");
+			svec_push(&icmd, "--tool");
+			svec_push(&icmd, pkg);
+			svec_push(&icmd, manifest.buf);
+			iproc.argv = icmd.v;
+
+			irc = process_run_progress(&iproc, "Installing qemu",
+						   "qemu-install", NULL);
+			svec_clear(&icmd);
+			sbuf_release(&manifest);
+			if (irc != 0) {
+				sbuf_release(&sub);
+				sbuf_release(&flash_path);
+				sbuf_release(&efuse_path);
+				return irc;
+			}
+
+			qemu_bin_owned = resolve_tool(pkg, sub.buf);
+			if (!qemu_bin_owned)
+				die("ice qemu: '%s' install completed but "
+				    "'%s' not found under "
+				    "@b{~/.ice/tools/%s/<version>/}",
+				    pkg, chip->qemu_prog, pkg);
+		}
 		sbuf_release(&sub);
-		qemu_bin = qemu_bin_owned ? qemu_bin_owned : chip->qemu_prog;
+		qemu_bin = qemu_bin_owned;
 	}
 
 	/* ---- build argv ---- */
@@ -1239,9 +1352,9 @@ int cmd_qemu(int argc, const char **argv)
 		if (!interactive)
 			die("ice qemu --debug requires an interactive "
 			    "terminal");
-		rc = run_debug(&proc, chip, qemu_bin);
+		rc = run_debug(&proc, chip);
 	} else if (interactive) {
-		rc = run_tui(&proc, qemu_bin, chip->name);
+		rc = run_tui(&proc, chip->name);
 	} else {
 		rc = run_dumb(&proc);
 	}

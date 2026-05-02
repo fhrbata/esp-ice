@@ -53,6 +53,14 @@ extern int pt_opt_boot_default;
 extern const char *pt_opt_primary_boot_offset;
 extern const char *pt_opt_recovery_boot_offset;
 extern struct svec pt_opt_extra_subtypes;
+/* Accepted for parttool.py compat: IDF cmake invokes parttool.py with
+ * @c -q to suppress its progress chatter.  We just record it -- ice's
+ * partition verbs don't currently print the "Reading partition table..."
+ * messages parttool.py muted, so there's nothing to gate.  Without this
+ * flag the @b{partition_table_get_partition_info} cmake helper sees
+ * @c{fatal: unknown option: -q}, captures empty output, and downstream
+ * @c{flasher_args.json} ends up with @c{"offset": ""} for the app. */
+extern int pt_opt_quiet;
 /* parttool.py forwards these to esptool; ice doesn't shell out to
  * esptool, so accepting them and silently dropping the configuration
  * would be a workaround.  Each handler calls pt_target_finalize_opts()
