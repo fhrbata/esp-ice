@@ -28,6 +28,7 @@
  */
 #include "ice.h"
 #include "json.h"
+#include "monitor.h"
 #include "platform.h"
 #include "sbuf.h"
 #include "term.h"
@@ -602,41 +603,6 @@ static int run_dumb(struct process *proc)
 /*  vt100 + tui_log loop                                              */
 /* ------------------------------------------------------------------ */
 
-/*
- * Per-line decorator: tints ESP-IDF level prefixes (E / W / I) so log
- * output is readable at a glance even before the firmware emits its own
- * ANSI.  Matches the colour palette in cmd/target/monitor/monitor.c so
- * users see the same look across "monitor" and "qemu".
- */
-static int decorate_idf_level(const char *line, size_t len, void *ctx,
-			      struct tui_overlay *out, int max)
-{
-	(void)ctx;
-	if (max < 1 || len < 2)
-		return 0;
-	const char *sgr = NULL;
-	switch (line[0]) {
-	case 'E':
-		sgr = "31";
-		break; /* red */
-	case 'W':
-		sgr = "33";
-		break; /* yellow */
-	case 'I':
-		sgr = "32";
-		break; /* green */
-	default:
-		return 0;
-	}
-	if (line[1] != ' ' || (line[2] != '(' && line[2] != '['))
-		return 0;
-	out[0].start = 0;
-	out[0].end = len;
-	out[0].sgr_open = sgr;
-	out[0].sgr_close = "0";
-	return 1;
-}
-
 static int run_tui(struct process *proc, const char *chip_name)
 {
 	int rc = term_raw_enter(0);
@@ -647,131 +613,81 @@ static int run_tui(struct process *proc, const char *chip_name)
 	int cols = 80, rows = 24;
 	term_size(&cols, &rows);
 
-	struct tui_log L;
-	tui_log_init(&L, opt_scrollback);
-	if (use_color)
-		tui_log_set_decorator(&L, decorate_idf_level, NULL);
-	tui_log_resize(&L, cols, rows);
-
-	struct sbuf status = SBUF_INIT;
-	sbuf_addf(&status, "ice qemu: %s", chip_name);
+	/* Compose the source label the @ref monitor_session shows in its
+	 * status bar.  qemu has no DTR/RTS, so the @c on_reset and
+	 * @c on_bootloader callbacks stay NULL -- the session treats
+	 * Ctrl-T+r and Ctrl-T+p as silent prefix-cancels. */
+	struct sbuf label = SBUF_INIT;
+	sbuf_addf(&label, "ice qemu: %s", chip_name);
 	if (opt_gdb)
-		sbuf_addf(&status, "  \xe2\x80\xa2  [GDB :%d, halted]",
+		sbuf_addf(&label, "  \xe2\x80\xa2  [GDB :%d, halted]",
 			  opt_gdb_port);
-	sbuf_addstr(&status, "  \xe2\x80\xa2  Ctrl-T:  x=exit");
-	tui_log_set_status(&L, status.buf);
 
-	/* Inner-terminal vt100: same scaling rule as cmd/target/monitor.
-	 * Body is cols-1 wide (scrollbar) by rows-1 tall (status). */
-	int inner_cols = cols > 1 ? cols - 1 : cols;
-	int inner_rows = rows > 1 ? rows - 1 : rows;
-	struct vt100 *V = vt100_new(inner_rows, inner_cols);
-	tui_log_set_grid(&L, V);
+	struct monitor_config cfg = {
+	    .scrollback = opt_scrollback,
+	    .origin_x = 1,
+	    .origin_y = 1,
+	    .width = cols,
+	    .height = rows,
+	    .source_label = label.buf,
+	};
+	struct monitor_session *m = monitor_new(&cfg);
+	sbuf_release(&label);
+	if (!m) {
+		term_screen_leave();
+		term_raw_leave();
+		die("monitor_new: out of memory");
+	}
 
 	{
 		struct sbuf frame = SBUF_INIT;
-		tui_log_render(&frame, &L);
+		monitor_render(&frame, m);
 		tui_flush(&frame);
+		sbuf_release(&frame);
+		monitor_clear_dirty(m);
 	}
 
-	int quit = 0;
-	int in_prefix = 0;
-	while (!quit) {
-		uint8_t buf[4096];
-		int dirty = 0;
-
+	while (!monitor_should_quit(m)) {
 		if (term_resize_pending()) {
 			term_size(&cols, &rows);
-			tui_log_resize(&L, cols, rows);
-			int new_inner_cols = cols > 1 ? cols - 1 : cols;
-			int new_inner_rows = rows > 1 ? rows - 1 : rows;
-			vt100_resize(V, new_inner_rows, new_inner_cols);
-			dirty = 1;
+			monitor_set_rect(m, 1, 1, cols, rows);
 		}
 
+		uint8_t buf[4096];
 		ssize_t n = pipe_read_timed(proc->out, buf, sizeof buf, 30);
 		if (n < 0) {
 			/* qemu exited / pipe closed -- leave the loop and
 			 * surface whatever exit code it had. */
 			break;
 		}
-		if (n > 0) {
-			vt100_input(V, buf, (size_t)n);
-			struct sbuf *r = vt100_reply(V);
-			if (r->len) {
-				/* DSR replies and the like need to go back
-				 * to the chip; reply payloads are tiny
-				 * (atomic under PIPE_BUF) so a single
-				 * write(2) is enough.  Ignore errors -- the
-				 * next iteration will see EOF on the read
-				 * side and bail. */
-				(void)write(proc->in, r->buf, r->len);
-				sbuf_reset(r);
-			}
-			if (!tui_log_is_frozen(&L))
-				tui_log_pull_from_vt100(&L, V);
-			dirty = 1;
-		}
+		if (n > 0)
+			monitor_feed_chip(m, buf, (size_t)n);
 
 		struct term_event ev;
 		int got = term_read_event(&ev, 0);
-		if (got > 0 && ev.key != TK_NONE) {
-			if (ev.key == TK_RESIZE) {
-				tui_log_resize(&L, ev.cols, ev.rows);
-				int ic = ev.cols > 1 ? ev.cols - 1 : ev.cols;
-				int ir = ev.rows > 1 ? ev.rows - 1 : ev.rows;
-				vt100_resize(V, ir, ic);
-				cols = ev.cols;
-				rows = ev.rows;
-				dirty = 1;
-			} else if (ev.key == 0x1d) {
-				/* Ctrl-]: undocumented panic eject, kept as
-				 * a fallback the way @b{ice monitor} does. */
-				quit = 1;
-			} else if (in_prefix) {
-				/* One byte after Ctrl-T.  @c x exits, a second
-				 * Ctrl-T forwards a literal Ctrl-T to the chip,
-				 * anything else cancels the prefix silently --
-				 * mistakes are cheap, just press Ctrl-T again.
-				 */
-				in_prefix = 0;
-				if (ev.key == 'x' || ev.key == 'X') {
-					quit = 1;
-				} else if (ev.key == 0x14) {
-					uint8_t k = 0x14;
-					(void)write(proc->in, &k, 1);
-				}
-				dirty = 1;
-			} else if (ev.key == 0x14) {
-				/* Ctrl-T -> enter one-byte prefix mode. */
-				in_prefix = 1;
-				dirty = 1;
-			} else if (ev.key == TK_PGUP || ev.key == TK_PGDN ||
-				   ev.key == TK_HOME || ev.key == TK_END ||
-				   ev.key == TK_UP || ev.key == TK_DOWN) {
-				if (tui_log_on_event(&L, &ev))
-					dirty = 1;
-			} else if (ev.key < 0x100) {
-				/* Plain printable / C0 control: forward to
-				 * qemu's UART RX.  Single-byte writes to a
-				 * pipe are always atomic. */
-				uint8_t k = (uint8_t)ev.key;
-				if (write(proc->in, &k, 1) < 0) {
-					quit = 1;
-				}
-			}
+		if (got > 0 && ev.key != TK_NONE)
+			monitor_feed_event(m, &ev);
+
+		struct sbuf *tx = monitor_chip_tx(m);
+		if (tx->len) {
+			/* qemu's stdin is a pipe; payloads are atomic under
+			 * PIPE_BUF.  Errors mean the child is gone -- next
+			 * read iteration will see EOF and bail. */
+			(void)write(proc->in, tx->buf, tx->len);
+			sbuf_reset(tx);
 		}
 
-		if (dirty) {
+		if (monitor_dirty(m)) {
 			struct sbuf frame = SBUF_INIT;
-			tui_log_render(&frame, &L);
+			monitor_render(&frame, m);
 			tui_flush(&frame);
+			sbuf_release(&frame);
+			monitor_clear_dirty(m);
 		}
 	}
 
-	tui_log_release(&L);
-	vt100_free(V);
-	sbuf_release(&status);
+	int quit = monitor_should_quit(m);
+	monitor_release(m);
 	term_screen_leave();
 	term_raw_leave();
 
@@ -807,13 +723,14 @@ struct dpane {
  * Lay out the screen for the dual-pane debug view.  Top row is the
  * status bar; bottom row is the key-binding hint; the body is split
  * evenly between gdb (top half) and UART (bottom half) with a
- * one-row divider in between.  Stores the rects on the @ref dpane
- * structs and resizes their tui_log + vt100 accordingly.  Returns
- * the divider's row and the body width via out-params for the
- * caller's manual chrome paint.
+ * one-row divider in between.  Sizes the gdb pane's tui_log + vt100
+ * directly (gdb is rendered in-house through the @ref dpane struct);
+ * for the UART pane, returns the rect via @p uart_r so the caller
+ * can hand it to @ref monitor_set_rect on the embedded
+ * @ref monitor_session.
  */
 static void debug_layout(int rows, int cols, struct dpane *gdb_p,
-			 struct dpane *uart_p, struct tui_rect *status_r,
+			 struct tui_rect *uart_r, struct tui_rect *status_r,
 			 struct tui_rect *divider_r, struct tui_rect *footer_r)
 {
 	struct tui_rect screen = {.x = 1, .y = 1, .w = cols, .h = rows};
@@ -827,24 +744,17 @@ static void debug_layout(int rows, int cols, struct dpane *gdb_p,
 	/* split the body evenly with a 1-row divider in between */
 	int gdb_h = rest1.h / 2;
 	tui_rect_split_h(&rest1, &gdb_p->rect, &body, gdb_h);
-	tui_rect_split_h(&body, divider_r, &uart_p->rect, 1);
+	tui_rect_split_h(&body, divider_r, uart_r, 1);
 
-	/* Apply the rects to the log widgets and resize the vt100 grids
-	 * so the chip / gdb get a faithful column count.  The grid is
-	 * one column narrower than the pane to leave room for the
-	 * scrollbar tui_log_render reserves on the right edge. */
+	/* Apply the gdb rect to its log widget and resize the vt100 grid
+	 * so gdb gets a faithful column count.  The grid is one column
+	 * narrower than the pane to leave room for the scrollbar
+	 * tui_log_render reserves on the right edge. */
 	tui_log_set_origin(&gdb_p->L, gdb_p->rect.x, gdb_p->rect.y);
 	tui_log_resize(&gdb_p->L, gdb_p->rect.w, gdb_p->rect.h);
 	int gdb_inner_w = gdb_p->rect.w > 1 ? gdb_p->rect.w - 1 : gdb_p->rect.w;
 	int gdb_inner_h = gdb_p->rect.h > 0 ? gdb_p->rect.h : 1;
 	vt100_resize(gdb_p->V, gdb_inner_h, gdb_inner_w);
-
-	tui_log_set_origin(&uart_p->L, uart_p->rect.x, uart_p->rect.y);
-	tui_log_resize(&uart_p->L, uart_p->rect.w, uart_p->rect.h);
-	int uart_inner_w =
-	    uart_p->rect.w > 1 ? uart_p->rect.w - 1 : uart_p->rect.w;
-	int uart_inner_h = uart_p->rect.h > 0 ? uart_p->rect.h : 1;
-	vt100_resize(uart_p->V, uart_inner_h, uart_inner_w);
 }
 
 /*
@@ -950,22 +860,45 @@ static int run_debug(struct process *qemu_proc, const struct qemu_chip *chip)
 	int cols = 80, rows = 24;
 	term_size(&cols, &rows);
 
-	/* Per-pane scrollback + vt100 grid.  Set origin to (1,1)
-	 * temporarily; debug_layout overwrites it once we've sized the
-	 * rectangles. */
-	struct dpane gdb_p = {0}, uart_p = {0};
+	/* gdb pane: in-house dpane (vt100 + tui_log), rendered the way
+	 * we always have.  No level decoration -- gdb produces its own
+	 * ANSI for prompts and command output.  Origin is overwritten by
+	 * debug_layout below once we've split the screen. */
+	struct dpane gdb_p = {0};
 	gdb_p.V = vt100_new(24, 80);
-	uart_p.V = vt100_new(24, 80);
 	tui_log_init(&gdb_p.L, opt_scrollback);
-	tui_log_init(&uart_p.L, opt_scrollback);
-	if (use_color)
-		tui_log_set_decorator(&uart_p.L, decorate_idf_level, NULL);
 	tui_log_set_grid(&gdb_p.L, gdb_p.V);
-	tui_log_set_grid(&uart_p.L, uart_p.V);
 
-	struct tui_rect status_r, divider_r, footer_r;
-	debug_layout(rows, cols, &gdb_p, &uart_p, &status_r, &divider_r,
+	struct tui_rect uart_r, status_r, divider_r, footer_r;
+	debug_layout(rows, cols, &gdb_p, &uart_r, &status_r, &divider_r,
 		     &footer_r);
+
+	/* UART pane: a @ref monitor_session sized to its slice of the
+	 * screen.  Same widget @c{ice target monitor} drives standalone,
+	 * embedded -- so PgUp/PgDn navigation, Ctrl-T+i inspect mode,
+	 * regex search, level coloring all work the same way here.
+	 * Reset / bootloader callbacks stay NULL because qemu has no
+	 * DTR/RTS to twiddle.  source_label on its own (no extra prefix)
+	 * gives a clean per-pane status bar inside the pane. */
+	struct sbuf uart_label = SBUF_INIT;
+	sbuf_addf(&uart_label, "ice qemu: %s", chip->name);
+	struct monitor_config mcfg = {
+	    .scrollback = opt_scrollback,
+	    .origin_x = uart_r.x,
+	    .origin_y = uart_r.y,
+	    .width = uart_r.w,
+	    .height = uart_r.h,
+	    .source_label = uart_label.buf,
+	};
+	struct monitor_session *uart_m = monitor_new(&mcfg);
+	sbuf_release(&uart_label);
+	if (!uart_m) {
+		term_screen_leave();
+		term_raw_leave();
+		tui_log_release(&gdb_p.L);
+		vt100_free(gdb_p.V);
+		die("monitor_new: out of memory");
+	}
 
 	/* Spawn gdb in a pty pre-loaded with target remote :3333 + ELF.
 	 * The pty is sized to the gdb pane so readline wrapping matches
@@ -995,10 +928,9 @@ static int run_debug(struct process *qemu_proc, const struct qemu_chip *chip)
 			"  Pass --gdb-bin or add the chip's gdb to PATH.\n",
 			gdb_bin);
 		sbuf_release(&gdb_remote);
+		monitor_release(uart_m);
 		tui_log_release(&gdb_p.L);
-		tui_log_release(&uart_p.L);
 		vt100_free(gdb_p.V);
-		vt100_free(uart_p.V);
 		free(gdb_bin_owned);
 		return 1;
 	}
@@ -1012,9 +944,11 @@ static int run_debug(struct process *qemu_proc, const struct qemu_chip *chip)
 
 		if (term_resize_pending()) {
 			term_size(&cols, &rows);
-			debug_layout(rows, cols, &gdb_p, &uart_p, &status_r,
+			debug_layout(rows, cols, &gdb_p, &uart_r, &status_r,
 				     &divider_r, &footer_r);
 			pty_resize(&gdb_proc, gdb_p.rect.h, gdb_p.rect.w);
+			monitor_set_rect(uart_m, uart_r.x, uart_r.y, uart_r.w,
+					 uart_r.h);
 			dirty = 1;
 		}
 
@@ -1030,14 +964,34 @@ static int run_debug(struct process *qemu_proc, const struct qemu_chip *chip)
 		if (rg > 0)
 			dirty = 1;
 
-		int ru = pump_byte_source(qemu_proc->out, qemu_proc->in,
-					  uart_p.V, &uart_p.L, 0);
-		if (ru < 0) {
-			/* qemu died; same logic. */
+		/* UART pane: feed bytes from qemu's pipe into the embedded
+		 * monitor session and drain its chip-TX queue back to qemu.
+		 * Non-blocking read -- gdb's pump above already paid the
+		 * timeout cost for the loop iteration. */
+		uint8_t ubuf[4096];
+		ssize_t un =
+		    pipe_read_timed(qemu_proc->out, ubuf, sizeof ubuf, 0);
+		if (un < 0) {
+			/* qemu died -- same logic as gdb above. */
 			break;
 		}
-		if (ru > 0)
+		if (un > 0) {
+			monitor_feed_chip(uart_m, ubuf, (size_t)un);
+		}
+		struct sbuf *utx = monitor_chip_tx(uart_m);
+		if (utx->len) {
+			(void)write(qemu_proc->in, utx->buf, utx->len);
+			sbuf_reset(utx);
+		}
+		if (monitor_dirty(uart_m))
 			dirty = 1;
+		if (monitor_should_quit(uart_m)) {
+			/* User pressed Ctrl-T+x inside the UART pane (only
+			 * possible after Ctrl-T Ctrl-T to bypass the outer
+			 * prefix).  Treat as a clean quit. */
+			quit = 1;
+			break;
+		}
 
 		struct term_event ev;
 		int got = term_read_event(&ev, 0);
@@ -1045,10 +999,12 @@ static int run_debug(struct process *qemu_proc, const struct qemu_chip *chip)
 			if (ev.key == TK_RESIZE) {
 				cols = ev.cols;
 				rows = ev.rows;
-				debug_layout(rows, cols, &gdb_p, &uart_p,
+				debug_layout(rows, cols, &gdb_p, &uart_r,
 					     &status_r, &divider_r, &footer_r);
 				pty_resize(&gdb_proc, gdb_p.rect.h,
 					   gdb_p.rect.w);
+				monitor_set_rect(uart_m, uart_r.x, uart_r.y,
+						 uart_r.w, uart_r.h);
 				dirty = 1;
 			} else if (ev.key == 0x1d) { /* Ctrl-] panic */
 				quit = 1;
@@ -1060,21 +1016,30 @@ static int run_debug(struct process *qemu_proc, const struct qemu_chip *chip)
 					quit = 1;
 				} else if (ev.key == 0x14) {
 					/* Ctrl-T Ctrl-T: literal Ctrl-T to
-					 * the focused child. */
-					uint8_t k = 0x14;
-					int wfd = focus == 0 ? gdb_proc.in
-							     : qemu_proc->in;
-					(void)write(wfd, &k, 1);
+					 * the focused child.  For the UART
+					 * side that's a feed_event so the
+					 * session sees it as its own prefix
+					 * entry; gdb gets the raw byte over
+					 * its pty. */
+					if (focus == 0) {
+						uint8_t k = 0x14;
+						(void)write(gdb_proc.in, &k, 1);
+					} else {
+						struct term_event ctrl_t = {
+						    .key = 0x14};
+						monitor_feed_event(uart_m,
+								   &ctrl_t);
+					}
 				}
 				dirty = 1;
 			} else if (ev.key == 0x14) { /* Ctrl-T -> prefix */
 				in_prefix = 1;
 				dirty = 1;
-			} else if (ev.key < 0x100) {
+			} else if (focus == 0 && ev.key < 0x100) {
 				uint8_t k = (uint8_t)ev.key;
-				int wfd =
-				    focus == 0 ? gdb_proc.in : qemu_proc->in;
-				(void)write(wfd, &k, 1);
+				(void)write(gdb_proc.in, &k, 1);
+			} else if (focus == 1) {
+				monitor_feed_event(uart_m, &ev);
 			}
 		}
 
@@ -1091,14 +1056,18 @@ static int run_debug(struct process *qemu_proc, const struct qemu_chip *chip)
 					"1;37;44");
 
 			/* Render unfocused pane first so the focused one's
-			 * cursor placement wins at the end of the frame. */
+			 * cursor placement wins at the end of the frame.
+			 * UART pane is a monitor_session; it draws its own
+			 * status bar at the top of its rect, which slots
+			 * naturally below the outer status row. */
 			if (focus == 0) {
-				tui_log_render(&frame, &uart_p.L);
+				monitor_render(&frame, uart_m);
 				tui_log_render(&frame, &gdb_p.L);
 			} else {
 				tui_log_render(&frame, &gdb_p.L);
-				tui_log_render(&frame, &uart_p.L);
+				monitor_render(&frame, uart_m);
 			}
+			monitor_clear_dirty(uart_m);
 			draw_hrule(&frame, divider_r.y, divider_r.x,
 				   divider_r.w);
 
@@ -1110,21 +1079,27 @@ static int run_debug(struct process *qemu_proc, const struct qemu_chip *chip)
 			draw_status_bar(&frame, &footer_r, hint_buf, "37;44");
 
 			/* Place the terminal cursor inside the focused pane.
-			 * tui_log_render did this for the last-rendered pane,
-			 * but the divider hrule and footer status bar emitted
-			 * after it left the cursor parked at the end of the
-			 * footer text -- so the user sees no cursor in gdb's
-			 * prompt.  Recompute from the focused pane's vt100
-			 * grid (body fills the grid 1:1, so rect.y / rect.x
-			 * + cursor_row / cursor_col is the screen cell). */
-			{
-				const struct dpane *fp =
-				    focus == 0 ? &gdb_p : &uart_p;
-				if (vt100_cursor_visible(fp->V)) {
-					int row = fp->rect.y +
-						  vt100_cursor_row(fp->V);
-					int col = fp->rect.x +
-						  vt100_cursor_col(fp->V);
+			 * Each pane's render emits its own cursor positioning,
+			 * but the divider hrule and footer status bar drawn
+			 * after them advance the terminal cursor to the end
+			 * of the footer text -- so the user sees no cursor
+			 * in gdb's prompt or the UART prompt.  Recompute and
+			 * re-emit. */
+			if (focus == 0) {
+				if (vt100_cursor_visible(gdb_p.V)) {
+					int row = gdb_p.rect.y +
+						  vt100_cursor_row(gdb_p.V);
+					int col = gdb_p.rect.x +
+						  vt100_cursor_col(gdb_p.V);
+					sbuf_addf(&frame,
+						  "\x1b[%d;%dH\x1b[?25h", row,
+						  col);
+				} else {
+					sbuf_addstr(&frame, "\x1b[?25l");
+				}
+			} else {
+				int row, col;
+				if (monitor_cursor(uart_m, &row, &col)) {
 					sbuf_addf(&frame,
 						  "\x1b[%d;%dH\x1b[?25h", row,
 						  col);
@@ -1153,10 +1128,9 @@ static int run_debug(struct process *qemu_proc, const struct qemu_chip *chip)
 	kill(qemu_proc->pid, SIGTERM);
 	int qemu_exit = process_finish(qemu_proc);
 
+	monitor_release(uart_m);
 	tui_log_release(&gdb_p.L);
-	tui_log_release(&uart_p.L);
 	vt100_free(gdb_p.V);
-	vt100_free(uart_p.V);
 	sbuf_release(&gdb_remote);
 	free(gdb_bin_owned);
 	/* User-quit (Ctrl-] / Ctrl-T q): treat the SIGTERM-induced exit
