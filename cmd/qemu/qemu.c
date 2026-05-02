@@ -386,9 +386,22 @@ static int build_flash_image(const char *out_path, size_t flash_size)
 		char *end;
 		errno = 0;
 		unsigned long off = strtoul(off_str, &end, 0);
-		if (errno != 0 || *end != '\0') {
-			fprintf(stderr, "ice qemu: bad offset '%s' in '%s'\n",
-				off_str, entry);
+		/* Reject empty offset explicitly: strtoul("") returns 0 with
+		 * errno==0 and *end=='\0', so the parser thinks it's a valid
+		 * 0 and we'd cheerfully drop the app at offset 0, clobbering
+		 * the bootloader.  An empty offset means @c flasher_args.json
+		 * was generated without a partition-table lookup -- usually
+		 * because the parttool.py compat call into ice failed -- and
+		 * we'd rather fail loudly than write a corrupted flash. */
+		if (off_len == 0 || end == off_str || errno != 0 ||
+		    *end != '\0') {
+			fprintf(
+			    stderr,
+			    "ice qemu: %s offset in '%s'\n"
+			    "  flasher_args.json may be missing the app "
+			    "partition offset.  Re-run 'ice build' after "
+			    "making sure the partition table parses cleanly.\n",
+			    off_len == 0 ? "missing" : "bad", entry);
 			free(off_str);
 			rc = -1;
 			goto out;
