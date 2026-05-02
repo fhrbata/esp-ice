@@ -15,8 +15,13 @@
  */
 /* Pull in X/Open extensions (posix_openpt, grantpt, ptsname) which the
  * build's @c -D_POSIX_C_SOURCE=200112L doesn't fully expose under
- * glibc.  Must be set before any system header is included. */
+ * glibc.  Must be set before any system header is included.  The
+ * leading-underscore name is reserved for the implementation in
+ * general but is the canonical feature-test macro spelling here, so
+ * silence clang-tidy's bugprone-reserved-identifier check on this
+ * specific line. */
 #ifndef _XOPEN_SOURCE
+/* NOLINTNEXTLINE(bugprone-reserved-identifier) */
 #define _XOPEN_SOURCE 600
 #endif
 
@@ -86,12 +91,13 @@ static int pty_open_master(char *slave_path, size_t slave_len)
 		close(master);
 		return -1;
 	}
-	if (strlen(name) >= slave_len) {
+	size_t name_len = strlen(name);
+	if (name_len >= slave_len) {
 		close(master);
 		errno = ENAMETOOLONG;
 		return -1;
 	}
-	strcpy(slave_path, name);
+	memcpy(slave_path, name, name_len + 1);
 	return master;
 }
 

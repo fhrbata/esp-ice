@@ -317,7 +317,7 @@ static size_t read_flash_size(const char *build_dir)
 {
 	struct sbuf path = SBUF_INIT;
 	struct sbuf buf = SBUF_INIT;
-	size_t result = 4u * 1024u * 1024u;
+	size_t result = (size_t)4 * 1024 * 1024;
 
 	sbuf_addf(&path, "%s/flasher_args.json", build_dir);
 	if (sbuf_read_file(&buf, path.buf) < 0)
@@ -677,7 +677,6 @@ static int run_tui(struct process *proc, const char *qemu_bin,
 		if (n < 0) {
 			/* qemu exited / pipe closed -- leave the loop and
 			 * surface whatever exit code it had. */
-			quit = 1;
 			break;
 		}
 		if (n > 0) {
@@ -986,7 +985,6 @@ static int run_debug(struct process *qemu_proc, const struct qemu_chip *chip,
 		if (rg < 0) {
 			/* gdb exited; we can keep showing UART but the user
 			 * probably wants out. */
-			quit = 1;
 			break;
 		}
 		if (rg > 0)
@@ -996,7 +994,6 @@ static int run_debug(struct process *qemu_proc, const struct qemu_chip *chip,
 					  uart_p.V, &uart_p.L, 0);
 		if (ru < 0) {
 			/* qemu died; same logic. */
-			quit = 1;
 			break;
 		}
 		if (ru > 0)
