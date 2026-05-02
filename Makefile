@@ -145,6 +145,8 @@ LIB_SRCS := \
 	cmd/idf/component/prepare/prepare.c \
 	cmd/idf/component/inject/inject.c \
 	cmd/idf/configdep/configdep.c \
+	cmd/idf/coredump/coredump.c \
+	cmd/idf/coredump/loader.c \
 	cmd/idf/crt-bundle/crt-bundle.c \
 	cmd/idf/hints/hints.c \
 	cmd/idf/kconfgen/kc_confread.c \
