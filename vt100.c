@@ -129,6 +129,16 @@ struct vt100 {
 	struct vt100_scrolled_row *scrolled;
 	int scrolled_count;
 	int scrolled_alloc;
+
+	/* UTF-8 decoder state.  Single-cell semantics: continuation bytes
+	 * accumulate into @c utf8_cp and only emit when the full sequence
+	 * is in.  Without this, a 3-byte char like @c{│} (E2 94 82) would
+	 * land in three cells, advance the cursor three columns, and wrap
+	 * any tail bytes into the next row -- catastrophic when an
+	 * embedded program (monitor's tui_log scrollbar, box-drawing
+	 * chrome, ...) places a multi-byte char near the right edge. */
+	uint32_t utf8_cp;
+	int utf8_remaining;
 };
 
 /* ------------------------------------------------------------------ */
@@ -394,7 +404,7 @@ static void cursor_advance_row(struct vt100 *V)
 /*  putc + C0                                                         */
 /* ------------------------------------------------------------------ */
 
-static void put_printable(struct vt100 *V, unsigned char c)
+static void put_printable(struct vt100 *V, uint32_t cp)
 {
 	if (V->pending_wrap) {
 		if (V->autowrap) {
@@ -406,7 +416,7 @@ static void put_printable(struct vt100 *V, unsigned char c)
 
 	struct vt100_cell *cell = cell_at(V, V->cur_row, V->cur_col);
 
-	cell->cp = c;
+	cell->cp = cp;
 	cell->sgr = V->sgr;
 
 	if (V->cur_col + 1 < V->cols)
@@ -415,6 +425,52 @@ static void put_printable(struct vt100 *V, unsigned char c)
 		V->pending_wrap = 1;
 
 	V->counters.printable++;
+}
+
+/*
+ * Feed one byte to the UTF-8 decoder.  Single-cell emission: leading
+ * bytes start a fresh codepoint, continuation bytes append, and only
+ * when the full sequence has been gathered do we hand the codepoint
+ * to @ref put_printable.  Malformed sequences (an unexpected
+ * continuation byte without a leader, or a leader interrupted by
+ * something other than continuation bytes) emit U+FFFD so the cell
+ * count stays consistent with what the producer drew.
+ */
+static void put_utf8_byte(struct vt100 *V, unsigned char c)
+{
+	if (c < 0x80) {
+		if (V->utf8_remaining)
+			put_printable(V, 0xFFFD); /* truncated leader */
+		V->utf8_remaining = 0;
+		put_printable(V, c);
+		return;
+	}
+	if ((c & 0xC0) == 0x80) {
+		if (V->utf8_remaining == 0) {
+			put_printable(V, 0xFFFD); /* stray continuation */
+			return;
+		}
+		V->utf8_cp = (V->utf8_cp << 6) | (c & 0x3F);
+		V->utf8_remaining--;
+		if (V->utf8_remaining == 0)
+			put_printable(V, V->utf8_cp);
+		return;
+	}
+	if (V->utf8_remaining)
+		put_printable(V, 0xFFFD); /* leader interrupted by leader */
+	if ((c & 0xE0) == 0xC0) {
+		V->utf8_cp = c & 0x1F;
+		V->utf8_remaining = 1;
+	} else if ((c & 0xF0) == 0xE0) {
+		V->utf8_cp = c & 0x0F;
+		V->utf8_remaining = 2;
+	} else if ((c & 0xF8) == 0xF0) {
+		V->utf8_cp = c & 0x07;
+		V->utf8_remaining = 3;
+	} else {
+		V->utf8_remaining = 0;
+		put_printable(V, 0xFFFD);
+	}
 }
 
 static void c0_execute(struct vt100 *V, unsigned char c)
@@ -802,6 +858,17 @@ static void csi_dispatch(struct vt100 *V, unsigned char final)
 		V->pending_wrap = 0;
 		break;
 	}
+	case 'X': { /* ECH -- erase characters (no cursor move) */
+		int n = csi_param_or(V, 0, 1);
+		int avail = V->cols - V->cur_col;
+
+		if (n > avail)
+			n = avail;
+		if (n > 0)
+			cells_erase(V, V->cur_row, V->cur_col, V->cur_row,
+				    V->cur_col + n - 1);
+		break;
+	}
 	default:
 		/* Other final bytes silently consumed; phase 4+ extends. */
 		break;
@@ -868,10 +935,18 @@ void vt100_input(struct vt100 *V, const void *buf, size_t n)
 		 */
 		if (!is_string_state(V->state)) {
 			if (c == 0x18 || c == 0x1A) {
+				if (V->utf8_remaining) {
+					put_printable(V, 0xFFFD);
+					V->utf8_remaining = 0;
+				}
 				V->state = VT100_GROUND;
 				continue;
 			}
 			if (c == 0x1B) {
+				if (V->utf8_remaining) {
+					put_printable(V, 0xFFFD);
+					V->utf8_remaining = 0;
+				}
 				V->state = VT100_ESCAPE;
 				continue;
 			}
@@ -881,10 +956,15 @@ void vt100_input(struct vt100 *V, const void *buf, size_t n)
 		case VT100_GROUND:
 			if (c == 0x7F)
 				break;
-			if (c < 0x20)
+			if (c < 0x20) {
+				if (V->utf8_remaining) {
+					put_printable(V, 0xFFFD);
+					V->utf8_remaining = 0;
+				}
 				c0_execute(V, c);
-			else
-				put_printable(V, c);
+			} else {
+				put_utf8_byte(V, c);
+			}
 			break;
 
 		case VT100_ESCAPE:
@@ -1233,10 +1313,30 @@ void vt100_serialize_row(struct sbuf *out, const struct vt100_cell *cells,
 		}
 		uint32_t cp = cells[c].cp ? cells[c].cp : (uint32_t)' ';
 
-		if (cp < 0x80)
+		/* Encode the cell's codepoint back to UTF-8.  Single-cell
+		 * semantics: input bytes for a multi-byte char were folded
+		 * into one cp by @ref put_utf8_byte, so each cell becomes
+		 * exactly one Unicode character on output.  Without this
+		 * (and without the input-side decoder), box-drawing chrome
+		 * the producer placed at the right edge would scramble
+		 * everything below it. */
+		if (cp < 0x80) {
 			sbuf_addch(out, (int)cp);
-		else
+		} else if (cp < 0x800) {
+			sbuf_addch(out, (int)(0xC0 | (cp >> 6)));
+			sbuf_addch(out, (int)(0x80 | (cp & 0x3F)));
+		} else if (cp < 0x10000) {
+			sbuf_addch(out, (int)(0xE0 | (cp >> 12)));
+			sbuf_addch(out, (int)(0x80 | ((cp >> 6) & 0x3F)));
+			sbuf_addch(out, (int)(0x80 | (cp & 0x3F)));
+		} else if (cp < 0x110000) {
+			sbuf_addch(out, (int)(0xF0 | (cp >> 18)));
+			sbuf_addch(out, (int)(0x80 | ((cp >> 12) & 0x3F)));
+			sbuf_addch(out, (int)(0x80 | ((cp >> 6) & 0x3F)));
+			sbuf_addch(out, (int)(0x80 | (cp & 0x3F)));
+		} else {
 			sbuf_addch(out, '?');
+		}
 	}
 	if (dirty)
 		sbuf_addstr(out, "\x1b[0m");
