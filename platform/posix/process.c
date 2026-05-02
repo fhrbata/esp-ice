@@ -171,10 +171,21 @@ int process_start(struct process *proc)
 			 * tripping -Werror=overflow at the implicit
 			 * unsigned long → int conversion. */
 			ioctl(slave, (int)TIOCSCTTY, 0);
-			/* Window size is already set on the master in the
-			 * parent path above and inherited via the kernel-
-			 * level pty pairing -- works on both Linux and
-			 * macOS. */
+			/* Set the window size on the slave too.  Linux honours
+			 * the master-side TIOCSWINSZ done in the parent, but
+			 * macOS BSD ptys reset the slave's struct winsize at
+			 * open() time -- doing it here, after open, is the
+			 * only way the child sees the size we asked for.
+			 * Belt and suspenders: both calls together work on
+			 * both platforms. */
+			if (proc->pty_rows > 0 && proc->pty_cols > 0) {
+				struct winsize ws;
+
+				memset(&ws, 0, sizeof ws);
+				ws.ws_row = (unsigned short)proc->pty_rows;
+				ws.ws_col = (unsigned short)proc->pty_cols;
+				ioctl(slave, (int)TIOCSWINSZ, &ws);
+			}
 			dup2(slave, STDIN_FILENO);
 			dup2(slave, STDOUT_FILENO);
 			dup2(slave, STDERR_FILENO);
