@@ -111,10 +111,17 @@ int main(void)
 		ssize_t got = drain_for(proc.out, buf, sizeof buf - 1, 2000);
 		buf[got > 0 ? got : 0] = '\0';
 
-		/* Echo what stty actually printed as a TAP diagnostic so a
-		 * platform-specific failure (different format, error
-		 * message, EOF before output) is debuggable from the CI
-		 * log without having to rerun. */
+		/* Echo what stty actually printed as a TAP diagnostic AND
+		 * dump the raw bytes to a file in the test's scratch
+		 * directory ("./stty_size_output") so the bytes survive in
+		 * the CI artifact even when prove suppresses TAP comments
+		 * for failing tests. */
+		FILE *dump = fopen("stty_size_output", "wb");
+		if (dump) {
+			if (got > 0)
+				fwrite(buf, 1, (size_t)got, dump);
+			fclose(dump);
+		}
 		printf("# stty size in pty returned (%zd bytes): ",
 		       got > 0 ? got : 0);
 		for (ssize_t i = 0; i < (got > 0 ? got : 0); i++) {
