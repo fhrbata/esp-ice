@@ -119,6 +119,7 @@ PKG_NAME := $(NAME)-$(VERSION)-$(S)-$(ARCH)$(PKG_SUFFIX)
 # (today: ar.c, elf.c, http.c have no live callers from main()).
 LIB_SRCS := \
 	ar.c \
+	base64.c \
 	ca_certs.c \
 	cmake.c \
 	cmakecache.c \
