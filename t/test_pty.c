@@ -107,9 +107,24 @@ int main(void)
 
 		tap_check(process_start(&proc) == 0);
 
-		char buf[64] = {0};
-		ssize_t got = drain_for(proc.out, buf, sizeof buf - 1, 1000);
+		char buf[256] = {0};
+		ssize_t got = drain_for(proc.out, buf, sizeof buf - 1, 2000);
 		buf[got > 0 ? got : 0] = '\0';
+
+		/* Echo what stty actually printed as a TAP diagnostic so a
+		 * platform-specific failure (different format, error
+		 * message, EOF before output) is debuggable from the CI
+		 * log without having to rerun. */
+		printf("# stty size in pty returned (%zd bytes): ",
+		       got > 0 ? got : 0);
+		for (ssize_t i = 0; i < (got > 0 ? got : 0); i++) {
+			unsigned char c = (unsigned char)buf[i];
+			if (c >= 0x20 && c < 0x7f)
+				printf("%c", c);
+			else
+				printf("\\x%02x", c);
+		}
+		printf("\n");
 
 		/* "stty size" prints "<rows> <cols>" -- be tolerant of
 		 * trailing CRLF / extra whitespace by checking for substrings.
