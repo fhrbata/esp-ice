@@ -94,9 +94,10 @@ static const struct cmd_manual idf_coredump_manual = {
 	       "@b{thread apply all bt}.  GDB is resolved from PATH "
 	       "(the @b{xtensa-esp32-elf-gdb} or @b{riscv32-esp-elf-gdb} "
 	       "binary, depending on the chip); pass @b{--gdb PATH} to "
-	       "override.  Running GDB requires @b{--save-core} so the "
-	       "core file has a stable on-disk path -- a temp-file "
-	       "helper lands in a follow-up."),
+	       "override.  When @b{--save-core} is also set, GDB reads "
+	       "from that path; otherwise the core ELF goes to a temp "
+	       "file in @b{$TMPDIR} (POSIX) / @b{GetTempPath()} "
+	       "(Windows) for the duration of the GDB run."),
 
 	.examples =
 	H_EXAMPLE("ice idf coredump --core dump.b64")
@@ -425,12 +426,6 @@ int cmd_idf_coredump(int argc, const char **argv)
 	if (!opt_core || !*opt_core)
 		die("--core <path> is required");
 
-	if (prog && !opt_save_core)
-		die("running gdb on @b{<prog>} requires "
-		    "@b{--save-core <path>} (the GDB-loadable ELF must "
-		    "have a stable on-disk path; temp-file support "
-		    "lands in a follow-up)");
-
 	if (sbuf_read_file(&input, opt_core) < 0)
 		die_errno("cannot read '%s'", opt_core);
 
@@ -484,65 +479,113 @@ int cmd_idf_coredump(int argc, const char **argv)
 		}
 	}
 
-	if (opt_save_core) {
-		const void *core_data = NULL;
-		size_t core_len = 0;
+	/*
+	 * Compute @c core_data / @c core_len once: the bytes that will
+	 * land in the GDB-loadable ELF, regardless of whether they go
+	 * to @c --save-core, to a temp file for @c run_gdb, or both.
+	 */
+	const void *core_data = NULL;
+	size_t core_len = 0;
+	int have_core = 0;
 
+	if (opt_save_core || prog) {
 		if (fmt == CORE_FMT_ELF) {
-			/* Input was already an ELF; pass through. */
 			core_data = out_data;
 			core_len = out_len;
+			have_core = 1;
 		} else if (have_header &&
 			   core_dump_ver_is_elf(CORE_DUMP_VER(&h))) {
-			/*
-			 * ELF_* dump: the bytes between header and the
-			 * trailing checksum are the embedded ELF core file.
-			 */
 			core_data = (const uint8_t *)out_data + h.header_size;
 			core_len = out_len - h.header_size - h.checksum_size;
+			have_core = 1;
 		} else if (have_header) {
-			err("--save-core for BIN_V* dumps requires ELF "
-			    "synthesis (not yet implemented in @b{ice idf "
-			    "coredump}); pass @b{--save-raw} to dump the raw "
-			    "bytes for now");
+			err("BIN_V* dumps require ELF synthesis (not yet "
+			    "implemented in @b{ice idf coredump}); pass "
+			    "@b{--save-raw} to dump the raw bytes for now");
 			rc = 1;
 		} else {
-			err("--save-core failed: cannot parse core header (%s)",
+			err("cannot extract core ELF: header parse failed "
+			    "(%s)",
 			    header_err ? header_err : "unknown");
 			rc = 1;
 		}
+	}
 
-		if (core_data && write_file_atomic(opt_save_core, core_data,
-						   core_len) != 0) {
+	if (have_core && opt_save_core) {
+		if (write_file_atomic(opt_save_core, core_data, core_len) !=
+		    0) {
 			err_errno("cannot write '%s'", opt_save_core);
 			rc = 1;
 		}
 	}
 
 	/*
-	 * Spawn gdb if a program ELF was provided.  Gated on rc==0 so
-	 * we don't run gdb on a half-written / mismatched core file.
+	 * Spawn gdb if a program ELF was provided.  When @c --save-core
+	 * is also set, reuse that path; otherwise allocate a temp file,
+	 * write the core ELF there, and unlink it after gdb returns.
+	 * Gated on rc==0 so we don't run gdb on a half-written /
+	 * mismatched core file.
 	 */
-	if (prog && rc == 0) {
-		/* Make sure our buffered info text reaches the terminal
-		 * before gdb's output starts streaming through. */
-		fflush(stdout);
-		const char *gdb_prog = opt_gdb;
-		if (!gdb_prog) {
-			uint32_t chip_ver = have_header
-						? CORE_CHIP_VER(&h)
-						: 0; /* default to esp32 */
-			gdb_prog = core_chip_gdb_prog(chip_ver);
-			if (!gdb_prog) {
-				err("cannot resolve gdb binary for "
-				    "chip_ver=%u; "
-				    "pass @b{--gdb PATH} explicitly",
-				    (unsigned)chip_ver);
+	struct sbuf temp_path = SBUF_INIT;
+	if (prog && have_core && rc == 0) {
+		const char *core_path = opt_save_core;
+
+		if (!core_path) {
+			int fd =
+			    make_temp_file("ice-coredump-", "elf", &temp_path);
+			if (fd < 0) {
+				err_errno("cannot create temp file "
+					  "for the GDB-loadable core "
+					  "ELF");
 				rc = 1;
+			} else {
+				const uint8_t *p = core_data;
+				size_t remaining = core_len;
+
+				while (remaining > 0) {
+					ssize_t n = write(fd, p, remaining);
+					if (n < 0) {
+						if (errno == EINTR)
+							continue;
+						err_errno("write");
+						rc = 1;
+						break;
+					}
+					p += n;
+					remaining -= (size_t)n;
+				}
+				close(fd);
+				if (rc == 0)
+					core_path = temp_path.buf;
 			}
 		}
-		if (gdb_prog && run_gdb(gdb_prog, opt_save_core, prog) < 0)
-			rc = 1;
+
+		if (rc == 0) {
+			/* Make sure our buffered info text reaches the
+			 * terminal before gdb's output streams in. */
+			fflush(stdout);
+
+			const char *gdb_prog = opt_gdb;
+			if (!gdb_prog) {
+				uint32_t chip_ver =
+				    have_header ? CORE_CHIP_VER(&h) : 0;
+				gdb_prog = core_chip_gdb_prog(chip_ver);
+				if (!gdb_prog) {
+					err("cannot resolve gdb binary "
+					    "for chip_ver=%u; pass "
+					    "@b{--gdb PATH} explicitly",
+					    (unsigned)chip_ver);
+					rc = 1;
+				}
+			}
+			if (gdb_prog && run_gdb(gdb_prog, core_path, prog) < 0)
+				rc = 1;
+		}
+	}
+
+	if (temp_path.len) {
+		unlink(temp_path.buf);
+		sbuf_release(&temp_path);
 	}
 
 	sbuf_release(&decoded);

@@ -220,14 +220,44 @@ tap_done "--save-core on a BIN_V* dump errors with a synthesis-TODO message"
 tap_check cmp -s some.elf out_savecore_elf.bin
 tap_done "--save-core for elf-format input passes the file through"
 
-# ---- 15. <prog> without --save-core errors out ----
+# ---- 15. <prog> without --save-core: temp file is allocated, gdb runs, then it is unlinked ----
+# Use a separate fake-gdb that writes the --core arg + an existence
+# probe so we can verify (a) the file existed during the gdb run
+# and (b) it's gone afterwards.  Point TMPDIR at a private dir so
+# we know the path lives under our isolated test scratch.
 
-if "$BINARY" idf coredump --core v22.bin /tmp/some_prog.elf >out 2>err; then
-	tap_check false
-else
-	tap_check grep -q -- 'requires --save-core' err
-fi
-tap_done "<prog> without --save-core is rejected"
+mkdir -p tmp_dir
+cat >fake-gdb-tempcheck <<'EOF'
+#!/usr/bin/env bash
+while [ "$#" -gt 0 ]; do
+	if [ "$1" = "--core" ] && [ -n "$2" ]; then
+		printf 'core=%s\n' "$2" >>tempcheck.log
+		if [ -f "$2" ]; then
+			printf 'exists=1\n' >>tempcheck.log
+		else
+			printf 'exists=0\n' >>tempcheck.log
+		fi
+		break
+	fi
+	shift
+done
+exit 0
+EOF
+chmod +x fake-gdb-tempcheck
+rm -f tempcheck.log
+
+TMPDIR="$PWD/tmp_dir" "$BINARY" idf coredump --core v22.bin \
+	--gdb "$PWD/fake-gdb-tempcheck" /tmp/fake_prog.elf >out 2>err
+tap_check grep -q '^core=' tempcheck.log
+tap_check grep -q '^exists=1$' tempcheck.log
+core_path="$(sed -n 's/^core=//p' tempcheck.log | head -1)"
+tap_check test -n "$core_path"
+tap_check test ! -e "$core_path"
+case "$core_path" in
+"$PWD/tmp_dir/"*) tap_check true ;;
+*) tap_check false ;;
+esac
+tap_done "<prog> without --save-core uses TMPDIR temp file, cleaned after gdb"
 
 # ---- 16. <prog> with --save-core spawns gdb, args reach the binary ----
 # Use a fake gdb that writes its argv to a known file so we can
