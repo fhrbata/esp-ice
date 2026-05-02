@@ -203,6 +203,7 @@ extern const struct cmd_desc cmd_init_desc;
 extern const struct cmd_desc cmd_log_desc;
 extern const struct cmd_desc cmd_menuconfig_desc;
 extern const struct cmd_desc cmd_monitor_desc;
+extern const struct cmd_desc cmd_qemu_desc;
 extern const struct cmd_desc cmd_repo_desc;
 extern const struct cmd_desc cmd_size_desc;
 extern const struct cmd_desc cmd_status_desc;

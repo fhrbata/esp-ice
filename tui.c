@@ -46,6 +46,56 @@ void tui_flush(struct sbuf *out)
 	sbuf_release(out);
 }
 
+/* ================================================================== */
+/*  Rectangles + layout helpers                                       */
+/* ================================================================== */
+
+void tui_rect_split_v(const struct tui_rect *parent, struct tui_rect *left,
+		      struct tui_rect *right, int left_w)
+{
+	if (left_w < 0)
+		left_w = 0;
+	if (left_w > parent->w)
+		left_w = parent->w;
+	left->x = parent->x;
+	left->y = parent->y;
+	left->w = left_w;
+	left->h = parent->h;
+	right->x = parent->x + left_w;
+	right->y = parent->y;
+	right->w = parent->w - left_w;
+	right->h = parent->h;
+}
+
+void tui_rect_split_h(const struct tui_rect *parent, struct tui_rect *top,
+		      struct tui_rect *bottom, int top_h)
+{
+	if (top_h < 0)
+		top_h = 0;
+	if (top_h > parent->h)
+		top_h = parent->h;
+	top->x = parent->x;
+	top->y = parent->y;
+	top->w = parent->w;
+	top->h = top_h;
+	bottom->x = parent->x;
+	bottom->y = parent->y + top_h;
+	bottom->w = parent->w;
+	bottom->h = parent->h - top_h;
+}
+
+struct tui_rect tui_rect_inset(struct tui_rect r, int top, int right,
+			       int bottom, int left)
+{
+	int hcut = left + right;
+	int vcut = top + bottom;
+	r.x += left;
+	r.y += top;
+	r.w = r.w > hcut ? r.w - hcut : 0;
+	r.h = r.h > vcut ? r.h - vcut : 0;
+	return r;
+}
+
 /*
  * Active search state, lazily allocated when a pattern is set and
  * freed by @ref tui_log_search_clear.  Kept opaque in @ref tui.h so
@@ -153,7 +203,18 @@ static void clamp_scroll(struct tui_list *L)
 		L->top = L->cursor - rows + 1;
 }
 
-void tui_list_init(struct tui_list *L) { memset(L, 0, sizeof(*L)); }
+void tui_list_init(struct tui_list *L)
+{
+	memset(L, 0, sizeof(*L));
+	L->origin_x = 1;
+	L->origin_y = 1;
+}
+
+void tui_list_set_origin(struct tui_list *L, int x, int y)
+{
+	L->origin_x = x;
+	L->origin_y = y;
+}
 
 void tui_list_set_items(struct tui_list *L, const struct tui_list_item *items,
 			int n)
@@ -262,7 +323,7 @@ static void sbuf_pad(struct sbuf *sb, const char *s, int width)
 static void render_item_row(struct sbuf *sb, const struct tui_list *L, int idx)
 {
 	int item_idx = L->top + idx;
-	sbuf_addf(sb, "\x1b[%d;1H", 2 + idx);
+	sbuf_addf(sb, "\x1b[%d;%dH", L->origin_y + 1 + idx, L->origin_x);
 	if (item_idx >= L->n_items) {
 		/* Blank filler so the previous frame's row is cleared. */
 		for (int i = 0; i < L->width; i++)
@@ -353,7 +414,7 @@ void tui_list_render(struct sbuf *out, const struct tui_list *L)
 	/* Title bar: bold white on blue (classic menuconfig palette).
 	 * Includes a one-space left margin so the text doesn't crowd
 	 * the terminal edge. */
-	sbuf_addstr(out, "\x1b[1;1H\x1b[1;37;44m");
+	sbuf_addf(out, "\x1b[%d;%dH\x1b[1;37;44m", L->origin_y, L->origin_x);
 	sbuf_addch(out, ' ');
 	sbuf_pad(out, L->title, L->width - 1);
 	sbuf_addstr(out, "\x1b[0m");
@@ -366,7 +427,8 @@ void tui_list_render(struct sbuf *out, const struct tui_list *L)
 	/* Footer: white on blue (no bold) -- matches the title palette
 	 * but reads as a secondary band. */
 	if (L->height >= 2) {
-		sbuf_addf(out, "\x1b[%d;1H\x1b[37;44m", L->height);
+		sbuf_addf(out, "\x1b[%d;%dH\x1b[37;44m",
+			  L->origin_y + L->height - 1, L->origin_x);
 		sbuf_addch(out, ' ');
 		sbuf_pad(out, L->footer, L->width - 1);
 		sbuf_addstr(out, "\x1b[0m");
@@ -381,6 +443,8 @@ void tui_prompt_init(struct tui_prompt *P, const char *title,
 		     const char *initial)
 {
 	memset(P, 0, sizeof(*P));
+	P->origin_x = 1;
+	P->origin_y = 1;
 	P->title = title;
 	if (initial) {
 		int n = (int)strlen(initial);
@@ -396,6 +460,12 @@ void tui_prompt_resize(struct tui_prompt *P, int width, int height)
 {
 	P->width = width;
 	P->height = height;
+}
+
+void tui_prompt_set_origin(struct tui_prompt *P, int x, int y)
+{
+	P->origin_x = x;
+	P->origin_y = y;
 }
 
 static void prompt_insert(struct tui_prompt *P, int c)
@@ -490,8 +560,11 @@ static int prompt_box_cols(const struct tui_prompt *P)
 void tui_prompt_render(struct sbuf *out, const struct tui_prompt *P)
 {
 	int cols = prompt_box_cols(P);
-	int left = (P->width - cols) / 2 + 1; /* 1-based column */
-	int top = (P->height - PROMPT_BOX_ROWS) / 2 + 1;
+	/* Centre the box within the widget's @c width x @c height area
+	 * and shift by the origin so it lands at the right place on the
+	 * actual terminal grid. */
+	int left = P->origin_x + (P->width - cols) / 2;
+	int top = P->origin_y + (P->height - PROMPT_BOX_ROWS) / 2;
 	int inner = cols - 2; /* between the two vertical borders */
 
 	/*
@@ -572,7 +645,7 @@ void tui_prompt_render(struct sbuf *out, const struct tui_prompt *P)
 	 * with the dialog.  Rendered only when there's a row to spare
 	 * (on extremely short terminals, skip).
 	 */
-	if (top + PROMPT_BOX_ROWS <= P->height) {
+	if (top + PROMPT_BOX_ROWS < P->origin_y + P->height) {
 		const char *hint = "Enter accept  \xe2\x80\xa2  Esc cancel";
 		sbuf_addf(out, "\x1b[%d;%dH%s", top + PROMPT_BOX_ROWS, left,
 			  MODAL_HINT);
@@ -641,9 +714,17 @@ static void info_split_lines(struct tui_info *I)
 void tui_info_init(struct tui_info *I, const char *title, const char *body)
 {
 	memset(I, 0, sizeof(*I));
+	I->origin_x = 1;
+	I->origin_y = 1;
 	I->title = title;
 	I->body = body ? body : "";
 	info_split_lines(I);
+}
+
+void tui_info_set_origin(struct tui_info *I, int x, int y)
+{
+	I->origin_x = x;
+	I->origin_y = y;
 }
 
 void tui_info_release(struct tui_info *I)
@@ -747,8 +828,8 @@ void tui_info_render(struct sbuf *out, const struct tui_info *I)
 		box_rows = I->height > 10 ? 10 : I->height - 2;
 	if (box_rows > I->height - 1)
 		box_rows = I->height - 1;
-	int left = (I->width - cols) / 2 + 1;
-	int top = (I->height - box_rows) / 2 + 1;
+	int left = I->origin_x + (I->width - cols) / 2;
+	int top = I->origin_y + (I->height - box_rows) / 2;
 	int inner = cols - 2;
 	int body_rows = box_rows - 4;
 
@@ -809,7 +890,7 @@ void tui_info_render(struct sbuf *out, const struct tui_info *I)
 
 	/* Hint line below the box.  Scroll indicator when there's more
 	 * content than fits. */
-	if (top + box_rows <= I->height) {
+	if (top + box_rows < I->origin_y + I->height) {
 		const char *more = "";
 		if (I->n_lines > body_rows) {
 			if (I->top_line == 0)
@@ -847,6 +928,8 @@ void tui_info_render(struct sbuf *out, const struct tui_info *I)
 void tui_log_init(struct tui_log *L, int max_lines)
 {
 	memset(L, 0, sizeof(*L));
+	L->origin_x = 1;
+	L->origin_y = 1;
 	L->cap_lines = max_lines > 0 ? max_lines : 1;
 	L->lines = calloc((size_t)L->cap_lines, sizeof(*L->lines));
 	if (!L->lines)
@@ -854,6 +937,12 @@ void tui_log_init(struct tui_log *L, int max_lines)
 	sbuf_init(&L->pending);
 	L->anchor = -1;	 /* live-tail by default */
 	L->ceiling = -1; /* no snapshot */
+}
+
+void tui_log_set_origin(struct tui_log *L, int x, int y)
+{
+	L->origin_x = x;
+	L->origin_y = y;
 }
 
 void tui_log_release(struct tui_log *L)
@@ -1229,9 +1318,9 @@ static int overlay_cmp(const void *a, const void *b)
 #define RENDER_OVERLAY_STACK 16
 
 static int render_log_line(struct sbuf *sb, const char *line, size_t len,
-			   int width, int term_row_start, int skip_rows,
-			   int max_rows, const struct tui_overlay *overlays,
-			   int n_overlays)
+			   int width, int origin_col, int term_row_start,
+			   int skip_rows, int max_rows,
+			   const struct tui_overlay *overlays, int n_overlays)
 {
 	if (max_rows <= 0 || width <= 0)
 		return 0;
@@ -1255,7 +1344,7 @@ static int render_log_line(struct sbuf *sb, const char *line, size_t len,
 	int n_active = 0;
 
 	if (skip_rows == 0)
-		sbuf_addf(sb, "\x1b[%d;1H", term_row_start);
+		sbuf_addf(sb, "\x1b[%d;%dH", term_row_start, origin_col);
 
 	size_t i = 0;
 	while (i < len && emitted < max_rows) {
@@ -1286,9 +1375,11 @@ static int render_log_line(struct sbuf *sb, const char *line, size_t len,
 		}
 
 		if (col_advance && col == width) {
-			/* Close the row we just filled and step to the next. */
+			/* Close the row we just filled and step to the next.
+			 * No erase needed -- col == width means we filled
+			 * every cell of the pane width exactly. */
 			if (vrow >= skip_rows) {
-				sbuf_addstr(sb, "\x1b[0m\x1b[K");
+				sbuf_addstr(sb, "\x1b[0m");
 				emitted++;
 				if (emitted >= max_rows)
 					return emitted;
@@ -1296,8 +1387,8 @@ static int render_log_line(struct sbuf *sb, const char *line, size_t len,
 			vrow++;
 			col = 0;
 			if (vrow >= skip_rows) {
-				sbuf_addf(sb, "\x1b[%d;1H",
-					  term_row_start + emitted);
+				sbuf_addf(sb, "\x1b[%d;%dH",
+					  term_row_start + emitted, origin_col);
 				/* Per-row reset wiped SGR state.  Re-issue
 				 * every active overlay's open so all
 				 * enclosing styles carry over -- order
@@ -1359,9 +1450,14 @@ static int render_log_line(struct sbuf *sb, const char *line, size_t len,
 	/* Close the final partial row, if we drew into it at all.  The
 	 * \x1b[0m fully resets SGR so any still-active overlay is
 	 * implicitly cleared -- callers that need clean SGR state at
-	 * end-of-line get it for free. */
+	 * end-of-line get it for free.  Erase the unfilled cells with
+	 * ECH (\x1b[<n>X) so neighbouring panes' content stays intact;
+	 * \x1b[K would clear past the pane's right edge. */
 	if (vrow >= skip_rows && emitted < max_rows) {
-		sbuf_addstr(sb, "\x1b[0m\x1b[K");
+		int remaining = width - col;
+		sbuf_addstr(sb, "\x1b[0m");
+		if (remaining > 0)
+			sbuf_addf(sb, "\x1b[%dX", remaining);
 		emitted++;
 	}
 	return emitted;
@@ -1682,7 +1778,7 @@ static void render_scrollbar(struct sbuf *sb, const struct tui_log *L,
 		return;
 
 	int total = log_total(L);
-	int sbar_col = L->width;
+	int sbar_col = L->origin_x + L->width - 1;
 
 	int top_idx = bottom_idx - body_rows + 1;
 	if (top_idx < 0)
@@ -1721,22 +1817,27 @@ void tui_log_render(struct sbuf *out, const struct tui_log *L)
 {
 	sbuf_addstr(out, "\x1b[?25l");
 
-	int body_top = 1;
-	int body_bottom = L->height;
+	/* All row indices below are 1-based screen rows: starts at the
+	 * widget's @c origin_y, ends one row before @c origin_y + height. */
+	int body_top = L->origin_y;
+	int body_bottom = L->origin_y + L->height - 1;
 
-	/* Status bar at row 1 (matches tui_list title palette). */
+	/* Status bar at the top row of the widget (matches tui_list
+	 * title palette). */
 	if (L->status && L->height >= 1) {
-		sbuf_addstr(out, "\x1b[1;1H\x1b[1;37;44m");
+		sbuf_addf(out, "\x1b[%d;%dH\x1b[1;37;44m", L->origin_y,
+			  L->origin_x);
 		sbuf_addch(out, ' ');
 		sbuf_pad(out, L->status, L->width - 1);
 		sbuf_addstr(out, "\x1b[0m");
-		body_top = 2;
+		body_top = L->origin_y + 1;
 	}
 
-	/* Footer at the last row (matches tui_list footer palette).
-	 * Reserve only when we have at least one body row left for it. */
-	if (L->footer && L->height >= body_top + 1) {
-		body_bottom = L->height - 1;
+	/* Footer at the last row of the widget (matches tui_list footer
+	 * palette).  Reserve only when we have at least one body row left
+	 * for it. */
+	if (L->footer && L->height >= (body_top - L->origin_y) + 2) {
+		body_bottom = L->origin_y + L->height - 2;
 	}
 
 	int body_rows = body_bottom - body_top + 1;
@@ -1769,7 +1870,7 @@ void tui_log_render(struct sbuf *out, const struct tui_log *L)
 	    vt100_cursor_visible(L->vt100)) {
 		cursor_user_idx =
 		    log_effective_n_lines(L) + vt100_cursor_row(L->vt100);
-		cursor_term_col = vt100_cursor_col(L->vt100) + 1;
+		cursor_term_col = L->origin_x + vt100_cursor_col(L->vt100);
 	}
 
 	if (body_rows > 0 && body_w > 0 && bottom_idx >= 0) {
@@ -1780,7 +1881,8 @@ void tui_log_render(struct sbuf *out, const struct tui_log *L)
 		/* Blank rows above the first rendered line (history shorter
 		 * than the body, or scroll has cleared past the top). */
 		for (int r = 0; r < leading_blanks; r++)
-			sbuf_addf(out, "\x1b[%d;1H\x1b[0m\x1b[K", body_top + r);
+			sbuf_addf(out, "\x1b[%d;%dH\x1b[0m\x1b[%dX",
+				  body_top + r, L->origin_x, body_w);
 
 		int term_row = body_top + leading_blanks;
 		for (int i = first_line;
@@ -1871,21 +1973,23 @@ void tui_log_render(struct sbuf *out, const struct tui_log *L)
 				qsort(ov, n_ov, sizeof(ov[0]), overlay_cmp);
 
 			int drew =
-			    render_log_line(out, s, slen, body_w, term_row,
-					    skip, avail, ov, n_ov);
+			    render_log_line(out, s, slen, body_w, L->origin_x,
+					    term_row, skip, avail, ov, n_ov);
 			term_row += drew;
 		}
 	} else if (body_rows > 0) {
 		/* Empty buffer: still wipe stale body content. */
 		for (int r = 0; r < body_rows; r++)
-			sbuf_addf(out, "\x1b[%d;1H\x1b[0m\x1b[K", body_top + r);
+			sbuf_addf(out, "\x1b[%d;%dH\x1b[0m\x1b[%dX",
+				  body_top + r, L->origin_x, body_w);
 	}
 
 	if (body_rows > 0 && L->width >= 1)
 		render_scrollbar(out, L, body_top, body_rows, bottom_idx);
 
-	if (L->footer && body_bottom < L->height) {
-		sbuf_addf(out, "\x1b[%d;1H\x1b[37;44m", L->height);
+	if (L->footer && body_bottom < L->origin_y + L->height - 1) {
+		sbuf_addf(out, "\x1b[%d;%dH\x1b[37;44m",
+			  L->origin_y + L->height - 1, L->origin_x);
 		sbuf_addch(out, ' ');
 		sbuf_pad(out, L->footer, L->width - 1);
 		sbuf_addstr(out, "\x1b[0m");

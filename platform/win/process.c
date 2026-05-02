@@ -14,9 +14,11 @@
  * UTF-8 conversion, caching the result on first call.
  */
 #include <errhandlingapi.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <io.h>
 #include <processenv.h>
+#include <signal.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -24,8 +26,51 @@
 #include <windows.h>
 #include <winerror.h>
 
+/* ConPTY (Windows 10 1809+).  Symbols are runtime-resolved so the
+ * binary still loads on older Windows; pty mode just fails cleanly. */
+#include <consoleapi.h>
+
+/* Older mingw-w64 SDKs ship the ConPTY function declarations and the
+ * HPCON typedef but not the proc-thread attribute number used to bind
+ * a pseudo-console to a child process at CreateProcess time.  The
+ * macro is defined as ProcThreadAttributeValue(22, FALSE, TRUE, FALSE)
+ * which expands to 22 | 0x20000 = 0x20016. */
+#ifndef PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE
+#define PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE 0x20016
+#endif
+
 #include "ice.h"
 #include "wconv.h"
+
+/* ConPTY function pointers, lazily resolved via GetProcAddress.  Set to
+ * NULL and stays NULL on Windows < 1809; @ref process_start checks
+ * @ref conpty_available before allocating a pty. */
+typedef HRESULT(WINAPI *create_pty_fn)(COORD, HANDLE, HANDLE, DWORD, HPCON *);
+typedef HRESULT(WINAPI *resize_pty_fn)(HPCON, COORD);
+typedef void(WINAPI *close_pty_fn)(HPCON);
+
+static create_pty_fn p_CreatePseudoConsole;
+static resize_pty_fn p_ResizePseudoConsole;
+static close_pty_fn p_ClosePseudoConsole;
+static int conpty_inited;
+
+static int conpty_available(void)
+{
+	if (conpty_inited)
+		return p_CreatePseudoConsole != NULL;
+	HMODULE k = GetModuleHandleW(L"kernel32.dll");
+	if (k) {
+		p_CreatePseudoConsole =
+		    (create_pty_fn)GetProcAddress(k, "CreatePseudoConsole");
+		p_ResizePseudoConsole =
+		    (resize_pty_fn)GetProcAddress(k, "ResizePseudoConsole");
+		p_ClosePseudoConsole =
+		    (close_pty_fn)GetProcAddress(k, "ClosePseudoConsole");
+	}
+	conpty_inited = 1;
+	return p_CreatePseudoConsole && p_ResizePseudoConsole &&
+	       p_ClosePseudoConsole;
+}
 
 /**
  * @brief Build a wide-char command line from a NULL-terminated argv.
@@ -107,6 +152,129 @@ static int create_pipe(int *read_fd, int *write_fd)
 	return 0;
 }
 
+/*
+ * Spawn a child attached to a ConPTY pseudo-console.  Sets proc->in /
+ * proc->out to the parent-side pipe fds (input write, output read) and
+ * stashes the HPCON in proc->_pty_internal so @ref pty_resize can
+ * reach it.  Returns 0 on success, -1 with GetLastError-style err()
+ * already logged on failure.
+ */
+static int start_with_pty(struct process *proc, wchar_t *wcmdl, wchar_t *wdir)
+{
+	HANDLE hInRead = NULL, hInWrite = NULL;
+	HANDLE hOutRead = NULL, hOutWrite = NULL;
+	HPCON hPC = NULL;
+	STARTUPINFOEXW siex;
+	PROCESS_INFORMATION pi;
+	SIZE_T attr_size = 0;
+	LPPROC_THREAD_ATTRIBUTE_LIST attr_list = NULL;
+	int in_fd = -1, out_fd = -1;
+	int rc = -1;
+
+	if (!conpty_available()) {
+		err("ConPTY not available (Windows 10 1809 or later required)");
+		errno = ENOSYS;
+		return -1;
+	}
+
+	if (!CreatePipe(&hInRead, &hInWrite, NULL, 0) ||
+	    !CreatePipe(&hOutRead, &hOutWrite, NULL, 0)) {
+		err("CreatePipe failed (%lu)", GetLastError());
+		goto cleanup;
+	}
+
+	COORD size;
+	size.X = (SHORT)(proc->pty_cols > 0 ? proc->pty_cols : 80);
+	size.Y = (SHORT)(proc->pty_rows > 0 ? proc->pty_rows : 24);
+
+	HRESULT hr = p_CreatePseudoConsole(size, hInRead, hOutWrite, 0, &hPC);
+	if (FAILED(hr)) {
+		err("CreatePseudoConsole failed (0x%lx)", (unsigned long)hr);
+		goto cleanup;
+	}
+	/* The pseudo-console owns these ends now; we don't need our copies. */
+	CloseHandle(hInRead);
+	hInRead = NULL;
+	CloseHandle(hOutWrite);
+	hOutWrite = NULL;
+
+	/* STARTUPINFOEX with PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE.  The
+	 * attribute list size is queried by InitializeProcThreadAttributeList
+	 * itself in the canonical two-call dance. */
+	InitializeProcThreadAttributeList(NULL, 1, 0, &attr_size);
+	attr_list = malloc(attr_size);
+	if (!attr_list) {
+		err_errno("malloc(attr_list)");
+		goto cleanup;
+	}
+	if (!InitializeProcThreadAttributeList(attr_list, 1, 0, &attr_size)) {
+		err("InitializeProcThreadAttributeList failed (%lu)",
+		    GetLastError());
+		goto cleanup;
+	}
+	if (!UpdateProcThreadAttribute(attr_list, 0,
+				       PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE, hPC,
+				       sizeof(hPC), NULL, NULL)) {
+		err("UpdateProcThreadAttribute failed (%lu)", GetLastError());
+		goto cleanup;
+	}
+
+	ZeroMemory(&siex, sizeof(siex));
+	siex.StartupInfo.cb = sizeof(siex);
+	siex.lpAttributeList = attr_list;
+
+	ZeroMemory(&pi, sizeof(pi));
+	if (!CreateProcessW(NULL, wcmdl, NULL, NULL, FALSE,
+			    EXTENDED_STARTUPINFO_PRESENT, NULL, wdir,
+			    &siex.StartupInfo, &pi)) {
+		err("CreateProcess (pty) failed (%lu)", GetLastError());
+		goto cleanup;
+	}
+
+	/* NOLINTNEXTLINE(performance-no-int-to-ptr) */
+	proc->pid = (pid_t)(intptr_t)pi.hProcess;
+	CloseHandle(pi.hThread);
+
+	/* Convert the parent-side pipe ends to CRT fds so they slot into
+	 * the existing in/out pattern (and pipe_read_timed works on them
+	 * unchanged). */
+	in_fd = _open_osfhandle((intptr_t)hInWrite, _O_WRONLY | _O_BINARY);
+	out_fd = _open_osfhandle((intptr_t)hOutRead, _O_RDONLY | _O_BINARY);
+	if (in_fd == -1 || out_fd == -1) {
+		err("_open_osfhandle failed");
+		TerminateProcess(pi.hProcess, 1);
+		CloseHandle(pi.hProcess);
+		proc->pid = 0;
+		goto cleanup;
+	}
+	hInWrite = NULL; /* now owned by in_fd */
+	hOutRead = NULL; /* now owned by out_fd */
+
+	proc->in = in_fd;
+	proc->out = out_fd;
+	proc->err = -1;
+	proc->_pty_internal = hPC;
+	hPC = NULL; /* now owned by proc->_pty_internal */
+	rc = 0;
+
+cleanup:
+	if (hInRead)
+		CloseHandle(hInRead);
+	if (hInWrite)
+		CloseHandle(hInWrite);
+	if (hOutRead)
+		CloseHandle(hOutRead);
+	if (hOutWrite)
+		CloseHandle(hOutWrite);
+	if (hPC)
+		p_ClosePseudoConsole(hPC);
+	if (attr_list) {
+		DeleteProcThreadAttributeList(attr_list);
+		free(attr_list);
+	}
+	return rc;
+}
+
 /**
  * @brief Start a child process (Windows).
  *
@@ -136,6 +304,13 @@ int process_start(struct process *proc)
 		wdir = mbs_to_wcs(proc->dir);
 		if (!wdir)
 			goto err;
+	}
+
+	if (proc->use_pty) {
+		int rc = start_with_pty(proc, wcmdl, wdir);
+		free(wcmdl);
+		free(wdir);
+		return rc;
 	}
 
 	if (proc->pipe_in && create_pipe(&pipe_in[0], &pipe_in[1]))
@@ -243,17 +418,35 @@ int process_finish(struct process *proc)
 	HANDLE hProcess = (HANDLE)(intptr_t)proc->pid;
 	DWORD exitCode;
 
-	if (proc->pipe_in && proc->in != -1) {
-		_close(proc->in);
-		proc->in = -1;
-	}
-	if (proc->pipe_out && proc->out != -1) {
-		_close(proc->out);
-		proc->out = -1;
-	}
-	if (proc->pipe_err && proc->err != -1) {
-		_close(proc->err);
-		proc->err = -1;
+	if (proc->use_pty) {
+		/* Closing the pseudo-console signals EOF to the child;
+		 * standard well-behaved CLI children wind down on stdin EOF.
+		 * We free the in/out fds afterwards. */
+		if (proc->_pty_internal) {
+			p_ClosePseudoConsole((HPCON)proc->_pty_internal);
+			proc->_pty_internal = NULL;
+		}
+		if (proc->in != -1) {
+			_close(proc->in);
+			proc->in = -1;
+		}
+		if (proc->out != -1) {
+			_close(proc->out);
+			proc->out = -1;
+		}
+	} else {
+		if (proc->pipe_in && proc->in != -1) {
+			_close(proc->in);
+			proc->in = -1;
+		}
+		if (proc->pipe_out && proc->out != -1) {
+			_close(proc->out);
+			proc->out = -1;
+		}
+		if (proc->pipe_err && proc->err != -1) {
+			_close(proc->err);
+			proc->err = -1;
+		}
 	}
 
 	WaitForSingleObject(hProcess, INFINITE);
@@ -266,6 +459,31 @@ int process_finish(struct process *proc)
 
 	CloseHandle(hProcess);
 	return (int)exitCode;
+}
+
+int pty_resize(struct process *proc, int rows, int cols)
+{
+	if (!proc->use_pty || !proc->_pty_internal) {
+		errno = EINVAL;
+		return -1;
+	}
+	if (rows <= 0 || cols <= 0) {
+		errno = EINVAL;
+		return -1;
+	}
+	if (!conpty_available()) {
+		errno = ENOSYS;
+		return -1;
+	}
+	COORD size;
+	size.X = (SHORT)cols;
+	size.Y = (SHORT)rows;
+	HRESULT hr = p_ResizePseudoConsole((HPCON)proc->_pty_internal, size);
+	if (FAILED(hr)) {
+		errno = EIO;
+		return -1;
+	}
+	return 0;
 }
 
 /**
@@ -308,6 +526,30 @@ ssize_t pipe_read_timed(int fd, void *buf, size_t n, unsigned timeout_ms)
 	if (!ReadFile(h, buf, (DWORD)n, &got, NULL) || got == 0)
 		return -1;
 	return (ssize_t)got;
+}
+
+int kill_w(pid_t pid, int sig)
+{
+	/* NOLINTNEXTLINE(performance-no-int-to-ptr) */
+	HANDLE hProcess = (HANDLE)(intptr_t)pid;
+
+	/* Windows has no signal mechanism; the only thing the shim
+	 * implements is "force this child to stop now."  SIGTERM is the
+	 * conventional ask in POSIX call sites, so treat it as that.
+	 * Unknown signals fail loudly rather than silently no-op. */
+	if (sig != SIGTERM) {
+		errno = EINVAL;
+		return -1;
+	}
+	if (hProcess == NULL || hProcess == INVALID_HANDLE_VALUE) {
+		errno = ESRCH;
+		return -1;
+	}
+	if (!TerminateProcess(hProcess, 1)) {
+		errno = EPERM;
+		return -1;
+	}
+	return 0;
 }
 
 unsigned long long mono_ms(void)

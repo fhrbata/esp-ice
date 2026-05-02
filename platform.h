@@ -118,6 +118,16 @@ int link_w(const char *target, const char *linkpath);
 int setenv_w(const char *name, const char *value, int overwrite);
 
 /*
+ * POSIX kill(2) replacement.  Windows has no signals, so the shim
+ * supports the subset that matters for child-process control:
+ * SIGTERM and SIGKILL both call TerminateProcess on the HANDLE stored
+ * in the proc.pid slot (process_start casts the HANDLE to pid_t).  Any
+ * other signal returns -1 with errno = EINVAL.  Lets call sites read
+ * as plain POSIX C on both platforms.
+ */
+int kill_w(pid_t pid, int sig);
+
+/*
  * X_OK is not a meaningful mode for the Win32 _access() CRT call, but
  * it is the semantic POSIX callers want ("can I spawn this?").  We
  * define the POSIX bit here and let access_w() interpret it by trying
@@ -138,6 +148,7 @@ int setenv_w(const char *name, const char *value, int overwrite);
 #define chmod chmod_w
 #define isatty _isatty
 #define setenv setenv_w
+#define kill kill_w
 #define fileno _fileno
 #define dup _dup
 #define dup2 _dup2
@@ -333,6 +344,25 @@ struct process {
 	 * without hand-splitting the command string.
 	 */
 	unsigned use_shell : 1;
+	/**
+	 * If set, allocate a pseudo-terminal for the child instead of
+	 * pipes.  The child sees stdin/stdout/stderr as a real tty, so
+	 * isatty() returns 1 and readline / pagers / SGR-aware output
+	 * behave correctly.  Both @c in and @c out are set to the master
+	 * fd (aliased to the same kernel object); the @c pipe_* flags are
+	 * ignored.  POSIX uses posix_openpt(); Windows uses ConPTY
+	 * (Windows 10 1809+; older Windows fails with @c ENOSYS).
+	 */
+	unsigned use_pty : 1;
+	int pty_rows; /**< Initial pty window rows (0 leaves default). */
+	int pty_cols; /**< Initial pty window cols. */
+	/**
+	 * Private platform state used by the pty path: stores the
+	 * @c HPCON on Windows so @ref pty_resize can hand it to
+	 * @c ResizePseudoConsole.  POSIX leaves this NULL and resizes
+	 * via @c TIOCSWINSZ on the master fd.
+	 */
+	void *_pty_internal;
 };
 
 /** Static initializer for struct process. */
@@ -361,6 +391,24 @@ int process_start(struct process *proc);
  * @return Exit code of the child, or -1 on error.
  */
 int process_finish(struct process *proc);
+
+/**
+ * @brief Resize a child's pty window.
+ *
+ * Updates the child's idea of terminal width/height -- programs that
+ * use @c TIOCGWINSZ (readline, less, vim) re-render at the new size.
+ * Only meaningful when @ref process::use_pty was set at @ref
+ * process_start time; returns -1 with @c errno=EINVAL otherwise.
+ *
+ * POSIX issues @c TIOCSWINSZ on the master fd; Windows calls
+ * @c ResizePseudoConsole on the stored HPCON.
+ *
+ * @param proc  Process descriptor started in pty mode.
+ * @param rows  New window rows (>0).
+ * @param cols  New window cols (>0).
+ * @return 0 on success, -1 on error (@c errno set).
+ */
+int pty_resize(struct process *proc, int rows, int cols);
 
 /**
  * @brief Run a child process and wait for it to finish.
