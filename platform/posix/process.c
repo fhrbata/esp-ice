@@ -127,7 +127,7 @@ int process_start(struct process *proc)
 			memset(&ws, 0, sizeof ws);
 			ws.ws_row = (unsigned short)proc->pty_rows;
 			ws.ws_col = (unsigned short)proc->pty_cols;
-			ioctl(pty_master, (int)TIOCSWINSZ, &ws);
+			ioctl(pty_master, (unsigned int)TIOCSWINSZ, &ws);
 		}
 	} else {
 		if (proc->pipe_in && pipe(pipe_in) == -1) {
@@ -164,13 +164,26 @@ int process_start(struct process *proc)
 					  pty_slave_path);
 				_exit(EXIT_FAILURE);
 			}
-			/* Cast the request to int because musl declares
-			 * ioctl as `int ioctl(int fd, int request, ...)`
-			 * (POSIX-strict), and on ppc64 / mips the kernel
-			 * encodes some request constants with bit 31 set,
-			 * tripping -Werror=overflow at the implicit
-			 * unsigned long → int conversion. */
-			ioctl(slave, (int)TIOCSCTTY, 0);
+			/* Cast the request to unsigned int.  Two unrelated
+			 * problems collide here:
+			 *   - musl declares ioctl as `int ioctl(int, int,
+			 *     ...)`; ppc64 / mips encode some request
+			 *     constants with bit 31 set, tripping
+			 *     -Werror=overflow at the implicit unsigned
+			 *     long → int conversion.
+			 *   - macOS BSD ioctl constants always have bit 31
+			 *     set (IOC_IN); a plain `(int)` cast yields a
+			 *     negative int that sign-extends to
+			 *     0xffffffff... when implicitly promoted to
+			 *     macOS's `unsigned long` parameter, so the
+			 *     kernel sees a different request number and
+			 *     silently no-ops.
+			 * `(unsigned int)` zero-extends on promotion (right
+			 * value on macOS), and on musl the bit pattern is
+			 * preserved through the int parameter and Linux's
+			 * 32-bit ioctl-cmd truncation in the syscall
+			 * boundary. */
+			ioctl(slave, (unsigned int)TIOCSCTTY, 0);
 			/* Set the window size on the slave too.  Linux honours
 			 * the master-side TIOCSWINSZ done in the parent, but
 			 * macOS BSD ptys reset the slave's struct winsize at
@@ -184,7 +197,7 @@ int process_start(struct process *proc)
 				memset(&ws, 0, sizeof ws);
 				ws.ws_row = (unsigned short)proc->pty_rows;
 				ws.ws_col = (unsigned short)proc->pty_cols;
-				ioctl(slave, (int)TIOCSWINSZ, &ws);
+				ioctl(slave, (unsigned int)TIOCSWINSZ, &ws);
 			}
 			dup2(slave, STDIN_FILENO);
 			dup2(slave, STDOUT_FILENO);
@@ -362,7 +375,7 @@ int pty_resize(struct process *proc, int rows, int cols)
 	memset(&ws, 0, sizeof ws);
 	ws.ws_row = (unsigned short)rows;
 	ws.ws_col = (unsigned short)cols;
-	if (ioctl(proc->in, (int)TIOCSWINSZ, &ws) < 0)
+	if (ioctl(proc->in, (unsigned int)TIOCSWINSZ, &ws) < 0)
 		return -1;
 	return 0;
 }
