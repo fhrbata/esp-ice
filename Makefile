@@ -240,6 +240,7 @@ LIB_SRCS := \
 	reader.c \
 	tar.c \
 	toolenv.c \
+	monitor.c \
 	tui.c \
 	vt100.c \
 	vendor/cacert/ca_bundle.c \
