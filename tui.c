@@ -96,6 +96,22 @@ struct tui_rect tui_rect_inset(struct tui_rect r, int top, int right,
 	return r;
 }
 
+void tui_status_bar(struct sbuf *out, const struct tui_rect *r,
+		    const char *text, const char *sgr)
+{
+	if (r->h < 1 || r->w < 1)
+		return;
+	sbuf_addf(out, "\x1b[%d;%dH\x1b[%sm ", r->y, r->x, sgr);
+	int w = r->w - 1;
+	int len = (int)strlen(text);
+	if (len > w)
+		len = w;
+	sbuf_add(out, text, (size_t)len);
+	for (int i = len; i < w; i++)
+		sbuf_addch(out, ' ');
+	sbuf_addstr(out, "\x1b[0m");
+}
+
 /*
  * Active search state, lazily allocated when a pattern is set and
  * freed by @ref tui_log_search_clear.  Kept opaque in @ref tui.h so
@@ -778,10 +794,12 @@ int tui_info_on_event(struct tui_info *I, const struct term_event *ev)
 	case 'Q':
 		return 1;
 	case TK_UP:
+	case 'k':
 		I->top_line--;
 		info_clamp_scroll(I);
 		return 0;
 	case TK_DOWN:
+	case 'j':
 		I->top_line++;
 		info_clamp_scroll(I);
 		return 0;
@@ -798,6 +816,14 @@ int tui_info_on_event(struct tui_info *I, const struct term_event *ev)
 		return 0;
 	case TK_END:
 		I->top_line = I->n_lines;
+		info_clamp_scroll(I);
+		return 0;
+	case TK_WHEEL_UP:
+		I->top_line--;
+		info_clamp_scroll(I);
+		return 0;
+	case TK_WHEEL_DOWN:
+		I->top_line++;
 		info_clamp_scroll(I);
 		return 0;
 	default:
@@ -858,7 +884,37 @@ void tui_info_render(struct sbuf *out, const struct tui_info *I)
 		sbuf_addstr(out, HL);
 	sbuf_addstr(out, "\xe2\x94\xa4");
 
-	/* Body rows. */
+	/*
+	 * Body rows.  Reserve the rightmost body cell for a vertical
+	 * scrollbar so users get a "you are here / there's more"
+	 * cue when the help body doesn't fit.  The bar is always
+	 * visible: dim vertical line for the track, heavy block for
+	 * the thumb (matches @ref render_scrollbar in @ref tui_log).
+	 * Thumb height / position is approximated by line count --
+	 * good enough for a one-column indicator on a kilobyte-sized
+	 * help body.
+	 */
+	int content_w =
+	    inner - 2; /* one cell for leading space, one for sbar */
+	if (content_w < 1)
+		content_w = 1;
+	int sbar_total = I->n_lines > 0 ? I->n_lines : 1;
+	int thumb_h =
+	    (int)(((long long)body_rows * body_rows + sbar_total - 1) /
+		  sbar_total);
+	if (thumb_h < 1)
+		thumb_h = 1;
+	if (thumb_h > body_rows)
+		thumb_h = body_rows;
+	int thumb_top =
+	    body_rows > 0
+		? (int)(((long long)I->top_line * body_rows) / sbar_total)
+		: 0;
+	if (thumb_top < 0)
+		thumb_top = 0;
+	if (thumb_top + thumb_h > body_rows)
+		thumb_top = body_rows - thumb_h;
+
 	for (int r = 0; r < body_rows; r++) {
 		int line_idx = I->top_line + r;
 		sbuf_addf(out, "\x1b[%d;%dH%s", top + 3 + r, left, INFO_BORDER);
@@ -867,15 +923,23 @@ void tui_info_render(struct sbuf *out, const struct tui_info *I)
 		sbuf_addch(out, ' ');
 		if (line_idx < I->n_lines) {
 			int len = I->line_lens[line_idx];
-			if (len > inner - 1)
-				len = inner - 1;
+			if (len > content_w)
+				len = content_w;
 			sbuf_add(out, I->lines[line_idx], (size_t)len);
-			for (int i = len; i < inner - 1; i++)
+			for (int i = len; i < content_w; i++)
 				sbuf_addch(out, ' ');
 		} else {
-			for (int i = 0; i < inner - 1; i++)
+			for (int i = 0; i < content_w; i++)
 				sbuf_addch(out, ' ');
 		}
+		/* Scrollbar cell (between the body content and the right
+		 * border).  Render heavy block for the thumb range, dim
+		 * vertical line for the rest of the track. */
+		int is_thumb = r >= thumb_top && r < thumb_top + thumb_h;
+		if (is_thumb)
+			sbuf_addstr(out, "\x1b[0m\xe2\x96\x88");
+		else
+			sbuf_addstr(out, "\x1b[2m" VL);
 		sbuf_addstr(out, INFO_BORDER);
 		sbuf_addstr(out, VL);
 	}
@@ -888,29 +952,18 @@ void tui_info_render(struct sbuf *out, const struct tui_info *I)
 	sbuf_addstr(out, "\xe2\x94\x98");
 	sbuf_addstr(out, INFO_RESET);
 
-	/* Hint line below the box.  Scroll indicator when there's more
-	 * content than fits. */
+	/* Hint line below the box.  The "more above/below" indicator
+	 * lived here before the body got its own vertical scrollbar;
+	 * with the scrollbar in place the position is visible at a
+	 * glance, so the hint shrinks back to just the keymap. */
 	if (top + box_rows < I->origin_y + I->height) {
-		const char *more = "";
-		if (I->n_lines > body_rows) {
-			if (I->top_line == 0)
-				more = "  \xe2\x96\xbc more below";
-			else if (I->top_line + body_rows >= I->n_lines)
-				more = "  \xe2\x96\xb2 more above";
-			else
-				more = "  \xe2\x96\xb2\xe2\x96\xbc more "
-				       "above/below";
-		}
 		sbuf_addf(out, "\x1b[%d;%dH%s", top + box_rows, left,
 			  INFO_HINT);
 		sbuf_addch(out, ' ');
-		struct sbuf hint = SBUF_INIT;
-		sbuf_addstr(&hint,
-			    "\xe2\x86\x91\xe2\x86\x93 scroll  \xe2\x80\xa2"
-			    "  Esc / q / Enter close");
-		sbuf_addstr(&hint, more);
-		sbuf_pad(out, hint.buf, cols - 1);
-		sbuf_release(&hint);
+		sbuf_pad(out,
+			 "\xe2\x86\x91\xe2\x86\x93 scroll  \xe2\x80\xa2"
+			 "  Esc / q / Enter close",
+			 cols - 1);
 		sbuf_addstr(out, INFO_RESET);
 	}
 
@@ -925,7 +978,473 @@ void tui_info_render(struct sbuf *out, const struct tui_info *I)
 /*  Scrolling log pane                                                */
 /* ================================================================== */
 
-void tui_log_init(struct tui_log *L, int max_lines)
+/*
+ * Process-wide modal-owner pointer.  Search and help are screen-level
+ * overlays drawn over the body -- two simultaneous prompts would
+ * paint over each other if two panes both opened one.  This pointer
+ * arbitrates: a log may open a modal only when the slot is empty or
+ * already its own; the slot is released on dismissal.  Single-
+ * threaded codebase, so a plain pointer is enough.
+ */
+static struct tui_log *tui_inspect_modal_owner;
+
+/*
+ * Live-mode help: the orientation page the user gets via Ctrl-T+?
+ * (or Ctrl-T+h alias) while the pane is in live mode.  Describes
+ * what the pane is, mentions inspect mode exists, and points the
+ * user to plain-? once inside inspect for the full keymap.
+ */
+static const char tui_inspect_live_help_title[] = "pane (live mode)";
+
+static const char tui_inspect_live_help_body[] =
+    "This pane displays log / output from various sources via a\n"
+    "vt100 terminal emulator -- a command's stdout, a chip's UART,\n"
+    "or any other byte stream the host hands in.  Live mode is\n"
+    "pure passthrough: every keystroke goes to the underlying\n"
+    "stream except the Ctrl-T prefix.\n"
+    "\n"
+    "The pane also supports inspect mode -- a separate mode that\n"
+    "freezes a snapshot of the scrollback so you can browse back\n"
+    "and search without losing your place in the live stream.\n"
+    "Once you enter inspect, the pane stays in inspect until you\n"
+    "explicitly exit it with Esc or q.\n"
+    "\n"
+    "Shortcuts (after the Ctrl-T prefix):\n"
+    "  Ctrl-T i       Enter inspect mode.\n"
+    "  Ctrl-T ?       Show this help.\n"
+    "\n"
+    "PgUp or the mouse wheel also enters inspect mode and starts\n"
+    "scrolling immediately.\n"
+    "\n"
+    "Once in inspect, press ? for the inspect-mode keymap\n"
+    "(search, yank, navigation, exit).\n";
+
+/*
+ * Inspect-mode help: the keymap reference shown by plain ? while
+ * the pane is already in inspect.  Focused on what the user can
+ * do inside inspect; entry methods belong on the live-mode help.
+ */
+static const char tui_inspect_help_title[] = "pane inspect mode";
+
+static const char tui_inspect_help_body[] =
+    "Inspect mode is a frozen snapshot of this pane's scrollback,\n"
+    "so you can scroll back, search, and copy without losing your\n"
+    "place in the live stream.  New bytes keep arriving in the\n"
+    "background but stay off the screen until you explicitly exit.\n"
+    "\n"
+    "Inspect stays active until you press Esc or q -- scrolling\n"
+    "past the live tail (PgDn / G / Down / wheel) just clamps the\n"
+    "anchor at the bottom; it does NOT exit.  This is so you can\n"
+    "keep your place while quickly checking what's still arriving.\n"
+    "\n"
+    "Shortcuts:\n"
+    "  /              Open the regex search prompt (PCRE2).\n"
+    "  n / N          Jump to the next / previous match.\n"
+    "  j / Down       Scroll one line down.\n"
+    "  k / Up         Scroll one line up.\n"
+    "  PgDn           Scroll one page down.\n"
+    "  PgUp           Scroll one page up.\n"
+    "  Wheel          Mouse-wheel scroll.\n"
+    "  g / Home       Top of the snapshot.\n"
+    "  G / End        Bottom of the snapshot.\n"
+    "  y              Yank the current line to the system clipboard\n"
+    "                 (OSC 52; tmux needs set-clipboard=on).\n"
+    "  Shift+drag     Select text natively for copy.  Pastes arrive\n"
+    "                 wrapped in bracketed-paste so they don't trip\n"
+    "                 hotkeys mid-paste.\n"
+    "  ?              Show this help.\n"
+    "  Esc / q        Exit inspect mode (back to live).\n";
+
+/*
+ * Forward declaration: nav dispatch into the existing line-step /
+ * page-step path defined later in this file.  The inspect helpers
+ * below feed it events that have already been normalised onto the
+ * canonical @ref term_key set.
+ */
+static int tui_log_nav_step(struct tui_log *L, const struct term_event *ev);
+
+static void tui_inspect_set_active(struct tui_log *L, int mode)
+{
+	L->inspect_mode = mode;
+	L->inspect_active = mode != TUI_INSPECT_LIVE;
+}
+
+/* Open the search prompt iff no other log holds the modal slot.
+ * Returns 1 on success, 0 on refusal. */
+static int tui_inspect_open_search(struct tui_log *L)
+{
+	if (tui_inspect_modal_owner && tui_inspect_modal_owner != L)
+		return 0;
+	const char *seed = tui_log_search_pattern(L);
+	tui_prompt_init(&L->inspect_search, "search:", seed ? seed : "");
+	tui_prompt_resize(&L->inspect_search, L->width, L->height);
+	tui_prompt_set_origin(&L->inspect_search, L->origin_x, L->origin_y);
+	tui_inspect_set_active(L, TUI_INSPECT_SEARCH);
+	tui_inspect_modal_owner = L;
+	return 1;
+}
+
+/*
+ * Open the help modal iff the modal slot is free / ours.  Two
+ * orthogonal questions:
+ *
+ *   - @p live picks which body to render: the live-mode
+ *     orientation page (what the pane is, how to enter inspect,
+ *     the cmd-prefix shortcuts) or the inspect-mode keymap
+ *     reference.
+ *   - The widget's CURRENT mode -- not @p live -- decides what
+ *     to do on dismissal.  If we were live we freeze for a
+ *     stable backdrop and unfreeze on close (back to live); if
+ *     we were already in NAV the freeze is in place and we just
+ *     restore NAV.  Tracked via @c inspect_help_was_live.
+ */
+static int tui_inspect_open_help(struct tui_log *L, int live)
+{
+	if (tui_inspect_modal_owner && tui_inspect_modal_owner != L)
+		return 0;
+	const char *title =
+	    live ? tui_inspect_live_help_title : tui_inspect_help_title;
+	const char *body =
+	    live ? tui_inspect_live_help_body : tui_inspect_help_body;
+	tui_info_init(&L->inspect_help, title, body);
+	tui_info_resize(&L->inspect_help, L->width, L->height);
+	tui_info_set_origin(&L->inspect_help, L->origin_x, L->origin_y);
+	int was_live = !L->inspect_active;
+	if (was_live)
+		tui_log_freeze(L);
+	L->inspect_help_was_live = was_live;
+	/*
+	 * @c inspect_mode flips to @c HELP for event routing
+	 * (handle_help handles modal-up keys), but the visible
+	 * @c inspect_active flag tracks the underlying state, not
+	 * the modal layer.  So Ctrl-T+? from live keeps the status
+	 * bar in live-mode chrome ("Ctrl-T: i=inspect ?=help") --
+	 * the user is reading orientation help, not committing to
+	 * inspect.  Plain `?` from inspect keeps it in inspect-mode
+	 * chrome ([INSPECT] + the inspect keymap hints).
+	 */
+	L->inspect_mode = TUI_INSPECT_HELP;
+	L->inspect_active = !was_live;
+	L->inspect_help_active = 1;
+	tui_inspect_modal_owner = L;
+	return 1;
+}
+
+/* Drop a modal back to whichever mode preceded it.  Search dismiss
+ * always returns to NAV (search is only opened from inspect).
+ * Help dismiss returns to LIVE (and unfreezes) when the help was
+ * opened from live -- the user pressed Ctrl-T+? to read the
+ * orientation page, not to commit to inspect. */
+static void tui_inspect_close_modal(struct tui_log *L)
+{
+	int was_help = L->inspect_help_active;
+	int was_live = L->inspect_help_was_live;
+
+	if (L->inspect_help_active) {
+		tui_info_release(&L->inspect_help);
+		L->inspect_help_active = 0;
+		L->inspect_help_was_live = 0;
+	}
+	if (tui_inspect_modal_owner == L)
+		tui_inspect_modal_owner = NULL;
+
+	if (was_help && was_live) {
+		/* Live-help dismiss: the visible mode never flipped to
+		 * inspect (we kept @c inspect_active = 0 above), so we
+		 * just unfreeze and restore the routing mode without
+		 * touching the visible state. */
+		tui_log_unfreeze(L);
+		L->inspect_mode = TUI_INSPECT_LIVE;
+		L->inspect_active = 0;
+	} else {
+		/* Inspect-help / search dismiss: stay in NAV. */
+		L->inspect_mode = TUI_INSPECT_NAV;
+		L->inspect_active = 1;
+	}
+}
+
+/* Translate vim shortcuts and mouse wheel onto the canonical
+ * @ref term_key set so the nav switch below stays compact. */
+static int tui_inspect_normalise_nav_key(int key)
+{
+	switch (key) {
+	case 'j':
+		return TK_DOWN;
+	case 'k':
+		return TK_UP;
+	case 'g':
+		return TK_HOME;
+	case 'G':
+		return TK_END;
+	case TK_WHEEL_UP:
+		return TK_UP;
+	case TK_WHEEL_DOWN:
+		return TK_DOWN;
+	default:
+		return key;
+	}
+}
+
+/*
+ * Strip ANSI escape sequences (CSI / SS3 / OSC) from @p in into @p out
+ * so the bytes that land on the user's clipboard are plain text.  The
+ * destination buffer must hold at least @p len bytes; the function
+ * returns how many it wrote (always <= len).
+ */
+static size_t tui_inspect_strip_ansi(const char *in, size_t len, char *out)
+{
+	size_t w = 0;
+	size_t i = 0;
+	while (i < len) {
+		unsigned char c = (unsigned char)in[i];
+		if (c == 0x1b && i + 1 < len) {
+			unsigned char n2 = (unsigned char)in[i + 1];
+			if (n2 == '[') {
+				/* CSI: skip until final byte 0x40..0x7E. */
+				i += 2;
+				while (i < len) {
+					unsigned char fb =
+					    (unsigned char)in[i++];
+					if (fb >= 0x40 && fb <= 0x7E)
+						break;
+				}
+			} else if (n2 == ']') {
+				/* OSC: skip until BEL or ST (\e\\). */
+				i += 2;
+				while (i < len) {
+					unsigned char fb =
+					    (unsigned char)in[i++];
+					if (fb == 0x07)
+						break;
+					if (fb == 0x1b && i < len &&
+					    in[i] == '\\') {
+						i++;
+						break;
+					}
+				}
+			} else {
+				/* Two-byte escape we don't model -- drop. */
+				i += 2;
+			}
+		} else if (c == 0x1b) {
+			/* Lone ESC at end -- drop. */
+			i++;
+		} else {
+			out[w++] = (char)c;
+		}
+	}
+	return w;
+}
+
+/* Base64 encode @p len bytes from @p in, appending to @p out (no
+ * newlines, '=' padding).  Standard alphabet -- xterm / kitty / iTerm
+ * / tmux / Windows Terminal all decode this fine. */
+static void tui_inspect_b64_into(const char *in, size_t len, struct sbuf *out)
+{
+	static const char tab[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+				  "abcdefghijklmnopqrstuvwxyz"
+				  "0123456789+/";
+	for (size_t i = 0; i < len; i += 3) {
+		unsigned a = (unsigned char)in[i];
+		unsigned b = i + 1 < len ? (unsigned char)in[i + 1] : 0;
+		unsigned c = i + 2 < len ? (unsigned char)in[i + 2] : 0;
+		sbuf_addch(out, tab[(a >> 2) & 0x3f]);
+		sbuf_addch(out, tab[((a << 4) | (b >> 4)) & 0x3f]);
+		sbuf_addch(out, i + 1 < len ? tab[((b << 2) | (c >> 6)) & 0x3f]
+					    : '=');
+		sbuf_addch(out, i + 2 < len ? tab[c & 0x3f] : '=');
+	}
+}
+
+/*
+ * Push @p text to the host terminal's clipboard via OSC 52.  Most
+ * modern terminals (xterm, alacritty, kitty, iTerm2, foot, Windows
+ * Terminal) honour this directly; tmux requires
+ * @c{set -g set-clipboard on} in the user's config or it silently
+ * drops the payload.  No-op when @p len is 0.
+ */
+static void tui_inspect_emit_osc52(const char *text, size_t len)
+{
+	if (len == 0)
+		return;
+	struct sbuf payload = SBUF_INIT;
+	sbuf_addstr(&payload, "\x1b]52;c;");
+	tui_inspect_b64_into(text, len, &payload);
+	sbuf_addch(&payload, 0x07);
+	fwrite(payload.buf, 1, payload.len, stdout);
+	fflush(stdout);
+	sbuf_release(&payload);
+}
+
+/*
+ * Resolve the global line index the inspect cursor is "on".  When
+ * tailing (anchor < 0) we yank the most recent completed line; when
+ * frozen the anchor itself is the index.  Returns NULL when the
+ * buffer is empty or the index has been evicted from the ring.
+ */
+static const char *tui_inspect_line_at_cursor(const struct tui_log *L)
+{
+	long long target = L->anchor;
+	if (target < 0)
+		target = L->total_pushed - 1;
+	if (target < 0)
+		return NULL;
+	long long oldest = L->total_pushed - L->n_lines;
+	if (target < oldest || target >= L->total_pushed)
+		return NULL;
+	int slot = (int)((L->start + (target - oldest)) % L->cap_lines);
+	return L->lines[slot];
+}
+
+/* Yank the line under the inspect cursor to the clipboard via OSC 52,
+ * after stripping any embedded ANSI sequences so the user pastes
+ * plain text. */
+static void tui_inspect_yank(const struct tui_log *L)
+{
+	const char *line = tui_inspect_line_at_cursor(L);
+	if (!line)
+		return;
+	size_t len = strlen(line);
+	if (len == 0)
+		return;
+	char *plain = malloc(len);
+	if (!plain)
+		return;
+	size_t plen = tui_inspect_strip_ansi(line, len, plain);
+	tui_inspect_emit_osc52(plain, plen);
+	free(plain);
+}
+
+static int tui_inspect_handle_nav(struct tui_log *L,
+				  const struct term_event *ev)
+{
+	int key = tui_inspect_normalise_nav_key(ev->key);
+
+	switch (key) {
+	case TK_UP:
+	case TK_DOWN:
+	case TK_PGUP:
+	case TK_PGDN:
+	case TK_HOME:
+	case TK_END: {
+		/* No auto-exit: once inspect is entered the user stays
+		 * in inspect until an explicit Esc / q.  PgDn / Down /
+		 * G / wheel-down past the live tail just clamp the
+		 * anchor at the tail; the snapshot remains frozen and
+		 * the [INSPECT] badge stays up. */
+		struct term_event nav = {.key = key};
+		tui_log_nav_step(L, &nav);
+		return 1;
+	}
+	case '/':
+		tui_inspect_open_search(L);
+		return 1;
+	case 'n':
+		tui_log_search_next(L);
+		return 1;
+	case 'N':
+		tui_log_search_prev(L);
+		return 1;
+	case '?':
+		/* `?` while in inspect → inspect-mode help (the keymap
+		 * reference for what the user can do right now). */
+		tui_inspect_open_help(L, 0);
+		return 1;
+	case 'y':
+	case 'Y':
+		tui_inspect_yank(L);
+		return 1;
+	case TK_ESC:
+	case 'q':
+	case 'Q':
+		tui_log_search_clear(L);
+		tui_log_unfreeze(L);
+		tui_inspect_set_active(L, TUI_INSPECT_LIVE);
+		return 1;
+	default:
+		/* Unknown key in NAV: still consumed -- the host MUST NOT
+		 * forward keystrokes to its underlying stream while we
+		 * own the input.  Returning 0 here would let a stray
+		 * byte slip through to gdb / serial. */
+		return 1;
+	}
+}
+
+static int tui_inspect_handle_search(struct tui_log *L,
+				     const struct term_event *ev)
+{
+	int r = tui_prompt_on_event(&L->inspect_search, ev);
+	if (r == 1) {
+		/* Enter: compile + apply.  On compile failure keep the
+		 * prompt up with an error in the title so the user can
+		 * fix without losing what they had. */
+		int rc = tui_log_search_set(L, L->inspect_search.buf);
+		if (rc < 0) {
+			L->inspect_search.title = "invalid regex - search:";
+		} else {
+			tui_inspect_close_modal(L);
+		}
+	} else if (r == -1) {
+		/* Esc: cancel without disturbing any previously-applied
+		 * pattern. */
+		tui_inspect_close_modal(L);
+	}
+	return 1;
+}
+
+static int tui_inspect_handle_help(struct tui_log *L,
+				   const struct term_event *ev)
+{
+	if (tui_info_on_event(&L->inspect_help, ev))
+		tui_inspect_close_modal(L);
+	return 1;
+}
+
+/* LIVE-mode auto-enter: PgUp / PgDn / wheel triggers freeze + first
+ * scroll dispatch.  If the dispatch left the log still at the tail
+ * (e.g. wheel-down on a fresh log, PgDn from live), undo the freeze
+ * so we don't park in NAV for a no-op -- matches the user's mental
+ * model of "scroll down at the end did nothing". */
+static int tui_inspect_try_auto_enter(struct tui_log *L,
+				      const struct term_event *ev)
+{
+	if (ev->key != TK_PGUP && ev->key != TK_PGDN &&
+	    ev->key != TK_WHEEL_UP && ev->key != TK_WHEEL_DOWN)
+		return 0;
+
+	tui_log_freeze(L);
+	tui_inspect_set_active(L, TUI_INSPECT_NAV);
+
+	struct term_event nav = {.key = ev->key};
+	if (ev->key == TK_WHEEL_UP)
+		nav.key = TK_UP;
+	else if (ev->key == TK_WHEEL_DOWN)
+		nav.key = TK_DOWN;
+	tui_log_nav_step(L, &nav);
+
+	if (tui_log_is_tailing(L)) {
+		/* No-op auto-enter (e.g. wheel-down on a fresh log,
+		 * PgDn at the tail): undo the freeze and stay live so
+		 * the user doesn't get parked in inspect for nothing.
+		 * Different from auto-EXIT -- this only fires when the
+		 * very entry didn't move; once the user has scrolled,
+		 * nav back to the tail keeps inspect active. */
+		tui_log_unfreeze(L);
+		tui_inspect_set_active(L, TUI_INSPECT_LIVE);
+	}
+	return 1;
+}
+
+void tui_log_inspect_enter(struct tui_log *L)
+{
+	if (L->inspect_active)
+		return;
+	tui_log_freeze(L);
+	tui_inspect_set_active(L, TUI_INSPECT_NAV);
+}
+
+void tui_log_init(struct tui_log *L, int max_lines, int status_pos,
+		  unsigned status_flags, const char *status_prefix)
 {
 	memset(L, 0, sizeof(*L));
 	L->origin_x = 1;
@@ -937,12 +1456,19 @@ void tui_log_init(struct tui_log *L, int max_lines)
 	sbuf_init(&L->pending);
 	L->anchor = -1;	 /* live-tail by default */
 	L->ceiling = -1; /* no snapshot */
+	L->status_pos = status_pos;
+	L->status_flags = status_flags;
+	L->status_prefix = status_prefix;
 }
 
 void tui_log_set_origin(struct tui_log *L, int x, int y)
 {
 	L->origin_x = x;
 	L->origin_y = y;
+	if (L->inspect_mode == TUI_INSPECT_SEARCH)
+		tui_prompt_set_origin(&L->inspect_search, x, y);
+	if (L->inspect_mode == TUI_INSPECT_HELP)
+		tui_info_set_origin(&L->inspect_help, x, y);
 }
 
 void tui_log_release(struct tui_log *L)
@@ -963,12 +1489,35 @@ void tui_log_release(struct tui_log *L)
 	L->snapshot_cols = 0;
 	sbuf_release(&L->pending);
 	tui_log_search_clear(L);
+
+	/* Inspect-mode teardown: release the help-modal line array if we
+	 * still own it and clear our slot in the global modal lock so a
+	 * sibling pane isn't left thinking we still hold it. */
+	if (L->inspect_help_active) {
+		tui_info_release(&L->inspect_help);
+		L->inspect_help_active = 0;
+	}
+	if (tui_inspect_modal_owner == L)
+		tui_inspect_modal_owner = NULL;
+	tui_inspect_set_active(L, TUI_INSPECT_LIVE);
 }
 
 void tui_log_resize(struct tui_log *L, int width, int height)
 {
 	L->width = width;
 	L->height = height;
+	/* Inspect-mode modals are scoped to the pane's own rect so a
+	 * search prompt / help opened on this log centres inside its
+	 * own pane in dual-pane layouts. */
+	if (L->inspect_mode == TUI_INSPECT_SEARCH) {
+		tui_prompt_resize(&L->inspect_search, width, height);
+		tui_prompt_set_origin(&L->inspect_search, L->origin_x,
+				      L->origin_y);
+	}
+	if (L->inspect_mode == TUI_INSPECT_HELP) {
+		tui_info_resize(&L->inspect_help, width, height);
+		tui_info_set_origin(&L->inspect_help, L->origin_x, L->origin_y);
+	}
 }
 
 void tui_log_freeze(struct tui_log *L)
@@ -1032,11 +1581,6 @@ void tui_log_unfreeze(struct tui_log *L)
 }
 
 int tui_log_is_frozen(const struct tui_log *L) { return L->ceiling >= 0; }
-
-void tui_log_set_status(struct tui_log *L, const char *status)
-{
-	L->status = status;
-}
 
 void tui_log_set_footer(struct tui_log *L, const char *footer)
 {
@@ -1621,18 +2165,25 @@ static int log_pick_window_at(const struct tui_log *L, int body_rows,
 }
 
 /*
- * Body rows match render's geometry: row 1 holds the status when set,
- * row @c height holds the footer when set, the rest belongs to the
- * scrolling log body.  @ref tui_log_on_event uses this to size paged
+ * Body rows match render's geometry: when @c status_pos is @c TOP
+ * the first row holds the status; when @c BOTTOM the last row does;
+ * when @c NONE neither row is reserved.  An optional @c footer takes
+ * the row immediately above the status (when @c BOTTOM) or the last
+ * row (otherwise).  @ref tui_log_on_event uses this to size paged
  * scrolls (PgUp / PgDn move by exactly one body height so the next
  * page abuts cleanly with the previous one).
  */
 static int log_body_rows(const struct tui_log *L)
 {
-	int body_top = (L->status && L->height >= 1) ? 2 : 1;
+	int body_top = 1;
 	int body_bottom = L->height;
-	if (L->footer && L->height >= body_top + 1)
+	if (L->status_pos == TUI_LOG_STATUS_TOP && L->height >= 1)
+		body_top = 2;
+	if (L->status_pos == TUI_LOG_STATUS_BOTTOM && L->height >= body_top)
 		body_bottom = L->height - 1;
+	if (L->footer && L->height >= body_top + 1 &&
+	    L->status_pos != TUI_LOG_STATUS_BOTTOM)
+		body_bottom = body_bottom - 1;
 	int rows = body_bottom - body_top + 1;
 	return rows > 0 ? rows : 0;
 }
@@ -1682,7 +2233,16 @@ static int log_bottom_idx(const struct tui_log *L)
 
 int tui_log_is_tailing(const struct tui_log *L) { return L->anchor < 0; }
 
-int tui_log_on_event(struct tui_log *L, const struct term_event *ev)
+/*
+ * Inner navigation step.  Walks @c L->anchor by one line / page /
+ * jump in response to @c TK_UP / @c TK_DOWN / @c TK_PGUP / @c TK_PGDN
+ * / @c TK_HOME / @c TK_END events.  Used by both the public inspect-
+ * aware @ref tui_log_on_event entry point (after auto-enter) and the
+ * helpers that synthesise nav events from vim shortcuts and the
+ * mouse wheel.  Other events return 0; callers layer their own
+ * bindings on top.
+ */
+static int tui_log_nav_step(struct tui_log *L, const struct term_event *ev)
 {
 	int total = log_total(L);
 	if (total == 0)
@@ -1763,6 +2323,119 @@ int tui_log_on_event(struct tui_log *L, const struct term_event *ev)
 }
 
 /*
+ * Prefix-mode dispatch.  When the host sees a @c Ctrl-T followed by
+ * a key it doesn't itself reserve, it forwards both events to the
+ * focused widget; we set @c prefix_pending on @c Ctrl-T and run
+ * this on the next event.
+ *
+ * Fixed advertised set:
+ *
+ *   i / I       Enter inspect (freeze + NAV).
+ *   y / Y       Yank the line under the inspect cursor (works in
+ *               live too -- yanks the most recent completed line).
+ *   ?           Show the live-mode orientation help.
+ *   Esc / q / Q Exit inspect (no-op in live).
+ *
+ * @c h / @c H is also accepted as a hidden alias for @c ? -- only
+ * relevant for single-pane cmds that don't themselves reserve
+ * @c Ctrl-T+h, so the gesture lands somewhere instead of being a
+ * silent no-op.  Multi-pane cmds (e.g. @c{ice qemu --debug}) claim
+ * @c Ctrl-T+h for their own orchestrator-level help and the widget
+ * never sees it.  The alias is therefore not advertised in the
+ * widget's status hint or help body.
+ *
+ * Anything else is silently consumed -- never forwarded -- so a
+ * stray @c Ctrl-T+a doesn't leak an @c a byte to the underlying
+ * stream and doesn't drop the user into inspect for nothing.
+ * Inspect-mode shortcuts (@c /, @c n, @c N, scroll keys) are
+ * reachable inside inspect via their plain bindings; entry is
+ * @c Ctrl-T+i, @c PgUp, or the mouse wheel.
+ */
+static int tui_inspect_handle_prefix(struct tui_log *L,
+				     const struct term_event *ev)
+{
+	L->prefix_pending = 0;
+	int key = ev->key;
+
+	/* While a modal (search prompt or help) is already up the
+	 * user can't usefully invoke another widget command --
+	 * pressing Ctrl-T+? again would otherwise replace the
+	 * existing modal with a different help body, which reads
+	 * as flicker.  Silently consume the forwarded key so it
+	 * doesn't leak to the underlying stream and let the modal
+	 * stay where it is.  The user can dismiss it (Esc / q) and
+	 * try again. */
+	if (L->inspect_mode == TUI_INSPECT_SEARCH ||
+	    L->inspect_mode == TUI_INSPECT_HELP)
+		return 1;
+
+	if (key == 'i' || key == 'I') {
+		if (L->inspect_mode == TUI_INSPECT_LIVE) {
+			tui_log_freeze(L);
+			tui_inspect_set_active(L, TUI_INSPECT_NAV);
+		}
+		return 1;
+	}
+	if (key == 'y' || key == 'Y') {
+		tui_inspect_yank(L);
+		return 1;
+	}
+	if (key == TK_ESC || key == 'q' || key == 'Q') {
+		if (L->inspect_active) {
+			tui_log_search_clear(L);
+			tui_log_unfreeze(L);
+			tui_inspect_set_active(L, TUI_INSPECT_LIVE);
+		}
+		return 1;
+	}
+
+	/* Help (?, h, H): the Ctrl-T+? gesture always shows the
+	 * live-mode orientation help (what the pane is, how to enter
+	 * inspect, the cmd-prefix shortcuts) regardless of current
+	 * mode -- it's the "what's this?" page, mode-agnostic.  The
+	 * inspect-mode keymap reference is reachable via plain `?`
+	 * while inside inspect (handled by handle_nav, not here).
+	 * Dismissing here returns the user to whatever state they
+	 * came from -- if they were in NAV, stay frozen; if they
+	 * were live, stay live. */
+	if (key == '?' || key == 'h' || key == 'H') {
+		tui_inspect_open_help(L, 1);
+		return 1;
+	}
+
+	/* Unknown widget-prefix key: silently consumed.  Mistakes
+	 * are cheap -- the user just tries again.  In particular
+	 * we do NOT auto-enter inspect for arbitrary keys; entry
+	 * is exactly @c Ctrl-T+i, @c PgUp, or mouse wheel. */
+	return 1;
+}
+
+int tui_log_on_event(struct tui_log *L, const struct term_event *ev)
+{
+	/* Widget-prefix latch.  The host sets it by forwarding a
+	 * @c Ctrl-T (0x14) event; the next event is then a widget
+	 * command (open help, open search, yank, nav, ...). */
+	if (L->prefix_pending)
+		return tui_inspect_handle_prefix(L, ev);
+	if (ev->key == 0x14) {
+		L->prefix_pending = 1;
+		return 1;
+	}
+
+	switch (L->inspect_mode) {
+	case TUI_INSPECT_LIVE:
+		return tui_inspect_try_auto_enter(L, ev);
+	case TUI_INSPECT_NAV:
+		return tui_inspect_handle_nav(L, ev);
+	case TUI_INSPECT_SEARCH:
+		return tui_inspect_handle_search(L, ev);
+	case TUI_INSPECT_HELP:
+		return tui_inspect_handle_help(L, ev);
+	}
+	return 0;
+}
+
+/*
  * Render the scrollbar track + thumb in the rightmost column of the
  * body region.  The thumb height/position approximate the visible
  * window's slice of the total scrollable buffer; we measure in logical
@@ -1822,22 +2495,86 @@ void tui_log_render(struct sbuf *out, const struct tui_log *L)
 	int body_top = L->origin_y;
 	int body_bottom = L->origin_y + L->height - 1;
 
-	/* Status bar at the top row of the widget (matches tui_list
-	 * title palette). */
-	if (L->status && L->height >= 1) {
-		sbuf_addf(out, "\x1b[%d;%dH\x1b[1;37;44m", L->origin_y,
-			  L->origin_x);
+	/*
+	 * Compose and paint the self-rendered status row.  Layout:
+	 *
+	 *   <prefix>  *  <[INSPECT badge]>  *  <key hints>
+	 *
+	 * The cmd hands in @c status_prefix at init time and never
+	 * touches it; the dynamic part (mode badge, search counter,
+	 * in-inspect hints) is widget-owned so the cmd doesn't need to
+	 * track inspect state for status purposes.  Position is
+	 * @c TOP / @c BOTTOM / @c NONE; the chosen row is excluded from
+	 * the body region computed below.
+	 */
+	if (L->status_pos != TUI_LOG_STATUS_NONE && L->height >= 1) {
+		struct sbuf row = SBUF_INIT;
+		if (L->status_prefix && *L->status_prefix)
+			sbuf_addstr(&row, L->status_prefix);
+		/*
+		 * Always paint the widget keymap hint so users discover
+		 * what's reachable without first having to enter inspect.
+		 * The hint is mode-shaped:
+		 *   - LIVE   -- "Ctrl-T:  ?=help  /=search  y=yank [x=exit]"
+		 *               (keys reachable via the cmd's prefix
+		 *               forwarding, with x=exit gated on
+		 *               @c TUI_LOG_SHOW_EXIT for hosts whose
+		 *               own status row doesn't already say so).
+		 *   - NAV/SEARCH/HELP -- "[INSPECT N/M]  *  Esc=back  *
+		 *               ?=help  /=search  n/N=next/prev  y=yank"
+		 *               (keys reachable directly without the
+		 *               prefix because the widget owns input).
+		 */
+		if (row.len)
+			sbuf_addstr(&row, "  \xe2\x80\xa2  ");
+		if (L->inspect_active) {
+			sbuf_addstr(&row, "[INSPECT");
+			if (tui_log_search_active(L)) {
+				int total = tui_log_search_total(L);
+				int idx = tui_log_search_index(L);
+				if (total <= 0)
+					sbuf_addstr(&row, " no match");
+				else if (idx > 0)
+					sbuf_addf(&row, " %d/%d", idx, total);
+				else
+					sbuf_addf(&row, " %d", total);
+			}
+			sbuf_addstr(&row, "]  \xe2\x80\xa2  ");
+			sbuf_addstr(&row, "Esc=back  ?=help  /=search  "
+					  "n/N=next/prev  y=yank");
+		} else {
+			/* Live-mode hint: just the entry points -- how to
+			 * inspect and how to see help.  The full keymap
+			 * (search, yank, vim shortcuts, ...) becomes
+			 * visible once the user enters inspect; surfacing
+			 * it all here would be noise.  Ctrl-T+i isn't a
+			 * cmd-reserved key but Ctrl-T forwards `i` to the
+			 * widget, where the prefix dispatcher auto-enters
+			 * inspect (handle_prefix's catch-all). */
+			sbuf_addstr(&row, "Ctrl-T:  i=inspect  ?=help");
+			if (L->status_flags & TUI_LOG_SHOW_EXIT)
+				sbuf_addstr(&row, "  x=exit");
+		}
+		int row_y = (L->status_pos == TUI_LOG_STATUS_TOP)
+				? L->origin_y
+				: L->origin_y + L->height - 1;
+		sbuf_addf(out, "\x1b[%d;%dH\x1b[1;37;44m", row_y, L->origin_x);
 		sbuf_addch(out, ' ');
-		sbuf_pad(out, L->status, L->width - 1);
+		sbuf_pad(out, row.buf ? row.buf : "", L->width - 1);
 		sbuf_addstr(out, "\x1b[0m");
-		body_top = L->origin_y + 1;
+		sbuf_release(&row);
+		if (L->status_pos == TUI_LOG_STATUS_TOP)
+			body_top = L->origin_y + 1;
+		else
+			body_bottom = L->origin_y + L->height - 2;
 	}
 
 	/* Footer at the last row of the widget (matches tui_list footer
 	 * palette).  Reserve only when we have at least one body row left
-	 * for it. */
-	if (L->footer && L->height >= (body_top - L->origin_y) + 2) {
-		body_bottom = L->origin_y + L->height - 2;
+	 * for it and the bottom-status doesn't already own that row. */
+	if (L->footer && L->status_pos != TUI_LOG_STATUS_BOTTOM &&
+	    body_bottom > body_top) {
+		body_bottom = body_bottom - 1;
 	}
 
 	int body_rows = body_bottom - body_top + 1;
@@ -1866,7 +2603,16 @@ void tui_log_render(struct sbuf *out, const struct tui_log *L)
 	int cursor_term_row = -1;
 	int cursor_term_col = 0;
 
-	if (L->vt100 && tui_log_is_tailing(L) &&
+	/* The live cursor only belongs on the live grid, never on the
+	 * frozen snapshot.  When @c ceiling is set we're showing
+	 * inspect-mode content and the cursor is meaningless there
+	 * (the user isn't typing to the underlying stream while
+	 * inspecting); leaving it on would paint the live cursor over
+	 * the snapshot's last row, which reads visually identical to
+	 * live mode and is what was making wheel-down past the tail
+	 * look like "inspect exited" even though the state was still
+	 * NAV. */
+	if (L->vt100 && L->ceiling < 0 && tui_log_is_tailing(L) &&
 	    vt100_cursor_visible(L->vt100)) {
 		cursor_user_idx =
 		    log_effective_n_lines(L) + vt100_cursor_row(L->vt100);
@@ -1987,7 +2733,8 @@ void tui_log_render(struct sbuf *out, const struct tui_log *L)
 	if (body_rows > 0 && L->width >= 1)
 		render_scrollbar(out, L, body_top, body_rows, bottom_idx);
 
-	if (L->footer && body_bottom < L->origin_y + L->height - 1) {
+	if (L->footer && L->status_pos != TUI_LOG_STATUS_BOTTOM &&
+	    body_bottom < L->origin_y + L->height - 1) {
 		sbuf_addf(out, "\x1b[%d;%dH\x1b[37;44m",
 			  L->origin_y + L->height - 1, L->origin_x);
 		sbuf_addch(out, ' ');
@@ -2005,6 +2752,16 @@ void tui_log_render(struct sbuf *out, const struct tui_log *L)
 	if (cursor_term_row > 0 && cursor_term_col > 0)
 		sbuf_addf(out, "\x1b[%d;%dH\x1b[?25h", cursor_term_row,
 			  cursor_term_col);
+
+	/* Inspect-mode overlay: paint the search prompt or help modal
+	 * on top of the body when active.  The widgets are sized to
+	 * the pane's own rect by @ref tui_log_resize so the modal
+	 * sits inside the pane in dual-pane layouts; that's where the
+	 * user expects it to belong. */
+	if (L->inspect_mode == TUI_INSPECT_SEARCH)
+		tui_prompt_render(out, &L->inspect_search);
+	else if (L->inspect_mode == TUI_INSPECT_HELP)
+		tui_info_render(out, &L->inspect_help);
 }
 
 /* ================================================================== */

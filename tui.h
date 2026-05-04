@@ -99,6 +99,23 @@ void tui_rect_split_h(const struct tui_rect *parent, struct tui_rect *top,
 struct tui_rect tui_rect_inset(struct tui_rect r, int top, int right,
 			       int bottom, int left);
 
+/**
+ * @brief Paint a one-row status bar across @p r with @p text.
+ *
+ * Emits a cursor jump to @p r->y / @p r->x, switches to @p sgr (e.g.
+ * @c "1;37;44" for bold white-on-blue), prints a leading space, then
+ * @p text truncated or right-padded to fit @p r->w.  SGR is reset
+ * before returning.  No-op when @p r is empty.
+ *
+ * Used by @c{ice monitor}, @c{ice qemu}, and @c{ice qemu --debug}
+ * to draw their cmd-level top status row outside the @ref tui_log
+ * widget's own self-rendered status row -- the cmd row carries
+ * cmd-prefix shortcuts (h=help, x=exit, ...) while the widget row
+ * carries widget-prefix shortcuts (i=inspect, ?=help, ...).
+ */
+void tui_status_bar(struct sbuf *out, const struct tui_rect *r,
+		    const char *text, const char *sgr);
+
 /* ================================================================== */
 /*  Scrollable list                                                   */
 /* ================================================================== */
@@ -387,6 +404,52 @@ typedef int (*tui_log_decorate_fn)(const char *line, size_t len, void *ctx,
  * If @c status is NULL the body extends up to row 1.  If @c footer is
  * NULL the body extends down to row @c height.
  */
+/*
+ * Inspect-mode sub-state, used by the embedded state machine inside
+ * @ref tui_log.  @c TUI_INSPECT_LIVE means the log is dormant and
+ * keys flow through unmodified; the other values gate the freeze
+ * snapshot, the regex search prompt, and the keymap-help modal.
+ * Most callers don't touch the enum directly -- they read
+ * @c L->inspect_active to drive their status bar.
+ */
+enum tui_inspect_mode {
+	TUI_INSPECT_LIVE = 0, /* dormant; log is not frozen */
+	TUI_INSPECT_NAV,      /* frozen; nav / vim shortcuts active */
+	TUI_INSPECT_SEARCH,   /* search prompt is up */
+	TUI_INSPECT_HELP,     /* help modal is up */
+};
+
+/*
+ * Where the widget paints its self-rendered status row inside its
+ * own rect.  Pick on init via @ref tui_log_init.
+ *
+ *   @c TUI_LOG_STATUS_NONE     no status row -- body fills the rect.
+ *   @c TUI_LOG_STATUS_TOP      status row at @c origin_y, body
+ *                              starts one row down.
+ *   @c TUI_LOG_STATUS_BOTTOM   status row at @c origin_y+height-1,
+ *                              body ends one row above.
+ *
+ * Single-pane commands typically pick @c TOP (the row reads as the
+ * window title); multi-pane layouts typically pick @c BOTTOM on each
+ * pane so the host's own top status bar stays visually distinct from
+ * the per-pane chrome.
+ */
+enum tui_log_status_pos {
+	TUI_LOG_STATUS_NONE = 0,
+	TUI_LOG_STATUS_TOP,
+	TUI_LOG_STATUS_BOTTOM,
+};
+
+/*
+ * Init-time flags controlling status-bar chrome the widget paints.
+ * Currently a single bit: when @c TUI_LOG_SHOW_EXIT is set the live-
+ * mode hint includes @c x=exit, telling the user the cmd quits on
+ * @c Ctrl-T+x.  Single-pane hosts (monitor, qemu) typically set it;
+ * multi-pane hosts (qemu --debug) leave it clear because their own
+ * top-level status row already advertises the quit binding.
+ */
+#define TUI_LOG_SHOW_EXIT (1u << 0)
+
 struct tui_log {
 	char **lines;  /**< Ring of completed lines (heap strings). */
 	int cap_lines; /**< Ring capacity (oldest evicted on overflow). */
@@ -425,8 +488,26 @@ struct tui_log {
 	int width;
 	int height;
 
-	const char *status; /**< Top status bar; widget does not own. */
-	const char *footer; /**< Bottom hint; widget does not own. */
+	/* ---- Self-rendered status row.
+	 *
+	 * The cmd hands in a static identity portion (@c status_prefix)
+	 * at init time and never touches it again.  The widget composes
+	 * the visible row at render time as
+	 *
+	 *     <prefix>  *  <[INSPECT badge]>  *  <key hints>
+	 *
+	 * so the dynamic part (mode badge, search counter, in-inspect
+	 * hints) lives entirely inside the widget.  @c status_pos
+	 * controls whether the row sits at the top, bottom, or is
+	 * suppressed entirely. */
+	const char *status_prefix; /**< Identity portion; not owned. */
+	int status_pos;		   /**< @ref tui_log_status_pos. */
+	unsigned status_flags;	   /**< Bitmask of @c TUI_LOG_* flags. */
+
+	/* Optional bottom-of-rect hint, separate from the status row.
+	 * Currently unused by the in-tree commands; kept for callers
+	 * that want a second chrome row. */
+	const char *footer;
 
 	tui_log_decorate_fn decorate_fn; /**< Per-line overlay producer;
 					  *   NULL renders verbatim. */
@@ -452,17 +533,63 @@ struct tui_log {
 	struct vt100_cell *snapshot;
 	int snapshot_rows;
 	int snapshot_cols;
+
+	/* ---- Inspect-mode state (embedded; see @ref tui_inspect_mode).
+	 *
+	 * @c inspect_active is the public bool callers read to flip
+	 * status-bar chrome ("[INSPECT]" badge, key hints).  The other
+	 * fields are widget internals -- search prompt, help modal,
+	 * mode, and a "have I scrolled off the tail at any point this
+	 * session" latch that gates auto-exit so manual @c Ctrl-T+i
+	 * followed by @c Down doesn't immediately kick the user out.
+	 *
+	 * The widgets are sized to the pane's own rect so modals open
+	 * scoped to the pane, not the whole screen -- in dual-pane
+	 * layouts each pane's search / help sits inside its own
+	 * rectangle. */
+	int inspect_mode;	   /**< @ref tui_inspect_mode value. */
+	int inspect_active;	   /**< Mirrors @c inspect_mode != LIVE. */
+	int inspect_help_active;   /**< 1 while help body is parsed. */
+	int inspect_help_was_live; /**< Help opened from live mode --
+				    *   on dismiss, return to live and
+				    *   unfreeze.  Helps `Ctrl-T+?` from
+				    *   live not commit the user to NAV
+				    *   when they only wanted to read the
+				    *   live-mode help. */
+	struct tui_prompt inspect_search; /**< Search prompt widget. */
+	struct tui_info inspect_help;	  /**< Help modal widget. */
+
+	/* Widget-level prefix latch.  Set when the host forwards a
+	 * @c Ctrl-T (0x14) event after deciding the second key isn't
+	 * cmd-reserved; the next event is then treated as an in-widget
+	 * command (open help, open search, yank, nav, ...) regardless
+	 * of inspect state.  Cleared after dispatch. */
+	int prefix_pending;
 };
 
 /**
- * @brief Initialise an empty log with @p max_lines of scrollback.
+ * @brief Initialise an empty log with @p max_lines of scrollback,
+ *        a status-row position, status flags, and a host-supplied
+ *        identity prefix.
  *
  * Allocates the ring; pair with @ref tui_log_release.  @p max_lines
- * must be > 0.  Callers typically pick a few thousand -- once on the
- * alt screen the terminal's native scrollback is gone, so the ring is
- * the only history users can navigate.
+ * must be > 0; callers typically pick a few thousand (once on the
+ * alt screen the terminal's native scrollback is gone, so the ring
+ * is the only history users can navigate).
+ *
+ * @p status_pos picks where the widget paints its self-rendered
+ * status row (top, bottom, or none); see @ref tui_log_status_pos.
+ * @p status_flags is a bitmask of @c TUI_LOG_SHOW_EXIT etc. that
+ * tweaks the chrome the widget includes in the status row.
+ * @p status_prefix is the static identity portion the widget will
+ * paint at the head of that row; must outlive the widget (the
+ * widget stores the pointer, not a copy).  Pass @c NULL when
+ * @c status_pos is @c TUI_LOG_STATUS_NONE.  After init the prefix
+ * is read-only -- the widget composes the visible status string
+ * each render from prefix + dynamic chrome.
  */
-void tui_log_init(struct tui_log *L, int max_lines);
+void tui_log_init(struct tui_log *L, int max_lines, int status_pos,
+		  unsigned status_flags, const char *status_prefix);
 
 /** @brief Free the line ring and pending buffer.  Safe to call twice. */
 void tui_log_release(struct tui_log *L);
@@ -497,7 +624,6 @@ void tui_log_unfreeze(struct tui_log *L);
 /** @brief Non-zero when a snapshot ceiling is active. */
 int tui_log_is_frozen(const struct tui_log *L);
 
-void tui_log_set_status(struct tui_log *L, const char *status);
 void tui_log_set_footer(struct tui_log *L, const char *footer);
 
 /**
@@ -549,18 +675,44 @@ void tui_log_pull_from_vt100(struct tui_log *L, struct vt100 *V);
 void tui_log_set_grid(struct tui_log *L, struct vt100 *V);
 
 /**
- * @brief Feed a navigation event.
+ * @brief Feed an input event to the log.
  *
- * Recognises @c TK_PGUP / @c TK_PGDN (one body of scrolling),
- * @c TK_HOME (jump to oldest line), @c TK_END (resume tailing).
- * Other events are ignored so callers can layer their own bindings on
- * top.  @c TK_RESIZE is intentionally not consumed -- the caller
- * already owns terminal sizing via @ref tui_log_resize.
+ * Inspect-mode aware:
+ *
+ *   - When @c L->inspect_active is 0 (live): @c TK_PGUP, @c TK_PGDN,
+ *     @c TK_WHEEL_UP and @c TK_WHEEL_DOWN auto-enter inspect mode
+ *     (freeze + dispatch the event so the first scroll is immediate);
+ *     other events return 0 so the host can forward them to its
+ *     underlying stream.
+ *   - When inspect is active: arrow / Home / End / PgUp / PgDn / vim
+ *     shortcuts (@c j/k/g/G) scroll; @c '/' opens the regex search;
+ *     @c 'n' / @c 'N' step through matches; @c '?' opens the keymap
+ *     help; @c 'y' yanks the current line to the system clipboard
+ *     via OSC 52; @c Esc / @c q clears the search and returns to
+ *     live; mouse wheel routes to up/down.  Auto-exits to live when
+ *     navigation lands back on the tail after at least one scroll.
+ *   - @c TK_RESIZE is not consumed -- the host owns terminal sizing
+ *     via @ref tui_log_resize, which also re-flows the embedded
+ *     search / help modals.
+ *
+ * The host MUST NOT forward keystrokes to its underlying stream when
+ * the call returned 1 -- the inspect machinery owned the event.
  *
  * @return 1 if the event was consumed (caller should redraw),
  *         0 otherwise.
  */
 int tui_log_on_event(struct tui_log *L, const struct term_event *ev);
+
+/**
+ * @brief Manually enter inspect mode (e.g. from a host hotkey).
+ *
+ * Freezes the log and switches to @c TUI_INSPECT_NAV at the live
+ * tail.  @c Esc / @c q still returns to live, but auto-exit-on-tail
+ * is suppressed until the user has scrolled away at least once --
+ * so pressing @c Down right after entering doesn't immediately kick
+ * the user back out.  No-op if inspect is already active.
+ */
+void tui_log_inspect_enter(struct tui_log *L);
 
 /** @brief Non-zero when the widget is in live-tail mode. */
 int tui_log_is_tailing(const struct tui_log *L);

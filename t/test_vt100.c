@@ -1190,7 +1190,7 @@ int main(void)
 	{
 		struct tui_log L;
 
-		tui_log_init(&L, 256);
+		tui_log_init(&L, 256, TUI_LOG_STATUS_NONE, 0, NULL);
 		struct vt100 *V = vt100_new(4, 8);
 
 		feed(V, "AAAA\r\nBBBB\r\nCCCC\r\nDDDD\r\nEEEE\r\nFFFF\r\n");
@@ -1214,7 +1214,7 @@ int main(void)
 	{
 		struct tui_log L;
 
-		tui_log_init(&L, 32);
+		tui_log_init(&L, 32, TUI_LOG_STATUS_NONE, 0, NULL);
 		struct vt100 *V = vt100_new(4, 8);
 
 		tui_log_pull_from_vt100(&L, V); /* nothing to drain */
@@ -1232,7 +1232,7 @@ int main(void)
 	{
 		struct tui_log L;
 
-		tui_log_init(&L, 32);
+		tui_log_init(&L, 32, TUI_LOG_STATUS_NONE, 0, NULL);
 		tui_log_resize(&L, 40, 10);
 		tui_log_append(&L, "hello\n", 6);
 
@@ -1253,7 +1253,7 @@ int main(void)
 	{
 		struct tui_log L;
 
-		tui_log_init(&L, 32);
+		tui_log_init(&L, 32, TUI_LOG_STATUS_NONE, 0, NULL);
 		tui_log_resize(&L, 40, 10);
 		struct vt100 *V = vt100_new(4, 20);
 		tui_log_set_grid(&L, V);
@@ -1280,7 +1280,7 @@ int main(void)
 	{
 		struct tui_log L;
 
-		tui_log_init(&L, 32);
+		tui_log_init(&L, 32, TUI_LOG_STATUS_NONE, 0, NULL);
 		tui_log_resize(&L, 40, 10);
 		struct vt100 *V = vt100_new(4, 20);
 		tui_log_set_grid(&L, V);
@@ -1304,7 +1304,7 @@ int main(void)
 	{
 		struct tui_log L;
 
-		tui_log_init(&L, 32);
+		tui_log_init(&L, 32, TUI_LOG_STATUS_NONE, 0, NULL);
 		tui_log_resize(&L, 40, 10);
 		for (int i = 0; i < 20; i++) {
 			char line[16];
@@ -1321,7 +1321,11 @@ int main(void)
 		tap_check(strstr(out.buf, "GRID_TEXT") != NULL);
 		sbuf_release(&out);
 
-		/* Scroll up by sending TK_HOME via a synthetic event. */
+		/* Enter inspect explicitly, then jump to the top.  Plain
+		 * TK_HOME from live no longer auto-enters -- only
+		 * PgUp/PgDn/wheel do, so non-PgUp host keys keep
+		 * flowing through to the underlying stream. */
+		tui_log_inspect_enter(&L);
 		struct term_event ev = {.key = TK_HOME};
 		tui_log_on_event(&L, &ev);
 		tap_check(!tui_log_is_tailing(&L));
@@ -1341,7 +1345,7 @@ int main(void)
 	{
 		struct tui_log L;
 
-		tui_log_init(&L, 32);
+		tui_log_init(&L, 32, TUI_LOG_STATUS_NONE, 0, NULL);
 		tui_log_resize(&L, 40, 10);
 		struct vt100 *V = vt100_new(4, 20);
 		tui_log_set_grid(&L, V);
@@ -1368,7 +1372,7 @@ int main(void)
 	{
 		struct tui_log L;
 
-		tui_log_init(&L, 32);
+		tui_log_init(&L, 32, TUI_LOG_STATUS_NONE, 0, NULL);
 		tui_log_resize(&L, 40, 10);
 		tui_log_set_decorator(&L, test_decorator, NULL);
 
@@ -1393,7 +1397,7 @@ int main(void)
 	{
 		struct tui_log L;
 
-		tui_log_init(&L, 32);
+		tui_log_init(&L, 32, TUI_LOG_STATUS_NONE, 0, NULL);
 		tui_log_resize(&L, 40, 10);
 
 		struct vt100 *V = vt100_new(4, 20);
@@ -1413,7 +1417,7 @@ int main(void)
 	{
 		struct tui_log L;
 
-		tui_log_init(&L, 32);
+		tui_log_init(&L, 32, TUI_LOG_STATUS_NONE, 0, NULL);
 		tui_log_resize(&L, 40, 10);
 		tui_log_append(&L, "ERROR ring-line\n", 16);
 
@@ -1448,7 +1452,7 @@ int main(void)
 	{
 		struct tui_log L;
 
-		tui_log_init(&L, 32);
+		tui_log_init(&L, 32, TUI_LOG_STATUS_NONE, 0, NULL);
 		tui_log_resize(&L, 40, 10);
 
 		for (int i = 0; i < 5; i++) {
@@ -1462,10 +1466,12 @@ int main(void)
 		feed(V, "GRID_A\r\nGRID_B\r\nGRID_C\r\nGRID_D");
 
 		/*
-		 * Tail mode: bottom shows the last grid row.  TK_UP
-		 * moves the anchor back through the grid; one step lands
-		 * on "GRID_C" (third grid row, second from the bottom).
+		 * Tail mode: bottom shows the last grid row.  Enter
+		 * inspect first so nav keys other than PgUp/PgDn/wheel
+		 * are accepted; one TK_UP step lands on "GRID_C" (third
+		 * grid row, second from the bottom).
 		 */
+		tui_log_inspect_enter(&L);
 		struct term_event ev = {.key = TK_UP};
 		tui_log_on_event(&L, &ev);
 		tap_check(!tui_log_is_tailing(&L));
