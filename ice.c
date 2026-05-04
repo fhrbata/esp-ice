@@ -246,6 +246,7 @@ static const struct cmd_desc *const ice_subs[] = {
     &cmd_clean_desc,
     &cmd_completion_desc,
     &cmd_config_desc,
+    &cmd_debug_desc,
     &cmd_docs_desc,
     &cmd_flash_desc,
     &cmd_help_desc,

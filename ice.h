@@ -194,6 +194,7 @@ extern const struct cmd_desc cmd_build_desc;
 extern const struct cmd_desc cmd_clean_desc;
 extern const struct cmd_desc cmd_completion_desc;
 extern const struct cmd_desc cmd_config_desc;
+extern const struct cmd_desc cmd_debug_desc;
 extern const struct cmd_desc cmd_docs_desc;
 extern const struct cmd_desc cmd_flash_desc;
 extern const struct cmd_desc cmd_help_desc;
