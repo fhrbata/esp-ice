@@ -63,10 +63,14 @@ static const struct cmd_manual qemu_manual = {
 
 	.extras =
 	H_SECTION("KEY BINDINGS")
+	H_ITEM("Ctrl-T h",      "Show command help.")
 	H_ITEM("Ctrl-T x",      "Exit and shut down QEMU.")
+	H_ITEM("Ctrl-T r",      "Reset the target (--debug only; routed through gdb).")
 	H_ITEM("Ctrl-T Ctrl-T", "Send a literal Ctrl-T to the chip.")
+	H_ITEM("Ctrl-T ?",      "Show pane (live mode) help.")
 	H_ITEM("PgUp/PgDn",     "Scroll the buffer one page at a time.")
 	H_ITEM("Home/End",      "Jump to the oldest line / resume tailing.")
+	H_ITEM("Mouse wheel",   "Scroll the buffer; hold Shift to select for copy.")
 
 	H_SECTION("SEE ALSO")
 	H_ITEM("ice monitor",
@@ -637,9 +641,33 @@ static int decorate_idf_level(const char *line, size_t len, void *ctx,
 	return 1;
 }
 
+/*
+ * Cmd-level help for the single-pane qemu view.  Documents the
+ * orchestrator-level shortcuts (the widget's keymap is reachable via
+ * @c Ctrl-T+? on the pane).
+ */
+static const char QEMU_HELP_TITLE[] = "ice qemu";
+
+static const char QEMU_HELP_TEXT[] =
+    "Runs the project's firmware on the Espressif QEMU fork and pipes\n"
+    "the emulated UART through the pane.  Output is rendered the same\n"
+    "way @b{ice monitor} renders a real chip's UART (panic decode,\n"
+    "log-level colouring, scrollback / search / yank).\n"
+    "\n"
+    "Use Ctrl-T as the prefix for command shortcuts:\n"
+    "\n"
+    "  Ctrl-T h       Show this help.\n"
+    "  Ctrl-T x       Quit (terminates QEMU).\n"
+    "  Ctrl-T Ctrl-T  Send a literal Ctrl-T to the chip.\n"
+    "\n"
+    "Per-pane scrollback, regex search, and clipboard yank are\n"
+    "reachable through the pane's own keymap -- press Ctrl-T+? on\n"
+    "the pane (or scroll with PgUp / mouse wheel to auto-enter\n"
+    "inspect) to see those.\n";
+
 static int run_tui(struct process *proc, const char *chip_name)
 {
-	int rc = term_raw_enter(0);
+	int rc = term_raw_enter(TERM_RAW_MOUSE | TERM_RAW_BRACKETED_PASTE);
 	if (rc < 0)
 		die("cannot set terminal to raw mode: %s", strerror(-rc));
 	term_screen_enter();
@@ -647,45 +675,63 @@ static int run_tui(struct process *proc, const char *chip_name)
 	int cols = 80, rows = 24;
 	term_size(&cols, &rows);
 
+	/*
+	 * Layout: row 1 is the cmd's own top status bar (cmd-prefix
+	 * shortcuts: @c h=help, @c x=quit).  Rows 2..rows belong to
+	 * @ref tui_log, which paints its own bottom status row with
+	 * widget-prefix shortcuts.  Mirrors @c{ice qemu --debug} so
+	 * the single-pane and dual-pane views feel consistent.
+	 */
 	struct tui_log L;
-	tui_log_init(&L, opt_scrollback);
+	tui_log_init(&L, opt_scrollback, TUI_LOG_STATUS_BOTTOM, 0, NULL);
 	if (use_color)
 		tui_log_set_decorator(&L, decorate_idf_level, NULL);
-	tui_log_resize(&L, cols, rows);
+	tui_log_set_origin(&L, 1, 2);
+	tui_log_resize(&L, cols, rows > 1 ? rows - 1 : rows);
 
-	struct sbuf status = SBUF_INIT;
-	sbuf_addf(&status, "ice qemu: %s", chip_name);
-	if (opt_gdb)
-		sbuf_addf(&status, "  \xe2\x80\xa2  [GDB :%d, halted]",
-			  opt_gdb_port);
-	sbuf_addstr(&status, "  \xe2\x80\xa2  Ctrl-T:  x=exit");
-	tui_log_set_status(&L, status.buf);
-
-	/* Inner-terminal vt100: same scaling rule as cmd/target/monitor.
-	 * Body is cols-1 wide (scrollbar) by rows-1 tall (status). */
+	/* Inner-terminal vt100: body is cols-1 wide (scrollbar) by
+	 * rows-2 tall (cmd top bar + widget bottom bar each eat one
+	 * row). */
 	int inner_cols = cols > 1 ? cols - 1 : cols;
-	int inner_rows = rows > 1 ? rows - 1 : rows;
+	int inner_rows = rows > 2 ? rows - 2 : 1;
 	struct vt100 *V = vt100_new(inner_rows, inner_cols);
 	tui_log_set_grid(&L, V);
 
+	struct tui_info help_info;
+	memset(&help_info, 0, sizeof(help_info));
+	int help_open = 0;
+	int help_freeze = 0;
+
+	int in_prefix = 0;
+	int quit = 0;
+
 	{
 		struct sbuf frame = SBUF_INIT;
+		char status_buf[256];
+		snprintf(status_buf, sizeof status_buf,
+			 "ice qemu: %s%s  \xe2\x80\xa2  "
+			 "Ctrl-T:  h=help  x=quit",
+			 chip_name,
+			 opt_gdb ? "  \xe2\x80\xa2  [GDB attached, halted]"
+				 : "");
+		struct tui_rect status_r = {.x = 1, .y = 1, .w = cols, .h = 1};
+		tui_status_bar(&frame, &status_r, status_buf, "1;37;44");
 		tui_log_render(&frame, &L);
 		tui_flush(&frame);
 	}
 
-	int quit = 0;
-	int in_prefix = 0;
 	while (!quit) {
 		uint8_t buf[4096];
 		int dirty = 0;
 
 		if (term_resize_pending()) {
 			term_size(&cols, &rows);
-			tui_log_resize(&L, cols, rows);
+			tui_log_resize(&L, cols, rows > 1 ? rows - 1 : rows);
 			int new_inner_cols = cols > 1 ? cols - 1 : cols;
-			int new_inner_rows = rows > 1 ? rows - 1 : rows;
+			int new_inner_rows = rows > 2 ? rows - 2 : 1;
 			vt100_resize(V, new_inner_rows, new_inner_cols);
+			if (help_open)
+				tui_info_resize(&help_info, cols, rows);
 			dirty = 1;
 		}
 
@@ -717,61 +763,127 @@ static int run_tui(struct process *proc, const char *chip_name)
 		int got = term_read_event(&ev, 0);
 		if (got > 0 && ev.key != TK_NONE) {
 			if (ev.key == TK_RESIZE) {
-				tui_log_resize(&L, ev.cols, ev.rows);
+				tui_log_resize(&L, ev.cols,
+					       ev.rows > 1 ? ev.rows - 1
+							   : ev.rows);
 				int ic = ev.cols > 1 ? ev.cols - 1 : ev.cols;
-				int ir = ev.rows > 1 ? ev.rows - 1 : ev.rows;
+				int ir = ev.rows > 2 ? ev.rows - 2 : 1;
 				vt100_resize(V, ir, ic);
 				cols = ev.cols;
 				rows = ev.rows;
+				if (help_open)
+					tui_info_resize(&help_info, cols, rows);
 				dirty = 1;
 			} else if (ev.key == 0x1d) {
-				/* Ctrl-]: undocumented panic eject, kept as
-				 * a fallback the way @b{ice monitor} does. */
+				/* Ctrl-]: undocumented panic eject, kept
+				 * as a fallback the way @b{ice monitor}
+				 * does. */
 				quit = 1;
+			} else if (help_open) {
+				/* Cmd help modal owns the input.  Any key the
+				 * modal consumes (Esc / Enter / q / nav)
+				 * dismisses it and unfreezes the log if we
+				 * froze it on the way in. */
+				if (tui_info_on_event(&help_info, &ev)) {
+					tui_info_release(&help_info);
+					help_open = 0;
+					if (help_freeze) {
+						tui_log_unfreeze(&L);
+						help_freeze = 0;
+					}
+				}
+				dirty = 1;
 			} else if (in_prefix) {
-				/* One byte after Ctrl-T.  @c x exits, a second
-				 * Ctrl-T forwards a literal Ctrl-T to the chip,
-				 * anything else cancels the prefix silently --
-				 * mistakes are cheap, just press Ctrl-T again.
-				 */
+				/* One key after Ctrl-T.  Cmd reserves x = quit,
+				 * h = cmd help, Ctrl-T = literal Ctrl-T to the
+				 * chip; any other key is handed to the widget
+				 * as Ctrl-T + key so widget shortcuts (i, ?,
+				 * y, ...) reach it from live mode. */
 				in_prefix = 0;
 				if (ev.key == 'x' || ev.key == 'X') {
 					quit = 1;
+				} else if (ev.key == 'h' || ev.key == 'H') {
+					tui_info_init(&help_info,
+						      QEMU_HELP_TITLE,
+						      QEMU_HELP_TEXT);
+					tui_info_resize(&help_info, cols, rows);
+					if (!L.inspect_active) {
+						tui_log_freeze(&L);
+						help_freeze = 1;
+					}
+					help_open = 1;
 				} else if (ev.key == 0x14) {
 					uint8_t k = 0x14;
-					(void)write(proc->in, &k, 1);
+					if (write(proc->in, &k, 1) < 0)
+						quit = 1;
+				} else {
+					struct term_event pfx = {.key = 0x14};
+					tui_log_on_event(&L, &pfx);
+					tui_log_on_event(&L, &ev);
 				}
 				dirty = 1;
 			} else if (ev.key == 0x14) {
-				/* Ctrl-T -> enter one-byte prefix mode. */
+				/* Claim Ctrl-T at the cmd layer BEFORE the
+				 * widget sees it.  If we passed it down, the
+				 * widget's own prefix_pending would latch on
+				 * the user's plain Ctrl-T and the cmd would
+				 * never see x / Ctrl-T-Ctrl-T come through.
+				 * The widget only ever gets Ctrl-T when the
+				 * cmd explicitly forwards a non-reserved
+				 * combination above. */
 				in_prefix = 1;
 				dirty = 1;
-			} else if (ev.key == TK_PGUP || ev.key == TK_PGDN ||
-				   ev.key == TK_HOME || ev.key == TK_END ||
-				   ev.key == TK_UP || ev.key == TK_DOWN) {
-				if (tui_log_on_event(&L, &ev))
-					dirty = 1;
+			} else if (tui_log_on_event(&L, &ev)) {
+				/* Log consumed it (auto-enter, scroll,
+				 * search, help, yank, ...).  Host
+				 * forwards nothing. */
+				dirty = 1;
 			} else if (ev.key < 0x100) {
-				/* Plain printable / C0 control: forward to
-				 * qemu's UART RX.  Single-byte writes to a
-				 * pipe are always atomic. */
+				/* Plain printable / C0 control: forward
+				 * to qemu's UART RX. */
 				uint8_t k = (uint8_t)ev.key;
-				if (write(proc->in, &k, 1) < 0) {
+				if (write(proc->in, &k, 1) < 0)
 					quit = 1;
-				}
+			} else {
+				/* Named navigation key (arrows, F-keys,
+				 * ...): re-emit the canonical xterm
+				 * sequence so a remote shell sees the
+				 * same byte pattern the user typed. */
+				const char *seq = term_key_to_xterm_seq(ev.key);
+				if (seq &&
+				    write(proc->in, seq, strlen(seq)) < 0)
+					quit = 1;
 			}
 		}
 
 		if (dirty) {
 			struct sbuf frame = SBUF_INIT;
+			char status_buf[256];
+			const char *prefix_hint =
+			    in_prefix ? "  \xe2\x80\xa2  [Ctrl-T] prefix" : "";
+			snprintf(status_buf, sizeof status_buf,
+				 "ice qemu: %s%s%s  \xe2\x80\xa2  "
+				 "Ctrl-T:  h=help  x=quit",
+				 chip_name,
+				 opt_gdb ? "  \xe2\x80\xa2  [GDB attached, "
+					   "halted]"
+					 : "",
+				 prefix_hint);
+			struct tui_rect status_r = {
+			    .x = 1, .y = 1, .w = cols, .h = 1};
+			tui_status_bar(&frame, &status_r, status_buf,
+				       "1;37;44");
 			tui_log_render(&frame, &L);
+			if (help_open)
+				tui_info_render(&frame, &help_info);
 			tui_flush(&frame);
 		}
 	}
 
+	if (help_open)
+		tui_info_release(&help_info);
 	tui_log_release(&L);
 	vt100_free(V);
-	sbuf_release(&status);
 	term_screen_leave();
 	term_raw_leave();
 
@@ -794,8 +906,9 @@ static int run_tui(struct process *proc, const char *chip_name)
 
 /*
  * One pane's worth of bookkeeping: a vt100 grid feeding a tui_log,
- * with the rect that says where on the screen the log lives.  Used
- * symmetrically for the gdb pane and the UART pane.
+ * with the rect that says where on the screen the log lives.  The
+ * tui_log carries its own inspect-mode state so each pane can be
+ * frozen and explored independently -- see @c L.inspect_active.
  */
 struct dpane {
 	struct vt100 *V;
@@ -805,25 +918,22 @@ struct dpane {
 
 /*
  * Lay out the screen for the dual-pane debug view.  Top row is the
- * status bar; bottom row is the key-binding hint; the body is split
- * evenly between gdb (top half) and UART (bottom half) with a
- * one-row divider in between.  Stores the rects on the @ref dpane
- * structs and resizes their tui_log + vt100 accordingly.  Returns
- * the divider's row and the body width via out-params for the
- * caller's manual chrome paint.
+ * status bar (carries the focus / inspect / key-hint chrome -- same
+ * style as @c{ice qemu}'s single-pane header so the two views feel
+ * consistent); the body is split evenly between gdb (top half) and
+ * UART (bottom half) with a one-row divider in between.  Stores the
+ * rects on the @ref dpane structs and resizes their tui_log + vt100
+ * accordingly.
  */
 static void debug_layout(int rows, int cols, struct dpane *gdb_p,
 			 struct dpane *uart_p, struct tui_rect *status_r,
-			 struct tui_rect *divider_r, struct tui_rect *footer_r)
+			 struct tui_rect *divider_r)
 {
 	struct tui_rect screen = {.x = 1, .y = 1, .w = cols, .h = rows};
-	struct tui_rect rest1, body, after_status;
+	struct tui_rect rest1, body;
 
 	/* status row at the top */
-	tui_rect_split_h(&screen, status_r, &after_status, 1);
-	/* footer row at the bottom */
-	tui_rect_split_h(&after_status, &rest1, footer_r,
-			 after_status.h > 1 ? after_status.h - 1 : 0);
+	tui_rect_split_h(&screen, status_r, &rest1, 1);
 	/* split the body evenly with a 1-row divider in between */
 	int gdb_h = rest1.h / 2;
 	tui_rect_split_h(&rest1, &gdb_p->rect, &body, gdb_h);
@@ -832,19 +942,30 @@ static void debug_layout(int rows, int cols, struct dpane *gdb_p,
 	/* Apply the rects to the log widgets and resize the vt100 grids
 	 * so the chip / gdb get a faithful column count.  The grid is
 	 * one column narrower than the pane to leave room for the
-	 * scrollbar tui_log_render reserves on the right edge. */
+	 * scrollbar tui_log_render reserves on the right edge, and one
+	 * row shorter when the pane carries a status bar (status_pos =
+	 * BOTTOM here) so the grid maps 1:1 to the body region -- gdb's
+	 * cursor lands on its prompt row, not on the status row beneath
+	 * it. */
 	tui_log_set_origin(&gdb_p->L, gdb_p->rect.x, gdb_p->rect.y);
 	tui_log_resize(&gdb_p->L, gdb_p->rect.w, gdb_p->rect.h);
 	int gdb_inner_w = gdb_p->rect.w > 1 ? gdb_p->rect.w - 1 : gdb_p->rect.w;
-	int gdb_inner_h = gdb_p->rect.h > 0 ? gdb_p->rect.h : 1;
+	int gdb_inner_h = gdb_p->rect.h > 1 ? gdb_p->rect.h - 1 : 1;
 	vt100_resize(gdb_p->V, gdb_inner_h, gdb_inner_w);
 
 	tui_log_set_origin(&uart_p->L, uart_p->rect.x, uart_p->rect.y);
 	tui_log_resize(&uart_p->L, uart_p->rect.w, uart_p->rect.h);
 	int uart_inner_w =
 	    uart_p->rect.w > 1 ? uart_p->rect.w - 1 : uart_p->rect.w;
-	int uart_inner_h = uart_p->rect.h > 0 ? uart_p->rect.h : 1;
+	int uart_inner_h = uart_p->rect.h > 1 ? uart_p->rect.h - 1 : 1;
 	vt100_resize(uart_p->V, uart_inner_h, uart_inner_w);
+
+	/* The inspect search prompt / help modal sized along with the
+	 * log itself, by tui_log_resize -- so each pane's modal sits
+	 * inside its own rect rather than spanning the screen.  No
+	 * extra plumbing here.  cols / rows are unused now. */
+	(void)cols;
+	(void)rows;
 }
 
 /*
@@ -890,34 +1011,53 @@ static void draw_hrule(struct sbuf *out, int row_y, int row_x, int row_w)
 	sbuf_addstr(out, "\x1b[0m");
 }
 
-static void draw_status_bar(struct sbuf *out, const struct tui_rect *r,
-			    const char *text, const char *sgr)
-{
-	if (r->h < 1 || r->w < 1)
-		return;
-	sbuf_addf(out, "\x1b[%d;%dH\x1b[%sm ", r->y, r->x, sgr);
-	int w = r->w - 1;
-	int len = (int)strlen(text);
-	if (len > w)
-		len = w;
-	sbuf_add(out, text, (size_t)len);
-	for (int i = len; i < w; i++)
-		sbuf_addch(out, ' ');
-	sbuf_addstr(out, "\x1b[0m");
-}
-
 /*
  * Drive the dual-pane view: gdb pane (top), UART pane (bottom),
- * status bar, key-binding hint footer, and a one-row divider.  The
+ * status bar (identity + focus + mode + key hints, mirroring the
+ * single-pane @c{ice qemu} header) and a one-row divider.  The
  * user types in whichever pane has focus -- @c Ctrl-T is the prefix:
  *
  *   Ctrl-T Tab     Toggle focus.
  *   Ctrl-T x       Quit.
+ *   Ctrl-T r       Reset the target (via gdb's monitor system_reset).
+ *   Ctrl-T h       Cmd-level help (orchestrator description).
  *   Ctrl-T Ctrl-T  Send a literal Ctrl-T to the focused pane.
  *
  * @c Ctrl-] is an undocumented panic eject kept as a fallback (matches
  * @c{ice monitor} convention).
  */
+/*
+ * Cmd-level help for the dual-pane debug view.  Documents the
+ * shortcuts the cmd reserves and explains what the screen is
+ * showing.  Per-pane scrollback / search / yank live on the
+ * widget's own help (Ctrl-T+? on the focused pane).
+ */
+static const char DEBUG_HELP_TITLE[] = "ice qemu --debug";
+
+static const char DEBUG_HELP_TEXT[] =
+    "Runs the firmware on QEMU under a GDB stub and splits the\n"
+    "screen into two panes:\n"
+    "\n"
+    "  Top    gdb attached to the QEMU stub on tcp::<port>.\n"
+    "  Bottom The chip's UART output.\n"
+    "\n"
+    "Use Ctrl-T as the prefix for command shortcuts:\n"
+    "\n"
+    "  Ctrl-T Tab     Switch focus between gdb and UART.\n"
+    "  Ctrl-T x       Quit (terminates QEMU and gdb).\n"
+    "  Ctrl-T r       Reset the target (via gdb's monitor\n"
+    "                 system_reset; the reset command appears\n"
+    "                 in the gdb pane).\n"
+    "  Ctrl-T h       Show this help.\n"
+    "  Ctrl-T Ctrl-T  Send a literal Ctrl-T to the focused pane.\n"
+    "\n"
+    "A mouse click on a pane also switches focus.\n"
+    "\n"
+    "Per-pane scrollback, regex search, and clipboard yank are\n"
+    "reachable through each pane's own keymap -- press Ctrl-T+?\n"
+    "on the focused pane (or scroll with PgUp / mouse wheel to\n"
+    "auto-enter inspect) to see those.\n";
+
 static int run_debug(struct process *qemu_proc, const struct qemu_chip *chip)
 {
 	/* Same resolution rule as the qemu binary above: --gdb-bin >
@@ -942,7 +1082,7 @@ static int run_debug(struct process *qemu_proc, const struct qemu_chip *chip)
 		die("ice qemu --debug: no ELF resolved (run 'ice build' "
 		    "first)");
 
-	int rc = term_raw_enter(0);
+	int rc = term_raw_enter(TERM_RAW_MOUSE | TERM_RAW_BRACKETED_PASTE);
 	if (rc < 0)
 		die("cannot set terminal to raw mode: %s", strerror(-rc));
 	term_screen_enter();
@@ -956,16 +1096,20 @@ static int run_debug(struct process *qemu_proc, const struct qemu_chip *chip)
 	struct dpane gdb_p = {0}, uart_p = {0};
 	gdb_p.V = vt100_new(24, 80);
 	uart_p.V = vt100_new(24, 80);
-	tui_log_init(&gdb_p.L, opt_scrollback);
-	tui_log_init(&uart_p.L, opt_scrollback);
+	/* Per-pane self-rendered status bar at the bottom of each pane,
+	 * tagged with the pane's name so the user can tell at a glance
+	 * which pane is in inspect mode.  No @c TUI_LOG_SHOW_EXIT --
+	 * cmd's own top-level status row already advertises Ctrl-T+x. */
+	tui_log_init(&gdb_p.L, opt_scrollback, TUI_LOG_STATUS_BOTTOM, 0, "gdb");
+	tui_log_init(&uart_p.L, opt_scrollback, TUI_LOG_STATUS_BOTTOM, 0,
+		     "UART");
 	if (use_color)
 		tui_log_set_decorator(&uart_p.L, decorate_idf_level, NULL);
 	tui_log_set_grid(&gdb_p.L, gdb_p.V);
 	tui_log_set_grid(&uart_p.L, uart_p.V);
 
-	struct tui_rect status_r, divider_r, footer_r;
-	debug_layout(rows, cols, &gdb_p, &uart_p, &status_r, &divider_r,
-		     &footer_r);
+	struct tui_rect status_r, divider_r;
+	debug_layout(rows, cols, &gdb_p, &uart_p, &status_r, &divider_r);
 
 	/* Spawn gdb in a pty pre-loaded with target remote :3333 + ELF.
 	 * The pty is sized to the gdb pane so readline wrapping matches
@@ -1007,14 +1151,27 @@ static int run_debug(struct process *qemu_proc, const struct qemu_chip *chip)
 	int in_prefix = 0;
 	int quit = 0;
 
+	/* Cmd-level help modal (Ctrl-T+h).  Distinct from the per-pane
+	 * widget help -- this one documents the orchestrator: dual-pane
+	 * layout + cmd shortcuts.  When up we route events to the modal
+	 * and freeze any pane that wasn't already inspecting so the
+	 * background stays still under the overlay. */
+	struct tui_info help_info;
+	memset(&help_info, 0, sizeof(help_info));
+	int help_open = 0;
+	int gdb_freeze_for_help = 0;
+	int uart_freeze_for_help = 0;
+
 	while (!quit) {
 		int dirty = 0;
 
 		if (term_resize_pending()) {
 			term_size(&cols, &rows);
 			debug_layout(rows, cols, &gdb_p, &uart_p, &status_r,
-				     &divider_r, &footer_r);
+				     &divider_r);
 			pty_resize(&gdb_proc, gdb_p.rect.h, gdb_p.rect.w);
+			if (help_open)
+				tui_info_resize(&help_info, cols, rows);
 			dirty = 1;
 		}
 
@@ -1046,35 +1203,186 @@ static int run_debug(struct process *qemu_proc, const struct qemu_chip *chip)
 				cols = ev.cols;
 				rows = ev.rows;
 				debug_layout(rows, cols, &gdb_p, &uart_p,
-					     &status_r, &divider_r, &footer_r);
+					     &status_r, &divider_r);
 				pty_resize(&gdb_proc, gdb_p.rect.h,
 					   gdb_p.rect.w);
 				dirty = 1;
 			} else if (ev.key == 0x1d) { /* Ctrl-] panic */
 				quit = 1;
-			} else if (in_prefix) {
-				in_prefix = 0;
-				if (ev.key == TK_TAB) {
-					focus = !focus;
-				} else if (ev.key == 'x' || ev.key == 'q') {
-					quit = 1;
+			} else if (help_open) {
+				/* Cmd help modal owns the input.  Any key
+				 * the modal consumes (Esc / Enter / q / nav)
+				 * dismisses it and unfreezes any panes we
+				 * froze on the way in. */
+				if (tui_info_on_event(&help_info, &ev)) {
+					tui_info_release(&help_info);
+					help_open = 0;
+					if (gdb_freeze_for_help) {
+						tui_log_unfreeze(&gdb_p.L);
+						gdb_freeze_for_help = 0;
+					}
+					if (uart_freeze_for_help) {
+						tui_log_unfreeze(&uart_p.L);
+						uart_freeze_for_help = 0;
+					}
+				}
+				dirty = 1;
+			} else if (ev.key == TK_MOUSE_PRESS) {
+				/* Click to switch focus.  Inspect state is
+				 * left untouched -- if the user is in
+				 * inspect on one pane and clicks the
+				 * other, focus visually moves but the
+				 * keyboard still goes to the inspecting
+				 * pane until they Esc out.  Clicks on
+				 * chrome (status bar, divider) are
+				 * ignored. */
+				int row = ev.rows;
+				if (row >= gdb_p.rect.y &&
+				    row < gdb_p.rect.y + gdb_p.rect.h)
+					focus = 0;
+				else if (row >= uart_p.rect.y &&
+					 row < uart_p.rect.y + uart_p.rect.h)
+					focus = 1;
+				dirty = 1;
+			} else {
+				/* Routing: keyboard always goes to the
+				 * focused pane.  Inspect is per-pane and
+				 * independent -- Tab while the other pane
+				 * is in inspect leaves that pane frozen
+				 * visually but doesn't drag the keyboard
+				 * with it; focus and control stay in
+				 * sync.  Mouse wheel takes the pane under
+				 * the cursor regardless of focus, so the
+				 * user can scroll either pane with the
+				 * mouse without first switching. */
+				struct dpane *target;
+				if (ev.key == TK_WHEEL_UP ||
+				    ev.key == TK_WHEEL_DOWN) {
+					int row = ev.rows;
+					if (row >= gdb_p.rect.y &&
+					    row < gdb_p.rect.y + gdb_p.rect.h)
+						target = &gdb_p;
+					else if (row >= uart_p.rect.y &&
+						 row < uart_p.rect.y +
+							   uart_p.rect.h)
+						target = &uart_p;
+					else
+						target = focus == 0 ? &gdb_p
+								    : &uart_p;
+				} else {
+					target = focus == 0 ? &gdb_p : &uart_p;
+				}
+
+				/* Cmd-level prefix has to be checked BEFORE
+				 * we hand the event to the widget, otherwise
+				 * the widget's own @c prefix_pending latch
+				 * fires on the user's plain @c Ctrl-T and the
+				 * cmd never sees its reserved set (Tab / x /
+				 * h) come through. */
+				if (in_prefix) {
+					/* Cmd reserves Tab (focus), x/q
+					 * (quit), h (cmd help), and literal
+					 * Ctrl-T (forwarded to the focused
+					 * pane's fd).  Anything else is
+					 * forwarded as Ctrl-T + key to the
+					 * focused widget so widget shortcuts
+					 * (i, ?, y, ...) work from live mode
+					 * without first scrolling into
+					 * inspect. */
+					in_prefix = 0;
+					if (ev.key == TK_TAB) {
+						focus = !focus;
+					} else if (ev.key == 'x' ||
+						   ev.key == 'q') {
+						quit = 1;
+					} else if (ev.key == 0x14) {
+						uint8_t k = 0x14;
+						int wfd = focus == 0
+							      ? gdb_proc.in
+							      : qemu_proc->in;
+						(void)write(wfd, &k, 1);
+					} else if (ev.key == 'r' ||
+						   ev.key == 'R') {
+						/* Reset the QEMU target via
+						 * gdb's monitor passthrough.
+						 * The leading 0x03 (Ctrl-C)
+						 * interrupts a running
+						 * inferior so the reset
+						 * command lands at a (gdb)
+						 * prompt; if gdb was already
+						 * idle the 0x03 is harmless.
+						 * Result lands in the gdb
+						 * pane like any other gdb
+						 * output. */
+						const char cmd[] =
+						    "\x03monitor system_reset"
+						    "\n";
+						(void)write(gdb_proc.in, cmd,
+							    sizeof cmd - 1);
+					} else if (ev.key == 'h' ||
+						   ev.key == 'H') {
+						/* Cmd-level help: layout
+						 * description + cmd shortcut
+						 * reference.  Freeze any pane
+						 * that isn't already frozen
+						 * for inspect so the modal's
+						 * background stays still. */
+						tui_info_init(&help_info,
+							      DEBUG_HELP_TITLE,
+							      DEBUG_HELP_TEXT);
+						tui_info_resize(&help_info,
+								cols, rows);
+						if (!gdb_p.L.inspect_active) {
+							tui_log_freeze(
+							    &gdb_p.L);
+							gdb_freeze_for_help = 1;
+						}
+						if (!uart_p.L.inspect_active) {
+							tui_log_freeze(
+							    &uart_p.L);
+							uart_freeze_for_help =
+							    1;
+						}
+						help_open = 1;
+					} else {
+						struct term_event pfx = {
+						    .key = 0x14};
+						tui_log_on_event(&target->L,
+								 &pfx);
+						tui_log_on_event(&target->L,
+								 &ev);
+					}
+					dirty = 1;
 				} else if (ev.key == 0x14) {
-					/* Ctrl-T Ctrl-T: literal Ctrl-T to
-					 * the focused child. */
-					uint8_t k = 0x14;
+					/* Ctrl-T -> prefix.  We claim it
+					 * here so the widget never latches
+					 * its own prefix on a plain user
+					 * Ctrl-T (it only sees Ctrl-T when
+					 * the cmd explicitly forwards a
+					 * non-reserved combo). */
+					in_prefix = 1;
+					dirty = 1;
+				} else if (tui_log_on_event(&target->L, &ev)) {
+					/* Widget consumed (auto-enter,
+					 * scroll, in-inspect command...). */
+					dirty = 1;
+				} else if (ev.key < 0x100) {
+					uint8_t k = (uint8_t)ev.key;
 					int wfd = focus == 0 ? gdb_proc.in
 							     : qemu_proc->in;
 					(void)write(wfd, &k, 1);
+				} else {
+					/* Named key (arrow, F-key, ...):
+					 * forward as its xterm sequence
+					 * so gdb / shell history works. */
+					const char *seq =
+					    term_key_to_xterm_seq(ev.key);
+					int wfd = focus == 0 ? gdb_proc.in
+							     : qemu_proc->in;
+					if (seq)
+						(void)write(wfd, seq,
+							    strlen(seq));
 				}
-				dirty = 1;
-			} else if (ev.key == 0x14) { /* Ctrl-T -> prefix */
-				in_prefix = 1;
-				dirty = 1;
-			} else if (ev.key < 0x100) {
-				uint8_t k = (uint8_t)ev.key;
-				int wfd =
-				    focus == 0 ? gdb_proc.in : qemu_proc->in;
-				(void)write(wfd, &k, 1);
 			}
 		}
 
@@ -1082,13 +1390,22 @@ static int run_debug(struct process *qemu_proc, const struct qemu_chip *chip)
 			struct sbuf frame = SBUF_INIT;
 			char status_buf[256];
 
+			/* Cmd top status bar: identity + focus + cmd
+			 * shortcuts only.  Per-pane state ([INSPECT] +
+			 * search counter) lives on each pane's own
+			 * bottom status row -- this top bar is the
+			 * orchestrator's, not any one pane's, and
+			 * stays clean. */
+			const char *focus_name = focus == 0 ? "gdb" : "UART";
+			const char *prefix_hint =
+			    in_prefix ? "  \xe2\x80\xa2  [Ctrl-T] prefix" : "";
 			snprintf(status_buf, sizeof status_buf,
-				 "ice qemu --debug: %s @ :%d  "
-				 "\xe2\x80\xa2  %s",
-				 chip->name, opt_gdb_port,
-				 in_prefix ? "[Ctrl-T] prefix" : "");
-			draw_status_bar(&frame, &status_r, status_buf,
-					"1;37;44");
+				 "ice qemu: %s  \xe2\x80\xa2  Focus: [%s]%s"
+				 "  \xe2\x80\xa2  "
+				 "Ctrl-T:  Tab=switch  h=help  r=reset  x=quit",
+				 chip->name, focus_name, prefix_hint);
+			tui_status_bar(&frame, &status_r, status_buf,
+				       "1;37;44");
 
 			/* Render unfocused pane first so the focused one's
 			 * cursor placement wins at the end of the frame. */
@@ -1102,24 +1419,25 @@ static int run_debug(struct process *qemu_proc, const struct qemu_chip *chip)
 			draw_hrule(&frame, divider_r.y, divider_r.x,
 				   divider_r.w);
 
-			char hint_buf[256];
-			snprintf(hint_buf, sizeof hint_buf,
-				 "Focus: [%s]   Ctrl-T:  Tab=switch  "
-				 "x=quit",
-				 focus == 0 ? "gdb" : "UART");
-			draw_status_bar(&frame, &footer_r, hint_buf, "37;44");
+			/* Pane-scoped modals (search prompt, per-pane help)
+			 * are painted by tui_log_render itself.  The cmd-
+			 * level help modal sits on top of everything when
+			 * up; render it last so it overrides any cursor
+			 * placement / content underneath. */
+			if (help_open)
+				tui_info_render(&frame, &help_info);
 
-			/* Place the terminal cursor inside the focused pane.
-			 * tui_log_render did this for the last-rendered pane,
-			 * but the divider hrule and footer status bar emitted
-			 * after it left the cursor parked at the end of the
-			 * footer text -- so the user sees no cursor in gdb's
-			 * prompt.  Recompute from the focused pane's vt100
-			 * grid (body fills the grid 1:1, so rect.y / rect.x
-			 * + cursor_row / cursor_col is the screen cell). */
-			{
-				const struct dpane *fp =
-				    focus == 0 ? &gdb_p : &uart_p;
+			/* Place the terminal cursor inside the focused pane
+			 * iff that pane is in live mode -- a frozen pane
+			 * shouldn't show the live grid's cursor (its own
+			 * tui_log_render already handles that), and when
+			 * the cmd help modal is up the modal owns the
+			 * cursor.  Whether the OTHER pane is in inspect is
+			 * irrelevant: focus and keyboard are in sync now,
+			 * so the focused pane's live cursor is the right
+			 * thing to show. */
+			const struct dpane *fp = focus == 0 ? &gdb_p : &uart_p;
+			if (!fp->L.inspect_active && !help_open) {
 				if (vt100_cursor_visible(fp->V)) {
 					int row = fp->rect.y +
 						  vt100_cursor_row(fp->V);
@@ -1153,6 +1471,8 @@ static int run_debug(struct process *qemu_proc, const struct qemu_chip *chip)
 	kill(qemu_proc->pid, SIGTERM);
 	int qemu_exit = process_finish(qemu_proc);
 
+	if (help_open)
+		tui_info_release(&help_info);
 	tui_log_release(&gdb_p.L);
 	tui_log_release(&uart_p.L);
 	vt100_free(gdb_p.V);

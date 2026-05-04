@@ -141,6 +141,40 @@ void color_text(struct sbuf *out, const char *text, size_t len,
 #define TERM_RAW_KEEP_SIG (1u << 0)
 
 /**
+ * @brief Enable mouse reporting in raw mode.
+ *
+ * POSIX: emits the xterm SGR mouse-tracking sequences (@c CSI?1000;1006h
+ * on enter, @c CSI?1000;1006l on leave) so the terminal forwards mouse
+ * events as @c CSI<button;col;row(M|m).  The portable decoder in
+ * @c term_read_event recognises the wheel buttons and delivers them as
+ * @c TK_WHEEL_UP / @c TK_WHEEL_DOWN with @c cols / @c rows holding the
+ * cell where the wheel was scrolled.  Other mouse events (clicks,
+ * motion) are currently dropped by the decoder.
+ *
+ * Side effect: with mouse tracking on, the terminal stops doing native
+ * text selection -- users hold @c Shift to select for copy (xterm,
+ * alacritty, kitty all support this convention).
+ */
+#define TERM_RAW_MOUSE (1u << 1)
+
+/**
+ * @brief Enable bracketed paste in raw mode.
+ *
+ * Emits @c CSI?2004h on enter, @c CSI?2004l on leave.  The terminal
+ * then wraps clipboard pastes in @c \\e[200~ ... \\e[201~ markers.
+ * The decoder in @c term_read_event delivers a @c TK_PASTE_BEGIN
+ * event when it sees the opening marker, then delivers each pasted
+ * byte verbatim (no escape decoding) until the closing marker, which
+ * arrives as a @c TK_PASTE_END event.
+ *
+ * Lets hosts forward pastes byte-for-byte to a child process without
+ * the contents accidentally triggering Ctrl-T / PgUp / mouse-wheel
+ * handling mid-paste.  No-op on terminals that don't implement the
+ * sequence (the enable / disable bytes are just ignored).
+ */
+#define TERM_RAW_BRACKETED_PASTE (1u << 2)
+
+/**
  * @brief Enter raw terminal mode on stdin.
  *
  * Character-at-a-time, no-echo.  Control characters (Ctrl-C, Ctrl-],
@@ -254,9 +288,45 @@ enum term_key {
 	TK_F12,
 
 	TK_RESIZE,
+
+	/* Mouse wheel.  ev->cols / ev->rows hold the 1-based cell under
+	 * the cursor when the wheel ticked.  Only delivered when
+	 * @ref TERM_RAW_MOUSE was set on @ref term_raw_enter. */
+	TK_WHEEL_UP,
+	TK_WHEEL_DOWN,
+
+	/* Left mouse button press.  ev->cols / ev->rows hold the
+	 * 1-based cell that received the click.  Other buttons
+	 * (middle, right) and the matching releases are currently
+	 * swallowed by the decoder.  Only delivered when @ref
+	 * TERM_RAW_MOUSE was set on @ref term_raw_enter. */
+	TK_MOUSE_PRESS,
+
+	/* Bracketed-paste markers.  Between @c TK_PASTE_BEGIN and
+	 * @c TK_PASTE_END the decoder delivers each pasted byte
+	 * verbatim as @c ev->key (no escape sequence interpretation),
+	 * so callers can forward the payload byte-for-byte without
+	 * accidentally handling Ctrl-T / PgUp / mouse-wheel inside
+	 * pasted content.  Only delivered when @ref
+	 * TERM_RAW_BRACKETED_PASTE was set on @ref term_raw_enter. */
+	TK_PASTE_BEGIN,
+	TK_PASTE_END,
 };
 
 #define TK_CTRL(c) ((c) & 0x1f)
+
+/**
+ * @brief Map a non-literal @ref term_key sentinel back to the xterm
+ *        escape sequence that produced it.
+ *
+ * Useful for hosts (interactive monitors, terminal multiplexers)
+ * that decode events for control purposes but want to forward
+ * everything else verbatim to a child / serial port.  Returns NULL
+ * for keys that have no canonical xterm sequence (printable bytes,
+ * @c TK_RESIZE, mouse wheel, etc.) -- the caller handles those
+ * directly.
+ */
+const char *term_key_to_xterm_seq(int key);
 
 /**
  * @brief Read one input event.

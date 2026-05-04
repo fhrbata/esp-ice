@@ -109,10 +109,11 @@ static const struct cmd_manual target_monitor_manual = {
 	.extras =
 	H_SECTION("NORMAL MODE (live passthrough)")
 	H_ITEM("Ctrl-T x",   "Exit the monitor.")
-	H_ITEM("Ctrl-T i",   "Enter inspect mode (freeze + explore the buffer).")
+	H_ITEM("Ctrl-T h",   "Show normal-mode help.")
 	H_ITEM("Ctrl-T r",   "Reset the target.")
 	H_ITEM("Ctrl-T p",   "Reset into the bootloader.")
-	H_ITEM("Ctrl-T ?",   "Show normal-mode help.")
+	H_ITEM("Ctrl-T i",   "Enter inspect mode (freeze + explore the buffer).")
+	H_ITEM("Ctrl-T ?",   "Show pane (live mode) help.")
 	H_ITEM("Ctrl-T Ctrl-T", "Send a literal Ctrl-T to the target.")
 
 	H_SECTION("INSPECT MODE (frozen snapshot)")
@@ -150,31 +151,19 @@ static const char NORMAL_HELP_TEXT[] =
     "Normal mode is pure passthrough: every keystroke goes to the\n"
     "target except the Ctrl-T prefix.  Type Ctrl-T followed by:\n"
     "\n"
-    "  ?              Show this help.\n"
+    "  h              Show this help.\n"
     "  i              Enter inspect mode (freeze + explore the buffer).\n"
     "  r              Reset the target.\n"
     "  p              Reset into the bootloader.\n"
     "  x              Exit the monitor.\n"
     "  Ctrl-T         Send a literal Ctrl-T to the target.\n"
-    "  Esc / anything Cancel the prefix without firing.\n";
-
-static const char INSPECT_HELP_TEXT[] =
-    "ice monitor - inspect mode\n"
+    "  ?              Show pane (live mode) help -- what this pane is\n"
+    "                 and how the inspect mode works.\n"
+    "  Esc / anything Cancel the prefix without firing.\n"
     "\n"
-    "Inspect mode shows a frozen snapshot of the buffer at the moment\n"
-    "you entered.  New bytes keep arriving in the background but stay\n"
-    "off the screen until you exit and re-enter.\n"
-    "\n"
-    "  /              Open the regex search prompt (PCRE2).\n"
-    "  n / N          Jump to the next / previous match.\n"
-    "  j / Down       Scroll one line down.\n"
-    "  k / Up         Scroll one line up.\n"
-    "  PgDn           Scroll one page down.\n"
-    "  PgUp           Scroll one page up.\n"
-    "  g / Home       Top of the snapshot.\n"
-    "  G / End        Bottom of the snapshot.\n"
-    "  ?              Show this help.\n"
-    "  Esc / q        Exit inspect mode (back to normal).\n";
+    "PgUp or the mouse wheel enters inspect mode (frozen buffer with\n"
+    "search, vim-style nav, OSC 52 yank).  Hold Shift to select text\n"
+    "with the mouse for copy.\n";
 
 /*
  * Hard reset.  Pulses RESET asserted with BOOT deasserted so the chip
@@ -212,60 +201,22 @@ static void monitor_bootloader(struct serial *s)
 }
 
 /*
- * Mode flat enum.  Two user-visible modes (normal, inspect) plus a
- * couple of internal sub-states each (Ctrl-T prefix waiting, help
- * modal, search prompt).  @ref mode_is_inspect groups the inspect
- * family for the status bar's badge decision.
+ * Normal-mode sub-states.  Inspect mode itself (NAV / SEARCH / HELP)
+ * is delegated to @ref tui_inspect, so the monitor's local state
+ * machine only tracks live passthrough, the Ctrl-T prefix, and the
+ * normal-mode help modal.
  */
 enum {
 	MON_NORMAL = 0,
 	MON_NORMAL_PREFIX, /* Ctrl-T pressed, waiting for next byte */
 	MON_NORMAL_HELP,   /* tui_info modal showing normal-mode help */
-	MON_INSPECT,
-	MON_INSPECT_SEARCH, /* tui_prompt modal active */
-	MON_INSPECT_HELP,   /* tui_info modal showing inspect-mode help */
 };
-
-static int mode_is_inspect(int mode)
-{
-	return mode == MON_INSPECT || mode == MON_INSPECT_SEARCH ||
-	       mode == MON_INSPECT_HELP;
-}
 
 /*
  * Rebuild the title-bar status string.  Always called before render so
  * the badge, key hints, and search counter stay live as state changes.
  * Cheap: a few @c sbuf appends and one pointer swap.
  */
-static void update_status(struct sbuf *status, struct tui_log *L,
-			  const char *port, unsigned baud, int mode)
-{
-	sbuf_reset(status);
-	sbuf_addf(status, "ice monitor: %s @ %u baud", port, baud);
-	if (mode_is_inspect(mode)) {
-		sbuf_addstr(status, "  \xe2\x80\xa2  [INSPECT]");
-		sbuf_addstr(status, "  \xe2\x80\xa2  Esc=back  ?=help");
-		if (tui_log_search_active(L)) {
-			sbuf_addstr(status, "  \xe2\x80\xa2  search: ");
-			sbuf_addstr(status, tui_log_search_pattern(L));
-			int total = tui_log_search_total(L);
-			int idx = tui_log_search_index(L);
-			if (total <= 0)
-				sbuf_addstr(status, " (no matches)");
-			else if (idx > 0)
-				sbuf_addf(status, " (%d/%d)", idx, total);
-			else
-				sbuf_addf(status, " (%d)", total);
-		}
-	} else {
-		sbuf_addstr(status, "  \xe2\x80\xa2  [NORMAL]");
-		sbuf_addstr(
-		    status,
-		    "  \xe2\x80\xa2  Ctrl-T:  ?=help  i=inspect  x=exit");
-	}
-	tui_log_set_status(L, status->buf);
-}
-
 /*
  * Keyword rules for lines that don't carry an ESP-IDF level prefix --
  * compile output, link errors, CMake noise streamed over the serial
@@ -372,14 +323,15 @@ static int monitor_decorate(const char *line, size_t len, void *ctx,
 }
 
 /*
- * Dispatch one keystroke arriving after a @c Ctrl-T prefix.  Returns
- * @c 1 if the monitor should exit, @c 0 otherwise.  Owns the side
- * effects: sets @c *mode to @c MON_NORMAL_HELP / @c MON_INSPECT for
- * commands that change mode; otherwise leaves @c *mode at @c
- * MON_NORMAL.  Initialising the help / inspect state (allocating the
- * @c tui_info, freezing the buffer) happens here so both call sites
- * (in-chunk dispatch and @c MON_NORMAL_PREFIX) get identical
- * behaviour.
+ * Dispatch one keystroke arriving after a @c Ctrl-T prefix.
+ * Returns:
+ *   @c 1  -- monitor should exit.
+ *   @c 0  -- cmd consumed the key; nothing to forward.
+ *   @c -1 -- cmd did not reserve the key; caller should forward
+ *            @c Ctrl-T + key to the focused widget.
+ *
+ * Side effects: sets @c *mode to @c MON_NORMAL_HELP for the help
+ * shortcut.  Otherwise leaves @c *mode at @c MON_NORMAL.
  */
 static int dispatch_normal_prefix(unsigned char k, struct serial *s,
 				  struct tui_log *L, struct tui_info *help_info,
@@ -393,16 +345,17 @@ static int dispatch_normal_prefix(unsigned char k, struct serial *s,
 	case 'r':
 	case 'R':
 		monitor_reset(s);
-		break;
+		return 0;
 	case 0x10: /* Ctrl-P */
 	case 'p':
 	case 'P':
 		monitor_bootloader(s);
-		break;
-	case 0x08: /* Ctrl-H */
+		return 0;
+	case 0x14: /* literal Ctrl-T to the chip */
+		serial_write(s, &k, 1);
+		return 0;
 	case 'h':
 	case 'H':
-	case '?':
 		tui_info_init(help_info, "ice monitor - normal mode keys",
 			      NORMAL_HELP_TEXT);
 		tui_info_resize(help_info, cols, rows);
@@ -415,96 +368,15 @@ static int dispatch_normal_prefix(unsigned char k, struct serial *s,
 		 * repaints over it. */
 		tui_log_freeze(L);
 		*mode = MON_NORMAL_HELP;
-		break;
-	case 'i':
-	case 'I':
-		tui_log_freeze(L);
-		*mode = MON_INSPECT;
-		break;
-	case 0x14: /* literal Ctrl-T */
-		serial_write(s, &k, 1);
-		break;
+		return 0;
 	case 0x1d: /* Ctrl-]: panic eject */
 		return 1;
 	default:
-		/* Esc / any other byte cancels the prefix without firing.
-		 * Including unknown keys in the catch-all keeps mistakes
-		 * cheap -- the user just tries again. */
-		break;
-	}
-	return 0;
-}
-
-/*
- * Inspect-mode keystroke dispatch.  Synthesises the right
- * @ref term_event and feeds it to @ref tui_log_on_event for
- * navigation; opens the search prompt; jumps the search cursor;
- * dismisses inspect.  Returns @c 1 to exit the monitor, @c 0
- * otherwise; sets @c *mode to @c MON_INSPECT_SEARCH /
- * @c MON_INSPECT_HELP / @c MON_NORMAL when the action transitions
- * to a different state.
- */
-static int dispatch_inspect_event(const struct term_event *ev,
-				  struct tui_log *L,
-				  struct tui_prompt *search_prompt,
-				  struct tui_info *help_info, int cols,
-				  int rows, int *mode)
-{
-	if (ev->key == 0x1d) /* Ctrl-]: panic eject */
-		return 1;
-
-	/* Translate vim-letter shortcuts to their term_key equivalents
-	 * so the widget's on_event handles both keyboard styles
-	 * uniformly. */
-	int key = ev->key;
-	if (key == 'j')
-		key = TK_DOWN;
-	else if (key == 'k')
-		key = TK_UP;
-	else if (key == 'g')
-		key = TK_HOME;
-	else if (key == 'G')
-		key = TK_END;
-
-	switch (key) {
-	case TK_UP:
-	case TK_DOWN:
-	case TK_PGUP:
-	case TK_PGDN:
-	case TK_HOME:
-	case TK_END: {
-		struct term_event nav = {.key = key};
-		tui_log_on_event(L, &nav);
-		return 0;
-	}
-	case '/':
-		tui_prompt_init(
-		    search_prompt, "search:",
-		    tui_log_search_pattern(L) ? tui_log_search_pattern(L) : "");
-		tui_prompt_resize(search_prompt, cols, rows);
-		*mode = MON_INSPECT_SEARCH;
-		return 0;
-	case 'n':
-		tui_log_search_next(L);
-		return 0;
-	case 'N':
-		tui_log_search_prev(L);
-		return 0;
-	case '?':
-		tui_info_init(help_info, "ice monitor - inspect mode keys",
-			      INSPECT_HELP_TEXT);
-		tui_info_resize(help_info, cols, rows);
-		*mode = MON_INSPECT_HELP;
-		return 0;
-	case TK_ESC:
-	case 'q':
-	case 'Q':
-		tui_log_search_clear(L);
-		tui_log_unfreeze(L);
-		*mode = MON_NORMAL;
-		return 0;
-	default:
-		return 0;
+		/* Not cmd-reserved -- caller forwards Ctrl-T + k to
+		 * the widget so widget-level shortcuts (?, /, n, y,
+		 * h-alias, ...) work from live mode without first
+		 * having to scroll into inspect. */
+		return -1;
 	}
 }
 
@@ -601,7 +473,7 @@ int cmd_target_monitor(int argc, const char **argv)
 		return dumb_rc;
 	}
 
-	rc = term_raw_enter(0);
+	rc = term_raw_enter(TERM_RAW_MOUSE | TERM_RAW_BRACKETED_PASTE);
 	if (rc) {
 		serial_close(s);
 		die("cannot set terminal to raw mode: %s", strerror(-rc));
@@ -611,33 +483,46 @@ int cmd_target_monitor(int argc, const char **argv)
 	int cols = 80, rows = 24;
 	term_size(&cols, &rows);
 
+	/*
+	 * Layout: row 1 is the cmd's own top status bar (carries the
+	 * cmd-prefix shortcuts -- @c h=help, @c r=reset, @c p=bootloader,
+	 * @c x=exit).  Rows 2..rows belong to @ref tui_log, which paints
+	 * its own bottom status row with widget-prefix shortcuts (@c
+	 * i=inspect, @c ?=help) and the @c [INSPECT] badge.  Mirrors the
+	 * shape of @c{ice qemu --debug} so cmd vs widget shortcuts are
+	 * visually separated and consistent across both views.
+	 */
 	struct tui_log L;
-	tui_log_init(&L, opt_scrollback);
+	tui_log_init(&L, opt_scrollback, TUI_LOG_STATUS_BOTTOM, 0, NULL);
 	if (use_color)
 		tui_log_set_decorator(&L, monitor_decorate, NULL);
-	tui_log_resize(&L, cols, rows);
+	tui_log_set_origin(&L, 1, 2);
+	tui_log_resize(&L, cols, rows > 1 ? rows - 1 : rows);
 
 	int mode = MON_NORMAL;
-	struct sbuf status = SBUF_INIT;
-	struct tui_prompt search_prompt;
 	struct tui_info help_info;
-	memset(&search_prompt, 0, sizeof(search_prompt));
 	memset(&help_info, 0, sizeof(help_info));
-
-	update_status(&status, &L, opt_port, baud, mode);
 
 	/*
 	 * Inner-terminal vt100: sized to the visible body region so the
 	 * chip's column probes (linenoise's `\x1b[999C\x1b[6n`) and
 	 * autowrap math match what gets painted on-screen.  Body is
-	 * cols-1 wide (scrollbar) by rows-1 tall (status); no footer.
+	 * cols-1 wide (scrollbar) by rows-2 tall (cmd top bar + widget
+	 * bottom bar each eat one row).
 	 */
 	int inner_cols = cols > 1 ? cols - 1 : cols;
-	int inner_rows = rows > 1 ? rows - 1 : rows;
+	int inner_rows = rows > 2 ? rows - 2 : 1;
 	struct vt100 *V = vt100_new(inner_rows, inner_cols);
 	tui_log_set_grid(&L, V);
 	{
 		struct sbuf frame = SBUF_INIT;
+		char status_buf[256];
+		snprintf(status_buf, sizeof status_buf,
+			 "ice monitor: %s @ %u baud  \xe2\x80\xa2  "
+			 "Ctrl-T:  h=help  r=reset  p=bootloader  x=exit",
+			 opt_port, (unsigned)baud);
+		struct tui_rect status_r = {.x = 1, .y = 1, .w = cols, .h = 1};
+		tui_status_bar(&frame, &status_r, status_buf, "1;37;44");
 		tui_log_render(&frame, &L);
 		tui_flush(&frame);
 	}
@@ -650,13 +535,11 @@ int cmd_target_monitor(int argc, const char **argv)
 
 		if (term_resize_pending()) {
 			term_size(&cols, &rows);
-			tui_log_resize(&L, cols, rows);
+			tui_log_resize(&L, cols, rows > 1 ? rows - 1 : rows);
 			int new_inner_cols = cols > 1 ? cols - 1 : cols;
-			int new_inner_rows = rows > 1 ? rows - 1 : rows;
+			int new_inner_rows = rows > 2 ? rows - 2 : 1;
 			vt100_resize(V, new_inner_rows, new_inner_cols);
-			if (mode == MON_INSPECT_SEARCH)
-				tui_prompt_resize(&search_prompt, cols, rows);
-			if (mode == MON_NORMAL_HELP || mode == MON_INSPECT_HELP)
+			if (mode == MON_NORMAL_HELP)
 				tui_info_resize(&help_info, cols, rows);
 			dirty = 1;
 		}
@@ -694,213 +577,135 @@ int cmd_target_monitor(int argc, const char **argv)
 			}
 		}
 
-		switch (mode) {
-		case MON_NORMAL: {
-			n = term_read(buf, sizeof(buf), 0);
-			if (n < 0)
-				goto break_loop;
-			size_t pass_start = 0;
-			size_t in = (size_t)n;
-			size_t i;
-			int stop_chunk = 0;
-			for (i = 0; i < in && !stop_chunk;) {
-				if (buf[i] == 0x1d) { /* Ctrl-] */
-					if (i > pass_start)
-						serial_write(s,
-							     buf + pass_start,
-							     i - pass_start);
-					goto done;
-				}
-				if (buf[i] == 0x14) { /* Ctrl-T */
-					if (i > pass_start)
-						serial_write(s,
-							     buf + pass_start,
-							     i - pass_start);
-					i++; /* consume Ctrl-T */
-					if (i < in) {
-						/* Dispatch immediately --
-						 * keeps "Ctrl-T x" snappy
-						 * for users who type the
-						 * pair quickly. */
-						unsigned char k = buf[i];
-						i++;
-						pass_start = i;
-						if (dispatch_normal_prefix(
-							k, s, &L, &help_info,
-							cols, rows, &mode))
-							goto done;
-						dirty = 1;
-						stop_chunk = 1;
-						break;
+		struct term_event ev;
+		int got = term_read_event(&ev, 0);
+		if (got < 0)
+			goto break_loop;
+		if (got > 0 && ev.key != TK_NONE && ev.key != TK_RESIZE) {
+			/* Ctrl-]: panic eject from any state. */
+			if (ev.key == 0x1d)
+				goto done;
+
+			/* Cmd-level prefix has to be checked BEFORE we hand
+			 * the event to the widget, otherwise the widget's
+			 * own @c prefix_pending latch fires on the user's
+			 * plain @c Ctrl-T and the cmd never sees its
+			 * reserved set come through.  In MON_NORMAL_PREFIX
+			 * the host owns dispatch entirely; in MON_NORMAL
+			 * a fresh @c Ctrl-T claims the prefix here. */
+			if (mode == MON_NORMAL && ev.key == 0x14) {
+				mode = MON_NORMAL_PREFIX;
+				dirty = 1;
+			} else if (mode == MON_NORMAL &&
+				   tui_log_on_event(&L, &ev)) {
+				dirty = 1;
+			} else {
+				switch (mode) {
+				case MON_NORMAL:
+					/* Forward to the chip.  Plain bytes
+					 * go straight out; named keys
+					 * (arrows, F-keys, ...) are re-
+					 * emitted as their canonical xterm
+					 * sequence. */
+					if (ev.key < 0x100) {
+						unsigned char b =
+						    (unsigned char)ev.key;
+						serial_write(s, &b, 1);
+					} else {
+						const char *seq =
+						    term_key_to_xterm_seq(
+							ev.key);
+						if (seq)
+							serial_write(
+							    s,
+							    (const unsigned char
+								 *)seq,
+							    strlen(seq));
 					}
-					/* No follow-on byte yet -- park in
-					 * MON_NORMAL_PREFIX and pick up the
-					 * next keystroke on the next read. */
-					mode = MON_NORMAL_PREFIX;
-					pass_start = i;
+					break;
+				case MON_NORMAL_PREFIX:
+					/* Only single-byte keys map to cmd
+					 * prefix actions.  Named keys (arrows
+					 * etc.) cancel the prefix silently. */
+					if (ev.key < 0x100) {
+						unsigned char k =
+						    (unsigned char)ev.key;
+						int rc = dispatch_normal_prefix(
+						    k, s, &L, &help_info, cols,
+						    rows, &mode);
+						if (rc == 1)
+							goto done;
+						if (rc < 0) {
+							/* Cmd didn't reserve
+							 * this key; forward
+							 * Ctrl-T + k to the
+							 * widget as two
+							 * events so the
+							 * widget's prefix
+							 * dispatch picks it
+							 * up. */
+							struct term_event pfx =
+							    {.key = 0x14};
+							tui_log_on_event(&L,
+									 &pfx);
+							struct term_event next =
+							    {.key = k};
+							tui_log_on_event(&L,
+									 &next);
+						}
+					}
+					if (mode == MON_NORMAL_PREFIX)
+						mode = MON_NORMAL;
 					dirty = 1;
-					stop_chunk = 1;
+					break;
+				case MON_NORMAL_HELP:
+					if (tui_info_on_event(&help_info,
+							      &ev)) {
+						tui_info_release(&help_info);
+						/* Pair with the freeze in
+						 * dispatch_normal_prefix --
+						 * snap back to live tail so
+						 * the user sees whatever
+						 * streamed in while help
+						 * was up. */
+						tui_log_unfreeze(&L);
+						mode = MON_NORMAL;
+					}
+					dirty = 1;
 					break;
 				}
-				i++;
 			}
-			if (!stop_chunk && in > pass_start)
-				serial_write(s, buf + pass_start,
-					     in - pass_start);
-			break;
-		}
-
-		case MON_NORMAL_PREFIX: {
-			n = term_read(buf, sizeof(buf), 0);
-			if (n < 0)
-				goto break_loop;
-			if (n > 0) {
-				unsigned char k = buf[0];
-				/* Trailing bytes in the same read are
-				 * dropped -- one prefix-dispatch per
-				 * Ctrl-T so a paste-typed multi-byte
-				 * burst doesn't trigger a chain. */
-				if (dispatch_normal_prefix(k, s, &L, &help_info,
-							   cols, rows, &mode))
-					goto done;
-				if (mode == MON_NORMAL_PREFIX)
-					mode = MON_NORMAL;
-				dirty = 1;
-			}
-			break;
-		}
-
-		case MON_NORMAL_HELP: {
-			struct term_event ev;
-			int got = term_read_event(&ev, 0);
-			if (got > 0 && ev.key != TK_NONE) {
-				if (ev.key == TK_RESIZE) {
-					tui_log_resize(&L, ev.cols, ev.rows);
-					tui_info_resize(&help_info, ev.cols,
-							ev.rows);
-					dirty = 1;
-				} else if (ev.key == 0x1d) {
-					goto done;
-				} else if (tui_info_on_event(&help_info, &ev)) {
-					tui_info_release(&help_info);
-					/* Pair with the freeze in
-					 * dispatch_normal_prefix -- snap
-					 * back to live tail so the user
-					 * sees whatever streamed in while
-					 * help was up. */
-					tui_log_unfreeze(&L);
-					mode = MON_NORMAL;
-					dirty = 1;
-				} else {
-					dirty = 1;
-				}
-			}
-			break;
-		}
-
-		case MON_INSPECT: {
-			struct term_event ev;
-			int got = term_read_event(&ev, 0);
-			if (got > 0 && ev.key != TK_NONE) {
-				if (ev.key == TK_RESIZE) {
-					tui_log_resize(&L, ev.cols, ev.rows);
-					dirty = 1;
-				} else {
-					if (dispatch_inspect_event(
-						&ev, &L, &search_prompt,
-						&help_info, cols, rows, &mode))
-						goto done;
-					dirty = 1;
-				}
-			}
-			break;
-		}
-
-		case MON_INSPECT_SEARCH: {
-			struct term_event ev;
-			int got = term_read_event(&ev, 0);
-			if (got > 0 && ev.key != TK_NONE) {
-				if (ev.key == TK_RESIZE) {
-					tui_log_resize(&L, ev.cols, ev.rows);
-					tui_prompt_resize(&search_prompt,
-							  ev.cols, ev.rows);
-					dirty = 1;
-				} else if (ev.key == 0x1d) {
-					goto done;
-				} else {
-					int r = tui_prompt_on_event(
-					    &search_prompt, &ev);
-					if (r == 1) {
-						/* Enter: compile + apply.
-						 * On compile failure keep
-						 * the prompt up with an
-						 * error title so the user
-						 * can fix without losing
-						 * what they had. */
-						int rc2 = tui_log_search_set(
-						    &L, search_prompt.buf);
-						if (rc2 < 0) {
-							search_prompt.title =
-							    "invalid regex - "
-							    "search:";
-						} else {
-							mode = MON_INSPECT;
-						}
-					} else if (r == -1) {
-						/* Esc: cancel without
-						 * disturbing any
-						 * previously-applied
-						 * pattern. */
-						mode = MON_INSPECT;
-					}
-					dirty = 1;
-				}
-			}
-			break;
-		}
-
-		case MON_INSPECT_HELP: {
-			struct term_event ev;
-			int got = term_read_event(&ev, 0);
-			if (got > 0 && ev.key != TK_NONE) {
-				if (ev.key == TK_RESIZE) {
-					tui_log_resize(&L, ev.cols, ev.rows);
-					tui_info_resize(&help_info, ev.cols,
-							ev.rows);
-					dirty = 1;
-				} else if (ev.key == 0x1d) {
-					goto done;
-				} else if (tui_info_on_event(&help_info, &ev)) {
-					tui_info_release(&help_info);
-					mode = MON_INSPECT;
-					dirty = 1;
-				} else {
-					dirty = 1;
-				}
-			}
-			break;
-		}
 		}
 
 		if (dirty) {
-			update_status(&status, &L, opt_port, baud, mode);
 			/*
-			 * Compose log + any active modal into a single
-			 * frame and flush once.  The log is frozen for
-			 * every mode that shows a modal (inspect freezes
-			 * on entry; normal-mode help freezes via the
-			 * Ctrl-T+? dispatch and unfreezes on dismiss),
-			 * so consecutive frames are byte-identical and
-			 * the terminal has nothing to flicker even when
-			 * serial bytes are streaming into the ring
-			 * behind the modal.
+			 * Cmd top status bar (row 1) carries the cmd-prefix
+			 * shortcuts; widget paints its own bottom status row
+			 * (last row of its rect) with widget-prefix shortcuts
+			 * and the @c [INSPECT] badge.  The log is frozen
+			 * whenever inspect is active or the normal-mode help
+			 * is up, so consecutive frames are byte-identical and
+			 * the terminal has nothing to flicker even when serial
+			 * bytes are streaming.
 			 */
 			struct sbuf frame = SBUF_INIT;
+			char status_buf[256];
+			const char *prefix_hint =
+			    mode == MON_NORMAL_PREFIX
+				? "  \xe2\x80\xa2  [Ctrl-T] prefix"
+				: "";
+			snprintf(status_buf, sizeof status_buf,
+				 "ice monitor: %s @ %u baud%s"
+				 "  \xe2\x80\xa2  "
+				 "Ctrl-T:  h=help  r=reset  p=bootloader  "
+				 "x=exit",
+				 opt_port, (unsigned)baud, prefix_hint);
+			struct tui_rect status_r = {
+			    .x = 1, .y = 1, .w = cols, .h = 1};
+			tui_status_bar(&frame, &status_r, status_buf,
+				       "1;37;44");
 			tui_log_render(&frame, &L);
-			if (mode == MON_INSPECT_SEARCH)
-				tui_prompt_render(&frame, &search_prompt);
-			else if (mode == MON_NORMAL_HELP ||
-				 mode == MON_INSPECT_HELP)
+			if (mode == MON_NORMAL_HELP)
 				tui_info_render(&frame, &help_info);
 			tui_flush(&frame);
 		}
@@ -908,11 +713,10 @@ int cmd_target_monitor(int argc, const char **argv)
 break_loop:;
 
 done:
-	if (mode == MON_NORMAL_HELP || mode == MON_INSPECT_HELP)
+	if (mode == MON_NORMAL_HELP)
 		tui_info_release(&help_info);
 	tui_log_release(&L);
 	vt100_free(V);
-	sbuf_release(&status);
 	term_screen_leave();
 	term_raw_leave();
 	serial_close(s);

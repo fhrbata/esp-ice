@@ -29,6 +29,8 @@
 static struct termios saved_tio;
 static int raw_active;
 static int screen_active;
+static int mouse_active;
+static int bpaste_active;
 
 static volatile sig_atomic_t resize_flag;
 static struct sigaction saved_winch;
@@ -95,6 +97,25 @@ int term_raw_enter(unsigned flags)
 
 	install_winch();
 
+	/* Mouse tracking: 1000 (any-button events), 1006 (SGR encoding
+	 * with full coordinate range and clean press/release final byte).
+	 * Both are widely supported (xterm, alacritty, kitty, iTerm,
+	 * gnome-terminal, konsole, foot).  No-op on terminals that don't
+	 * implement them. */
+	if ((flags & TERM_RAW_MOUSE) && !mouse_active) {
+		fputs("\x1b[?1000h\x1b[?1006h", stdout);
+		fflush(stdout);
+		mouse_active = 1;
+	}
+
+	/* Bracketed paste: harmless on terminals that don't implement
+	 * the private mode -- they just ignore the enable byte. */
+	if ((flags & TERM_RAW_BRACKETED_PASTE) && !bpaste_active) {
+		fputs("\x1b[?2004h", stdout);
+		fflush(stdout);
+		bpaste_active = 1;
+	}
+
 	if (!raw_active) {
 		atexit(restore_on_exit);
 		raw_active = 1;
@@ -107,6 +128,16 @@ void term_raw_leave(void)
 {
 	if (!raw_active)
 		return;
+	if (bpaste_active) {
+		fputs("\x1b[?2004l", stdout);
+		fflush(stdout);
+		bpaste_active = 0;
+	}
+	if (mouse_active) {
+		fputs("\x1b[?1006l\x1b[?1000l", stdout);
+		fflush(stdout);
+		mouse_active = 0;
+	}
 	tcsetattr(STDIN_FILENO, TCSAFLUSH, &saved_tio);
 	raw_active = 0;
 }

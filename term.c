@@ -325,6 +325,59 @@ void expand_colors(struct sbuf *out, const char *fmt, int colorize)
 	}
 }
 
+const char *term_key_to_xterm_seq(int key)
+{
+	/* Sequences mirror the @c vk_to_seq table in
+	 * @c platform/win/term.c -- xterm / VT220 conventions that
+	 * every common terminal recognises.  Returning NULL keeps the
+	 * caller's defaults intact for keys without a canonical
+	 * escape (printable bytes, mouse wheel, @c TK_RESIZE, ...). */
+	switch (key) {
+	case TK_UP:
+		return "\x1b[A";
+	case TK_DOWN:
+		return "\x1b[B";
+	case TK_RIGHT:
+		return "\x1b[C";
+	case TK_LEFT:
+		return "\x1b[D";
+	case TK_HOME:
+		return "\x1b[H";
+	case TK_END:
+		return "\x1b[F";
+	case TK_INS:
+		return "\x1b[2~";
+	case TK_DEL:
+		return "\x1b[3~";
+	case TK_F1:
+		return "\x1bOP";
+	case TK_F2:
+		return "\x1bOQ";
+	case TK_F3:
+		return "\x1bOR";
+	case TK_F4:
+		return "\x1bOS";
+	case TK_F5:
+		return "\x1b[15~";
+	case TK_F6:
+		return "\x1b[17~";
+	case TK_F7:
+		return "\x1b[18~";
+	case TK_F8:
+		return "\x1b[19~";
+	case TK_F9:
+		return "\x1b[20~";
+	case TK_F10:
+		return "\x1b[21~";
+	case TK_F11:
+		return "\x1b[23~";
+	case TK_F12:
+		return "\x1b[24~";
+	default:
+		return NULL;
+	}
+}
+
 /* ================================================================== */
 /*  Input event decoder                                               */
 /* ================================================================== */
@@ -367,6 +420,9 @@ static const struct {
     {"[21~", TK_F10},
     {"[23~", TK_F11},
     {"[24~", TK_F12},
+    /* Bracketed-paste markers (DECSET 2004). */
+    {"[200~", TK_PASTE_BEGIN},
+    {"[201~", TK_PASTE_END},
     /* SS3 (ESC O ...) sequences used by xterm application-keypad
      * mode and by rxvt for the arrow keys. */
     {"OA", TK_UP},
@@ -397,6 +453,16 @@ static const struct {
 static unsigned char term_pbuf[TERM_PBUF_CAP];
 static size_t term_phead;
 static size_t term_ptail;
+
+/*
+ * Bracketed-paste mode latch.  Set when the parser delivers
+ * @c TK_PASTE_BEGIN, cleared when the matching @c TK_PASTE_END
+ * lands.  While set, every byte is delivered verbatim (no escape
+ * decoding) except the literal @c \\e[201~ end marker -- so a paste
+ * containing arrow keys, Ctrl-T, mouse-style escapes etc. ships as
+ * raw bytes the host can forward unchanged.
+ */
+static int term_in_paste;
 
 /*
  * Ensure at least one byte is queued, reading from term_read if the
@@ -448,6 +514,32 @@ int term_read_event(struct term_event *ev, unsigned timeout_ms)
 		return -1;
 	if (n == 0)
 		return 0;
+
+	/* Inside a bracketed paste: deliver bytes verbatim, watching
+	 * only for the closing @c \\e[201~ marker so escape sequences
+	 * inside the payload don't get mis-interpreted as keypresses. */
+	if (term_in_paste) {
+		if (term_pbuf[term_phead] == 0x1b) {
+			/* Try to match a 6-byte close marker; pull more
+			 * bytes if the paste-end straddles a read. */
+			if (term_phead + 6 > term_ptail)
+				term_fill(TERM_ESC_TIMEOUT_MS);
+			if (term_phead + 6 <= term_ptail &&
+			    term_pbuf[term_phead + 1] == '[' &&
+			    term_pbuf[term_phead + 2] == '2' &&
+			    term_pbuf[term_phead + 3] == '0' &&
+			    term_pbuf[term_phead + 4] == '1' &&
+			    term_pbuf[term_phead + 5] == '~') {
+				term_phead += 6;
+				term_in_paste = 0;
+				ev->key = TK_PASTE_END;
+				return 1;
+			}
+			/* Lone ESC inside the payload -- deliver as-is. */
+		}
+		ev->key = term_pbuf[term_phead++];
+		return 1;
+	}
 
 	unsigned char first = term_pbuf[term_phead++];
 	if (first != 0x1b) {
@@ -507,8 +599,67 @@ int term_read_event(struct term_event *ev, unsigned timeout_ms)
 
 		if (got_final) {
 			size_t seq_len = term_phead - seq_start;
+			/* SGR mouse: CSI < button ; col ; row (M|m).  The
+			 * private-CSI '<' marks the SGR encoding (terminal
+			 * mode 1006).  @c seq_start points at the leading
+			 * '['; the '<' marker (when present) sits one byte
+			 * later.  Parse the three integer fields and
+			 * synthesise a wheel event for buttons 64/65;
+			 * silently swallow other mouse events for now. */
+			if (second == '[' && seq_len >= 3 &&
+			    term_pbuf[seq_start + 1] == '<') {
+				unsigned char final = term_pbuf[term_phead - 1];
+				if (final == 'M' || final == 'm') {
+					int btn = 0, col = 0, row = 0;
+					int field = 0;
+					for (size_t i = seq_start + 2;
+					     i < term_phead - 1; i++) {
+						unsigned char c = term_pbuf[i];
+						if (c == ';') {
+							field++;
+							continue;
+						}
+						if (c < '0' || c > '9')
+							continue;
+						int *dst = field == 0	? &btn
+							   : field == 1 ? &col
+									: &row;
+						*dst = *dst * 10 + (c - '0');
+					}
+					/* Ignore button modifier bits
+					 * (shift/meta/ ctrl 0x04/08/10 plus the
+					 * motion flag 0x20) when classifying
+					 * the button. */
+					int base = btn & ~0x3c;
+					if (final == 'M' && base == 64) {
+						ev->key = TK_WHEEL_UP;
+						ev->cols = col;
+						ev->rows = row;
+						return 1;
+					}
+					if (final == 'M' && base == 65) {
+						ev->key = TK_WHEEL_DOWN;
+						ev->cols = col;
+						ev->rows = row;
+						return 1;
+					}
+					if (final == 'M' && base == 0) {
+						ev->key = TK_MOUSE_PRESS;
+						ev->cols = col;
+						ev->rows = row;
+						return 1;
+					}
+					/* Other mouse events (middle / right
+					 * clicks, motion, release) -- consume
+					 * silently. */
+					ev->key = TK_NONE;
+					return 1;
+				}
+			}
 			int key = match_keyseq(&term_pbuf[seq_start], seq_len);
 			if (key) {
+				if (key == TK_PASTE_BEGIN)
+					term_in_paste = 1;
 				ev->key = key;
 				return 1;
 			}

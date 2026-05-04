@@ -122,7 +122,7 @@ int main(void)
 	 * callers behave exactly as before the origin field was added. */
 	{
 		struct tui_log L;
-		tui_log_init(&L, 100);
+		tui_log_init(&L, 100, TUI_LOG_STATUS_NONE, 0, NULL);
 		tap_check(L.origin_x == 1);
 		tap_check(L.origin_y == 1);
 		tui_log_release(&L);
@@ -133,7 +133,7 @@ int main(void)
 	 * column 1 -- baseline that previous releases relied on. */
 	{
 		struct tui_log L;
-		tui_log_init(&L, 100);
+		tui_log_init(&L, 100, TUI_LOG_STATUS_NONE, 0, NULL);
 		tui_log_resize(&L, 80, 24);
 		tui_log_append(&L, "hello\n", 6);
 
@@ -151,7 +151,7 @@ int main(void)
 	 * left half is preserved. */
 	{
 		struct tui_log L;
-		tui_log_init(&L, 100);
+		tui_log_init(&L, 100, TUI_LOG_STATUS_NONE, 0, NULL);
 		tui_log_set_origin(&L, 50, 10);
 		tui_log_resize(&L, 30, 12);
 		tui_log_append(&L, "hello\n", 6);
@@ -171,7 +171,7 @@ int main(void)
 	 * panes' content is not erased. */
 	{
 		struct tui_log L;
-		tui_log_init(&L, 100);
+		tui_log_init(&L, 100, TUI_LOG_STATUS_NONE, 0, NULL);
 		tui_log_set_origin(&L, 50, 10);
 		tui_log_resize(&L, 30, 12);
 		tui_log_append(&L, "hi\n", 3);
