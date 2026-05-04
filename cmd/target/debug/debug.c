@@ -331,18 +331,24 @@ static char *resolve_gdb(const struct debug_chip *dc)
 /* ------------------------------------------------------------------ */
 
 /*
- * Spawn OpenOCD with stdout+stderr merged onto a pipe we hold and tail-
- * poll it for the @c{Listening on port \d+ for gdb connections} line
- * that means the gdb stub is up.  Mirrors esp-idf's own cadence (5 x
- * 500ms) -- if OpenOCD exits or stays silent past the budget we tear
- * down and report.
+ * Spawn OpenOCD on a pty and tail-poll it for the @c{Listening on
+ * port \d+ for gdb connections} line that means the gdb stub is up.
+ * Mirrors esp-idf's own cadence (5 x 500ms) -- if OpenOCD exits or
+ * stays silent past the budget we tear down and report.
+ *
+ * Pty (rather than pipe) for two reasons: the kernel's line
+ * discipline applies @c ONLCR so OpenOCD's bare-LF log lines render
+ * correctly when fed straight into the gdb pane's vt100 (a pipe
+ * would scroll-without-CR and stair-step the output), and libc
+ * line-buffers stdout on a tty so log lines flush per @c \n instead
+ * of waiting for a 4KB block to fill.
  *
  * Splits @p openocd_cmd in-place on whitespace via @ref sbuf_split; the
  * caller must hold the storage live until @ref process_finish runs.
  *
  * Returns 0 on success (OpenOCD is up and listening); -1 on failure.
  * On success the openocd output captured during the wait is left at the
- * head of the pipe so the orchestrator's gdb pane carries the same
+ * head of the pty so the orchestrator's gdb pane carries the same
  * "Open On-Chip Debugger ..." banner the user would see in a regular
  * openocd terminal.
  */
@@ -366,8 +372,7 @@ static int spawn_openocd(struct process *proc, const char *openocd_bin,
 	}
 
 	proc->argv = argv.v;
-	proc->pipe_out = 1;
-	proc->merge_err = 1;
+	proc->use_pty = 1;
 
 	/* Point OpenOCD at its own scripts dir if we resolved through
 	 * ~/.ice/tools/.  The Espressif build's compiled-in default is
