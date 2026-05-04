@@ -1,3 +1,42 @@
+## v0.12.0 (2026-05-04)
+
+### ✨ New Features
+
+- **debug**: ice debug -- OpenOCD + gdb dual-pane debug session *(Frantisek Hrbata - 8d8db73)*
+- **tui**: widget-owned inspect mode + mouse / paste / yank *(Frantisek Hrbata - 8847050)*
+- **qemu**: auto-install qemu via 'ice tools install' when missing *(Frantisek Hrbata - a3b944e)*
+- **qemu**: make GDB stub port configurable via --gdb-port *(Frantisek Hrbata - aff552c)*
+- **qemu**: auto-discover qemu and gdb under ice_home/tools/ *(Frantisek Hrbata - 9aa730e)*
+- **qemu**: --debug dual-pane gdb + UART in one window *(Frantisek Hrbata - a02f3f6)*
+- **platform**: pty primitive for embedding interactive children *(Frantisek Hrbata - f5f2d7c)*
+- **qemu**: add --gdb flag for two-terminal debug *(Frantisek Hrbata - 82dc844)*
+- **qemu**: add ice qemu for running firmware on QEMU *(Frantisek Hrbata - 0adb90e)*
+- **platform**: add pipe_write_all and kill_w shim *(Frantisek Hrbata - 0f1ad2e)*
+- **tui**: add origin + rect helpers for pane composition *(Frantisek Hrbata - 0146624)*
+- **init**: redirect check_sizes/gen_empty/gen_extra_subtypes/parttool.py to ice *(Frantisek Hrbata - ee41d76)*
+- **target**: add partition namespace replacing parttool.py *(Frantisek Hrbata - 3629f99)*
+- **idf/partition-table**: add decode/empty/subtypes-header/check-bootloader/check-partition *(Frantisek Hrbata - abe2cb5)*
+- **partition_table**: add binary parser, CSV emitter, runtime extras *(Frantisek Hrbata - f2f0f85)*
+
+### 🐛 Bug Fixes
+
+- **debug**: run openocd in a pty so its log lines render correctly *(Frantisek Hrbata - 8becc04)*
+- **qemu**: reject empty offset in flash-image builder *(Frantisek Hrbata - c5b6cff)*
+- **target/partition**: accept -q/--quiet for parttool.py compat *(Frantisek Hrbata - 51f5db1)*
+- **vt100**: decode UTF-8 input bytes and implement ECH *(Frantisek Hrbata - f98c464)*
+- **platform**: macOS ioctl request was getting sign-extended *(Frantisek Hrbata - 9ba2596)*
+- **platform**: set pty winsize on both master and slave for macOS *(Frantisek Hrbata - 7662ba5)*
+- **platform**: set pty initial winsize on master, not slave *(Frantisek Hrbata - d6b1872)*
+- **platform**: cross-build failures on ppc64el and older mingw *(Frantisek Hrbata - 3912800)*
+- **qemu,platform**: clang-tidy lint failures from macOS CI *(Frantisek Hrbata - e28f7db)*
+- **qemu**: three smoke-test bugs in ice qemu's argv assembly *(Frantisek Hrbata - 86819a0)*
+- **idf/partition-table**: refactor empty.c so the analyzer can see fclose *(Frantisek Hrbata - 2d09995)*
+
+### 🔧 Code Refactoring
+
+- **platform**: drop pipe_write_all, callers use write(2) directly *(Frantisek Hrbata - af34f9d)*
+
+
 ## v0.11.0 (2026-05-01)
 
 ### ✨ New Features
