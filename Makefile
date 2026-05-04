@@ -127,6 +127,7 @@ LIB_SRCS := \
 	cmd/clean/clean.c \
 	cmd/completion/completion.c \
 	cmd/config/config.c \
+	cmd/debug/debug.c \
 	cmd/docs/docs.c \
 	cmd/docs/getting-started/getting-started.c \
 	cmd/flash/flash.c \
@@ -196,6 +197,7 @@ LIB_SRCS := \
 	cmd/status/status.c \
 	cmd/target/target.c \
 	cmd/monitor/monitor.c \
+	cmd/target/debug/debug.c \
 	cmd/target/flash/flash.c \
 	cmd/target/list/list.c \
 	cmd/target/monitor/monitor.c \

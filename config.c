@@ -855,6 +855,18 @@ void config_load_profile(const char *name)
 			config_add(&config, "_project.elf", derived.buf,
 				   CONFIG_SCOPE_PROJECT);
 		}
+
+		const char *openocd_args =
+		    json_as_string(json_get(desc, "debug_arguments_openocd"));
+		if (openocd_args && *openocd_args)
+			config_add(&config, "_project.openocd-args",
+				   openocd_args, CONFIG_SCOPE_PROJECT);
+
+		const char *gdb_prefix =
+		    json_as_string(json_get(desc, "monitor_toolprefix"));
+		if (gdb_prefix && *gdb_prefix)
+			config_add(&config, "_project.gdb-prefix", gdb_prefix,
+				   CONFIG_SCOPE_PROJECT);
 	}
 
 out:
