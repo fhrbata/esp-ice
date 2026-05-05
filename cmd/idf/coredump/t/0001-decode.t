@@ -302,6 +302,36 @@ else
 fi
 tap_done "missing --gdb binary is reported gracefully"
 
+# ---- 17b. --rom-elf passes 'add-symbol-file' through to gdb's argv ----
+
+touch fake-rom.elf
+rm -f fake-gdb.log
+"$BINARY" idf coredump --core v22.bin --save-core v22_run3.elf \
+	--gdb "$PWD/fake-gdb" --rom-elf "$PWD/fake-rom.elf" \
+	/tmp/fake_prog.elf >gdb_rom_out 2>gdb_rom_err
+tap_check grep -qx "argv\\[11\\]=-ex" fake-gdb.log
+tap_check grep -qx "argv\\[12\\]=add-symbol-file $PWD/fake-rom.elf" \
+	fake-gdb.log
+# After --rom-elf inserts two argv entries, info-threads / bt indices
+# shift by 2.
+tap_check grep -qx 'argv\[14\]=info threads' fake-gdb.log
+tap_check grep -qx 'argv\[16\]=thread apply all bt' fake-gdb.log
+tap_done "--rom-elf passes 'add-symbol-file <path>' to gdb"
+
+# ---- 17c. --rom-elf with a nonexistent path errors out before spawning gdb ----
+
+rm -f fake-gdb.log
+if "$BINARY" idf coredump --core v22.bin --save-core v22_run4.elf \
+	--gdb "$PWD/fake-gdb" --rom-elf /nonexistent/rom.elf \
+	/tmp/fake_prog.elf >out 2>err; then
+	tap_check false
+else
+	tap_check grep -q -- '--rom-elf' err
+	tap_check grep -qi 'no such file' err
+	tap_check test ! -e fake-gdb.log
+fi
+tap_done "missing --rom-elf path is rejected before gdb is spawned"
+
 # ---- 18. BIN_V* + <prog>: save-core fails first; gdb is NOT invoked ----
 
 rm -f fake-gdb.log

@@ -97,7 +97,15 @@ static const struct cmd_manual idf_coredump_manual = {
 	       "override.  When @b{--save-core} is also set, GDB reads "
 	       "from that path; otherwise the core ELF goes to a temp "
 	       "file in @b{$TMPDIR} (POSIX) / @b{GetTempPath()} "
-	       "(Windows) for the duration of the GDB run."),
+	       "(Windows) for the duration of the GDB run.")
+	H_PARA("Pass @b{--rom-elf PATH} to also load ROM symbols, so "
+	       "backtrace frames in @c{esp_rom_*} / @c{ets_*} code show "
+	       "function names instead of bare hex addresses.  The "
+	       "files ship in the @b{esp-rom-elfs} tools.json package "
+	       "(filename pattern: @c{<target>_rev<N>_rom.elf}); "
+	       "explicit-args policy applies, so the path is not "
+	       "auto-discovered here -- a future @b{ice coredump} "
+	       "porcelain will pick it up from the active profile."),
 
 	.examples =
 	H_EXAMPLE("ice idf coredump --core dump.b64")
@@ -124,6 +132,7 @@ static const char *opt_core_format = "auto";
 static const char *opt_save_core;
 static const char *opt_save_raw;
 static const char *opt_gdb;
+static const char *opt_rom_elf;
 static int opt_no_verify;
 
 static void complete_core_format(void)
@@ -148,6 +157,8 @@ static const struct option cmd_idf_coredump_opts[] = {
 	     "skip the trailing CRC32 / SHA256 checksum check"),
     OPT_STRING(0, "gdb", &opt_gdb, "PATH",
 	       "path to the gdb binary (default: chip-specific)", NULL),
+    OPT_STRING(0, "rom-elf", &opt_rom_elf, "PATH",
+	       "ELF with ROM symbols (passed to gdb as add-symbol-file)", NULL),
     OPT_POSITIONAL("[<prog>]", NULL),
     OPT_END(),
 };
@@ -362,10 +373,11 @@ static void print_elf_info(const struct sbuf *body, FILE *out)
  * -1 if the spawn fails or GDB exits non-zero.
  */
 static int run_gdb(const char *gdb_prog, const char *core_path,
-		   const char *prog)
+		   const char *prog, const char *rom_elf)
 {
-	const char *argv[16];
+	const char *argv[24];
 	int n = 0;
+	struct sbuf rom_cmd = SBUF_INIT;
 	struct process proc = PROCESS_INIT;
 
 	argv[n++] = gdb_prog;
@@ -380,6 +392,11 @@ static int run_gdb(const char *gdb_prog, const char *core_path,
 	argv[n++] = "--core";
 	argv[n++] = core_path;
 	argv[n++] = prog;
+	if (rom_elf) {
+		sbuf_addf(&rom_cmd, "add-symbol-file %s", rom_elf);
+		argv[n++] = "-ex";
+		argv[n++] = rom_cmd.buf;
+	}
 	argv[n++] = "-ex";
 	argv[n++] = "info threads";
 	argv[n++] = "-ex";
@@ -388,6 +405,7 @@ static int run_gdb(const char *gdb_prog, const char *core_path,
 
 	proc.argv = argv;
 	int rc = process_run(&proc);
+	sbuf_release(&rom_cmd);
 	if (rc < 0) {
 		err("failed to spawn @b{%s}: not found in PATH? "
 		    "(pass @b{--gdb /path/to/gdb})",
@@ -425,6 +443,9 @@ int cmd_idf_coredump(int argc, const char **argv)
 
 	if (!opt_core || !*opt_core)
 		die("--core <path> is required");
+
+	if (opt_rom_elf && access(opt_rom_elf, F_OK) != 0)
+		die_errno("--rom-elf '%s'", opt_rom_elf);
 
 	if (sbuf_read_file(&input, opt_core) < 0)
 		die_errno("cannot read '%s'", opt_core);
@@ -578,7 +599,8 @@ int cmd_idf_coredump(int argc, const char **argv)
 					rc = 1;
 				}
 			}
-			if (gdb_prog && run_gdb(gdb_prog, core_path, prog) < 0)
+			if (gdb_prog &&
+			    run_gdb(gdb_prog, core_path, prog, opt_rom_elf) < 0)
 				rc = 1;
 		}
 	}
