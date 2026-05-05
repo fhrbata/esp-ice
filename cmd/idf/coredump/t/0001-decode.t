@@ -332,6 +332,40 @@ else
 fi
 tap_done "missing --rom-elf path is rejected before gdb is spawned"
 
+# ---- 17d. --interactive strips --batch / --quiet / --nh and the canned commands ----
+
+rm -f fake-gdb.log
+"$BINARY" idf coredump --core v22.bin --save-core v22_run5.elf \
+	--gdb "$PWD/fake-gdb" --interactive /tmp/fake_prog.elf >out 2>err
+# Default mode argv: --batch / --quiet / --nh / -ex 'set pagination off' /
+# -ex 'set print pretty on' / --core / <core> / <prog> / -ex 'info threads' /
+# ... -- none of those should be present in the interactive argv except
+# --core / <core> / <prog> / --nx.
+tap_check ! grep -q -x 'argv\[.\]=--batch' fake-gdb.log
+tap_check ! grep -q -x 'argv\[.\]=--quiet' fake-gdb.log
+tap_check ! grep -q -x 'argv\[.\]=--nh' fake-gdb.log
+tap_check ! grep -q 'set pagination off' fake-gdb.log
+tap_check ! grep -q 'set print pretty on' fake-gdb.log
+tap_check ! grep -q 'info threads' fake-gdb.log
+tap_check ! grep -q 'thread apply all bt' fake-gdb.log
+# But the essentials are still there:
+tap_check grep -q -x 'argv\[0\]=--nx' fake-gdb.log
+tap_check grep -q -x 'argv\[1\]=--core' fake-gdb.log
+tap_check grep -q -x 'argv\[2\]=v22_run5.elf' fake-gdb.log
+tap_check grep -q -x 'argv\[3\]=/tmp/fake_prog.elf' fake-gdb.log
+tap_done "--interactive: stripped argv (no --batch / canned commands)"
+
+# ---- 17e. --interactive + --rom-elf still passes add-symbol-file ----
+
+rm -f fake-gdb.log
+"$BINARY" idf coredump --core v22.bin --save-core v22_run6.elf \
+	--gdb "$PWD/fake-gdb" --interactive --rom-elf "$PWD/fake-rom.elf" \
+	/tmp/fake_prog.elf >out 2>err
+tap_check grep -qx "argv\\[4\\]=-ex" fake-gdb.log
+tap_check grep -qx "argv\\[5\\]=add-symbol-file $PWD/fake-rom.elf" \
+	fake-gdb.log
+tap_done "--interactive composes with --rom-elf"
+
 # ---- 18. BIN_V* + <prog>: save-core fails first; gdb is NOT invoked ----
 
 rm -f fake-gdb.log

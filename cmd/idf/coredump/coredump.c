@@ -105,12 +105,21 @@ static const struct cmd_manual idf_coredump_manual = {
 	       "(filename pattern: @c{<target>_rev<N>_rom.elf}); "
 	       "explicit-args policy applies, so the path is not "
 	       "auto-discovered here -- a future @b{ice coredump} "
-	       "porcelain will pick it up from the active profile."),
+	       "porcelain will pick it up from the active profile.")
+	H_PARA("Pass @b{--interactive} to drop into a gdb prompt "
+	       "instead of running @b{info threads} + @b{thread apply "
+	       "all bt} in batch mode.  Mirrors upstream's "
+	       "@c{dbg_corefile} subcommand: @c{--batch} / @c{--quiet} "
+	       "/ @c{--nh} are dropped so the user's @c{~/.gdbinit} is "
+	       "honoured and the prompt stays alive; @c{--nx} is kept "
+	       "so system / cwd gdbinit don't leak in."),
 
 	.examples =
 	H_EXAMPLE("ice idf coredump --core dump.b64")
 	H_EXAMPLE("ice idf coredump --core dump.b64 --save-core dump.elf")
 	H_EXAMPLE("ice idf coredump --core dump.b64 --save-core dump.elf "
+		  "build/app.elf")
+	H_EXAMPLE("ice idf coredump --core dump.b64 --interactive "
 		  "build/app.elf")
 	H_EXAMPLE("ice idf coredump --core dump.b64 --save-raw dump.bin")
 	H_EXAMPLE("ice idf coredump --core dump.b64 --no-verify"),
@@ -134,6 +143,7 @@ static const char *opt_save_raw;
 static const char *opt_gdb;
 static const char *opt_rom_elf;
 static int opt_no_verify;
+static int opt_interactive;
 
 static void complete_core_format(void)
 {
@@ -159,6 +169,8 @@ static const struct option cmd_idf_coredump_opts[] = {
 	       "path to the gdb binary (default: chip-specific)", NULL),
     OPT_STRING(0, "rom-elf", &opt_rom_elf, "PATH",
 	       "ELF with ROM symbols (passed to gdb as add-symbol-file)", NULL),
+    OPT_BOOL(0, "interactive", &opt_interactive,
+	     "drop into a gdb prompt instead of printing info+bt"),
     OPT_POSITIONAL("[<prog>]", NULL),
     OPT_END(),
 };
@@ -367,13 +379,19 @@ static void print_elf_info(const struct sbuf *body, FILE *out)
 /* ------------------------------------------------------------------ */
 
 /*
- * Spawn @p gdb_prog with @c --batch (and friends) on @p core_path
- * loaded against @p prog (the user's app ELF), print @c info @c
- * threads and @c thread @c apply @c all @c bt.  Returns 0 on success,
- * -1 if the spawn fails or GDB exits non-zero.
+ * Spawn @p gdb_prog on @p core_path loaded against @p prog.
+ *
+ * Default mode: @c --batch with a canned @c info @c threads + @c
+ * thread @c apply @c all @c bt; gdb prints output and exits.
+ *
+ * @p interactive mode: drops @c --batch / @c --quiet / @c --nh and
+ * the canned commands so gdb stays at its prompt with the user's
+ * @c ~/.gdbinit honoured.  We still pass @c --nx to keep system /
+ * cwd gdbinit out of the picture.  The temp file owned by the
+ * caller stays valid for the whole interactive session.
  */
 static int run_gdb(const char *gdb_prog, const char *core_path,
-		   const char *prog, const char *rom_elf)
+		   const char *prog, const char *rom_elf, int interactive)
 {
 	const char *argv[24];
 	int n = 0;
@@ -381,14 +399,18 @@ static int run_gdb(const char *gdb_prog, const char *core_path,
 	struct process proc = PROCESS_INIT;
 
 	argv[n++] = gdb_prog;
-	argv[n++] = "--batch";
-	argv[n++] = "--quiet";
-	argv[n++] = "--nh"; /* don't read ~/.gdbinit */
+	if (!interactive) {
+		argv[n++] = "--batch";
+		argv[n++] = "--quiet";
+		argv[n++] = "--nh"; /* don't read ~/.gdbinit */
+	}
 	argv[n++] = "--nx"; /* don't read system / cwd .gdbinit */
-	argv[n++] = "-ex";
-	argv[n++] = "set pagination off";
-	argv[n++] = "-ex";
-	argv[n++] = "set print pretty on";
+	if (!interactive) {
+		argv[n++] = "-ex";
+		argv[n++] = "set pagination off";
+		argv[n++] = "-ex";
+		argv[n++] = "set print pretty on";
+	}
 	argv[n++] = "--core";
 	argv[n++] = core_path;
 	argv[n++] = prog;
@@ -397,10 +419,12 @@ static int run_gdb(const char *gdb_prog, const char *core_path,
 		argv[n++] = "-ex";
 		argv[n++] = rom_cmd.buf;
 	}
-	argv[n++] = "-ex";
-	argv[n++] = "info threads";
-	argv[n++] = "-ex";
-	argv[n++] = "thread apply all bt";
+	if (!interactive) {
+		argv[n++] = "-ex";
+		argv[n++] = "info threads";
+		argv[n++] = "-ex";
+		argv[n++] = "thread apply all bt";
+	}
 	argv[n] = NULL;
 
 	proc.argv = argv;
@@ -600,7 +624,8 @@ int cmd_idf_coredump(int argc, const char **argv)
 				}
 			}
 			if (gdb_prog &&
-			    run_gdb(gdb_prog, core_path, prog, opt_rom_elf) < 0)
+			    run_gdb(gdb_prog, core_path, prog, opt_rom_elf,
+				    opt_interactive) < 0)
 				rc = 1;
 		}
 	}
