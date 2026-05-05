@@ -128,6 +128,7 @@ LIB_SRCS := \
 	cmd/clean/clean.c \
 	cmd/completion/completion.c \
 	cmd/config/config.c \
+	cmd/coredump/coredump.c \
 	cmd/debug/debug.c \
 	cmd/docs/docs.c \
 	cmd/docs/getting-started/getting-started.c \
