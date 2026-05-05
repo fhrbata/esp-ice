@@ -298,6 +298,20 @@ const char *process_exe(void);
  */
 int self_pid(void);
 
+/**
+ * @brief Return the system temporary directory (no trailing separator).
+ *
+ * POSIX: @c $TMPDIR if set, otherwise @c "/tmp".  Windows:
+ * @c GetTempPathW(), UTF-8-encoded, with the trailing separator
+ * stripped.
+ *
+ * Returned pointer is owned by a static buffer; do not free.
+ * Cached on first call.  Returns NULL only if the platform-native
+ * query fails (Windows path) -- callers should treat NULL as a
+ * fatal environment problem.
+ */
+const char *temp_dir(void);
+
 /* ------------------------------------------------------------------ */
 /*  Child process API                                                 */
 /* ------------------------------------------------------------------ */

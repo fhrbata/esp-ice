@@ -568,6 +568,40 @@ void gen_resolve(struct gen_ctx *ctx, const struct sinfo_db *db)
 			free(ostripped);
 		}
 	}
+
+	/*
+	 * Root-level (archive: *) rules must emit even when the entity
+	 * DB has no matching section -- the linker resolves the
+	 * @c{*(...)} catch-all against whatever input files it actually
+	 * sees at link time, and any SURROUND wrappers on the rule
+	 * (e.g. @c{_coredump_iram_start} from espcoredump's linker.lf)
+	 * have to land regardless.  Synthesise a phantom placement for
+	 * each such rule that didn't get a real match above; the
+	 * empty archive / object / section strings are fine because
+	 * @c emit_root_wildcard ignores them.
+	 */
+	for (int i = 0; i < ctx->n_rules; i++) {
+		const struct gen_rule *r = &ctx->rules[i];
+		if (r->archive || r->object || r->symbol)
+			continue;
+		int has_placement = 0;
+		for (int p = 0; p < ctx->n_placements; p++) {
+			if (ctx->placements[p].rule_idx == i) {
+				has_placement = 1;
+				break;
+			}
+		}
+		if (has_placement)
+			continue;
+		ALLOC_GROW(ctx->placements, ctx->n_placements + 1,
+			   ctx->alloc_placements);
+		struct gen_placement *p = &ctx->placements[ctx->n_placements++];
+		p->archive = "";
+		p->object = "";
+		p->section = "";
+		p->target = r->target;
+		p->rule_idx = i;
+	}
 }
 
 /* ---- Emission ---------------------------------------------------- */

@@ -426,3 +426,15 @@ void delay_ms(uint32_t ms)
 }
 
 int self_pid(void) { return (int)getpid(); }
+
+const char *temp_dir(void)
+{
+	static const char *cached;
+	const char *env;
+
+	if (cached)
+		return cached;
+	env = getenv("TMPDIR");
+	cached = (env && *env) ? env : "/tmp";
+	return cached;
+}

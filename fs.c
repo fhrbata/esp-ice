@@ -110,6 +110,52 @@ done:
 	return rc;
 }
 
+int make_temp_file(const char *prefix, const char *suffix,
+		   struct sbuf *out_path)
+{
+	const char *base;
+	static unsigned long counter;
+	unsigned long seed;
+	int fd = -1;
+	int saved_errno;
+
+	base = temp_dir();
+	if (!base) {
+		errno = ENOENT;
+		return -1;
+	}
+
+	/*
+	 * Mix three sources to avoid colliding with parallel callers
+	 * even after fork() (counter resets, mono_ms drifts, pid is
+	 * different in the child).  This is a uniqueness token, not a
+	 * crypto token -- O_EXCL is the actual race guard.
+	 */
+	seed = (unsigned long)mono_ms();
+	seed ^= (unsigned long)self_pid() << 16;
+
+	for (int attempt = 0; attempt < 100; attempt++) {
+		unsigned long n = seed ^ (counter++ * 0x9e3779b97f4a7c15UL);
+
+		sbuf_reset(out_path);
+		sbuf_addf(out_path, "%s/%s%08lx", base, prefix ? prefix : "",
+			  n & 0xffffffffu);
+		if (suffix && *suffix)
+			sbuf_addf(out_path, ".%s", suffix);
+
+		fd = open(out_path->buf, O_CREAT | O_EXCL | O_RDWR, 0600);
+		if (fd >= 0)
+			return fd;
+		if (errno != EEXIST)
+			break;
+	}
+
+	saved_errno = errno;
+	sbuf_reset(out_path);
+	errno = saved_errno;
+	return -1;
+}
+
 struct rmtree_ctx {
 	const char *path;
 	int verbose;
