@@ -203,16 +203,73 @@ tap_check grep -q 'SHA256.*\[verified\]' info
 tap_check cmp -s v22_elf.expected v22_extracted.elf
 tap_done "--save-core extracts embedded ELF for ELF_SHA256_V2_2 dumps"
 
-# ---- 13. --save-core errors out for BIN_V* dumps (synthesis missing) ----
+# ---- 13. --save-core synthesises an ELF core file for BIN_V* dumps ----
+# Build a compact, synthesisable BIN_V2 image: 1 esp32 task with a
+# 4-byte TCB and a 256-byte stack whose first u32s form a real
+# Xtensa exception entry frame.  --save-core should produce a valid
+# ELF32 LSB core file that file(1) recognises.
 
-if "$BINARY" idf coredump --core v2.bin --save-core /tmp/should_not_exist \
-	>info 2>err; then
-	tap_check false
-else
-	tap_check grep -q 'ELF synthesis' err
-	tap_check grep -q -- '--save-raw' err
-fi
-tap_done "--save-core on a BIN_V* dump errors with a synthesis-TODO message"
+python3 - <<'PY' >bin_v2_synth.bin
+import struct, sys, zlib
+TCB = b'\xab\xcd\xef\x12'
+stack_frame = struct.pack('<25I',
+    1,           # XT_STK_EXIT (rc != 0 => exception entry)
+    0x40080000,  # XT_STK_PC
+    0x000600d0,  # XT_STK_PS (EXCM bit set; exercises the PS fixup)
+    *[0xaa000000 + i for i in range(16)],
+    0x1234,      # XT_STK_SAR
+    0x1c,        # XT_STK_EXCCAUSE
+    0xdead0000,  # XT_STK_EXCVADDR
+    0, 0, 0,     # LBEG/LEND/LCOUNT
+)
+stack = stack_frame + b'\x00' * (256 - len(stack_frame))
+task = struct.pack('<3I', 0x3ffb0000, 0x3ffb1000, 0x3ffb1100) + TCB + stack
+data = task
+hdr = struct.pack('<5I', 20 + len(data) + 4,
+                  (0 << 16) | 0x0002,     # esp32, BIN_V2
+                  1, len(TCB), 0)
+crc = zlib.crc32(hdr + data) & 0xffffffff
+sys.stdout.buffer.write(hdr + data + struct.pack('<I', crc))
+PY
+"$BINARY" idf coredump --core bin_v2_synth.bin --save-core synth.elf \
+	>info 2>err
+tap_check grep -q 'BIN_V2' info
+tap_check grep -q 'CRC32.*\[verified\]' info
+# ELF magic: \x7fELF
+tap_check test "$(head -c 4 synth.elf | od -An -tx1 | tr -d ' \n')" = "7f454c46"
+# e_type at offset 16 = ET_CORE (4), little-endian
+tap_check test "$(dd if=synth.elf bs=1 count=2 skip=16 2>/dev/null | od -An -tx1 | tr -d ' \n')" = "0400"
+# e_machine at offset 18 = EM_XTENSA (94 = 0x5e), little-endian
+tap_check test "$(dd if=synth.elf bs=1 count=2 skip=18 2>/dev/null | od -An -tx1 | tr -d ' \n')" = "5e00"
+tap_done "BIN_V2 esp32 dump synthesises a valid Xtensa ELF core file"
+
+# ---- 13b. RISC-V BIN_V2 synthesises with EM_RISCV ----
+
+python3 - <<'PY' >bin_v2_c3.bin
+import struct, sys, zlib
+TCB = b'\xab\xcd\xef\x12'
+# RISC-V stack frame: just 32 u32 GP registers.
+stack_regs = struct.pack('<32I',
+    0,           # x0
+    0x40380000,  # x1 (ra)
+    0x3fc99000,  # x2 (sp)
+    *([0] * 29),
+)
+stack = stack_regs + b'\x00' * (256 - len(stack_regs))
+task = struct.pack('<3I', 0x3fcb0000, 0x3fcb1000, 0x3fcb1100) + TCB + stack
+data = task
+hdr = struct.pack('<5I', 20 + len(data) + 4,
+                  (5 << 16) | 0x0002,     # esp32c3, BIN_V2
+                  1, len(TCB), 0)
+crc = zlib.crc32(hdr + data) & 0xffffffff
+sys.stdout.buffer.write(hdr + data + struct.pack('<I', crc))
+PY
+"$BINARY" idf coredump --core bin_v2_c3.bin --save-core synth_c3.elf \
+	>info 2>err
+tap_check grep -q 'esp32c3' info
+# e_machine at offset 18 = EM_RISCV (243 = 0xf3), little-endian
+tap_check test "$(dd if=synth_c3.elf bs=1 count=2 skip=18 2>/dev/null | od -An -tx1 | tr -d ' \n')" = "f300"
+tap_done "BIN_V2 esp32c3 dump synthesises a valid RISC-V ELF core file"
 
 # ---- 14. --save-core for elf-format input copies the file through ----
 
@@ -366,17 +423,17 @@ tap_check grep -qx "argv\\[5\\]=add-symbol-file $PWD/fake-rom.elf" \
 	fake-gdb.log
 tap_done "--interactive composes with --rom-elf"
 
-# ---- 18. BIN_V* + <prog>: save-core fails first; gdb is NOT invoked ----
+# ---- 18. BIN_V* + <prog>: synthesised ELF is what gdb sees ----
+# Run gdb on the synthesised core; verify fake-gdb received a
+# --core path pointing at an ELF (the synthesised bytes).
 
 rm -f fake-gdb.log
-if "$BINARY" idf coredump --core v2.bin --save-core /tmp/should_not_exist \
-	--gdb "$PWD/fake-gdb" /tmp/fake_prog.elf >out 2>err; then
-	tap_check false
-else
-	tap_check grep -q 'ELF synthesis' err
-	# fake-gdb must NOT have been called -- log should be absent.
-	tap_check test ! -e fake-gdb.log
-fi
-tap_done "gdb is not spawned when save-core fails (BIN_V*)"
+"$BINARY" idf coredump --core bin_v2_synth.bin --save-core synth_run.elf \
+	--gdb "$PWD/fake-gdb" /tmp/fake_prog.elf >out 2>err
+tap_check grep -qx 'argv\[8\]=--core' fake-gdb.log
+tap_check grep -qx 'argv\[9\]=synth_run.elf' fake-gdb.log
+# The saved file is a real ELF.
+tap_check test "$(head -c 4 synth_run.elf | od -An -tx1 | tr -d ' \n')" = "7f454c46"
+tap_done "BIN_V2 + <prog>: gdb runs on the synthesised ELF"
 
 tap_result

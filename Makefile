@@ -147,6 +147,7 @@ LIB_SRCS := \
 	cmd/idf/configdep/configdep.c \
 	cmd/idf/coredump/coredump.c \
 	cmd/idf/coredump/loader.c \
+	cmd/idf/coredump/synth.c \
 	cmd/idf/crt-bundle/crt-bundle.c \
 	cmd/idf/hints/hints.c \
 	cmd/idf/kconfgen/kc_confread.c \

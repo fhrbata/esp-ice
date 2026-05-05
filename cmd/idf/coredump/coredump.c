@@ -38,6 +38,7 @@
 #include "base64.h"
 #include "ice.h"
 #include "loader.h"
+#include "synth.h"
 
 /* clang-format off */
 static const struct cmd_manual idf_coredump_manual = {
@@ -79,10 +80,11 @@ static const struct cmd_manual idf_coredump_manual = {
 	H_PARA("Two save flags emit different artefacts:")
 	H_ITEM("@b{--save-core PATH}",
 	       "Write a GDB-loadable ELF core file.  For @b{ELF_*} "
-	       "dumps the embedded ELF is extracted; for ELF input it "
-	       "is copied through.  @b{BIN_V*} dumps require ELF "
-	       "synthesis (next commit) and are reported as not yet "
-	       "implemented today.")
+	       "dumps the embedded ELF is extracted; for @b{BIN_V*} "
+	       "dumps a fresh ELF is synthesised from the captured "
+	       "TCBs / stacks / memory segments (PT_LOAD per region, "
+	       "one NT_PRSTATUS note per task with the chip's register "
+	       "set); for ELF input it is copied through.")
 	H_ITEM("@b{--save-raw PATH}",
 	       "Write the raw decoded bytes (the @b{b64} wrapper "
 	       "stripped if any).  Useful for piping into upstream "
@@ -528,10 +530,16 @@ int cmd_idf_coredump(int argc, const char **argv)
 	 * Compute @c core_data / @c core_len once: the bytes that will
 	 * land in the GDB-loadable ELF, regardless of whether they go
 	 * to @c --save-core, to a temp file for @c run_gdb, or both.
+	 *
+	 * For BIN_V* dumps we have to synthesise the ELF first.  The
+	 * @c synth sbuf below holds the synthesised bytes for the rest
+	 * of the function; @c core_data points into it.  Released
+	 * before return.
 	 */
 	const void *core_data = NULL;
 	size_t core_len = 0;
 	int have_core = 0;
+	struct sbuf synth = SBUF_INIT;
 
 	if (opt_save_core || prog) {
 		if (fmt == CORE_FMT_ELF) {
@@ -544,10 +552,22 @@ int cmd_idf_coredump(int argc, const char **argv)
 			core_len = out_len - h.header_size - h.checksum_size;
 			have_core = 1;
 		} else if (have_header) {
-			err("BIN_V* dumps require ELF synthesis (not yet "
-			    "implemented in @b{ice idf coredump}); pass "
-			    "@b{--save-raw} to dump the raw bytes for now");
-			rc = 1;
+			/* BIN_V*: synthesise an ELF from the data section. */
+			const void *bin =
+			    (const uint8_t *)out_data + h.header_size;
+			size_t bin_len =
+			    out_len - h.header_size - h.checksum_size;
+			const char *synth_err = NULL;
+			if (core_synth_elf(&h, bin, bin_len, &synth,
+					   &synth_err) < 0) {
+				err("BIN_V* synthesis failed: %s",
+				    synth_err ? synth_err : "unknown");
+				rc = 1;
+			} else {
+				core_data = synth.buf;
+				core_len = synth.len;
+				have_core = 1;
+			}
 		} else {
 			err("cannot extract core ELF: header parse failed "
 			    "(%s)",
@@ -635,6 +655,7 @@ int cmd_idf_coredump(int argc, const char **argv)
 		sbuf_release(&temp_path);
 	}
 
+	sbuf_release(&synth);
 	sbuf_release(&decoded);
 	sbuf_release(&input);
 	return rc;
