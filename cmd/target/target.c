@@ -49,10 +49,16 @@ extern const struct cmd_desc cmd_target_flash_desc;
 extern const struct cmd_desc cmd_target_list_desc;
 extern const struct cmd_desc cmd_target_monitor_desc;
 extern const struct cmd_desc cmd_target_partition_desc;
+extern const struct cmd_desc cmd_target_qemu_desc;
 
 static const struct cmd_desc *const target_subs[] = {
-    &cmd_target_debug_desc,   &cmd_target_flash_desc,	  &cmd_target_list_desc,
-    &cmd_target_monitor_desc, &cmd_target_partition_desc, NULL,
+    &cmd_target_debug_desc,
+    &cmd_target_flash_desc,
+    &cmd_target_list_desc,
+    &cmd_target_monitor_desc,
+    &cmd_target_partition_desc,
+    &cmd_target_qemu_desc,
+    NULL,
 };
 
 const struct cmd_desc cmd_target_desc = {

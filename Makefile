@@ -206,6 +206,7 @@ LIB_SRCS := \
 	cmd/target/partition/read/read.c \
 	cmd/target/partition/write/write.c \
 	cmd/target/partition/erase/erase.c \
+	cmd/target/qemu/qemu.c \
 	cmd/tools/tools.c \
 	cmd/tools/install/install.c \
 	cmd/tools/list/list.c \
