@@ -312,5 +312,24 @@ jobs:
           body_path: changelog_body.md
           name: Version ${{ steps.get_version.outputs.version }}
           draft: true
+          preserve_order: true
+          fail_on_unmatched_files: true
           files: |
             artifacts/**/*
+
+      - name: verify release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          expected=$(find artifacts -type f | wc -l)
+          actual=$(gh release view "v${{ steps.get_version.outputs.VERSION }}" \
+            --repo "${{ github.repository }}" \
+            --json assets --jq '.assets | length')
+          echo "expected=$expected actual=$actual"
+          if [ "$expected" != "$actual" ]; then
+            echo "::error::release asset count mismatch (expected=$expected actual=$actual)"
+            gh release view "v${{ steps.get_version.outputs.VERSION }}" \
+              --repo "${{ github.repository }}" \
+              --json assets --jq '.assets[].name' | sort
+            exit 1
+          fi
