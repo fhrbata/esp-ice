@@ -5,8 +5,8 @@
  */
 
 /**
- * @file cmd/target/debug/debug.c
- * @brief `ice target debug` -- plumbing OpenOCD + gdb dual-pane.
+ * @file cmd/target/openocd/openocd.c
+ * @brief `ice target openocd` -- plumbing OpenOCD + gdb dual-pane.
  *
  * Mirrors the dual-pane shape of @c{ice qemu --debug} for real
  * hardware: gdb in the top pane talking to OpenOCD's gdb stub on
@@ -17,7 +17,7 @@
  * Inputs are explicit on the command line -- no project state read
  * here.  The porcelain @c{ice debug} fills argv from the active
  * profile (ELF path, chip, openocd args, gdb prefix, serial port +
- * baud) and delegates to @ref cmd_target_debug.
+ * baud) and delegates to @ref cmd_target_openocd.
  *
  * OpenOCD binary resolution: @b{--openocd-bin} > installed under
  * @c{~/.ice/tools/openocd-esp32/<version>/} > auto-install via
@@ -38,8 +38,8 @@
 #include <signal.h>
 
 /* clang-format off */
-static const struct cmd_manual target_debug_manual = {
-	.name = "ice target debug",
+static const struct cmd_manual target_openocd_manual = {
+	.name = "ice target openocd",
 	.summary = "OpenOCD + gdb dual-pane debug session",
 
 	.description =
@@ -58,9 +58,9 @@ static const struct cmd_manual target_debug_manual = {
 	       "@b{r} (reset target), @b{h} (help), and @b{x} (quit)."),
 
 	.examples =
-	H_EXAMPLE("ice target debug --port /dev/ttyUSB1 --elf build/app.elf "
+	H_EXAMPLE("ice target openocd --port /dev/ttyUSB1 --elf build/app.elf "
 		  "--chip esp32 --openocd-cmd \"-f board/esp32-wrover-kit-3.3v.cfg\"")
-	H_EXAMPLE("ice target debug --openocd-bin /usr/bin/openocd "
+	H_EXAMPLE("ice target openocd --openocd-bin /usr/bin/openocd "
 		  "--gdb-bin xtensa-esp32-elf-gdb --elf build/app.elf "
 		  "--port /dev/ttyUSB1 "
 		  "--openocd-cmd \"-f board/esp32-wrover-kit-3.3v.cfg\""),
@@ -96,7 +96,7 @@ static int opt_no_reset;
 static int opt_scrollback = 10000;
 
 /* clang-format off */
-static const struct option cmd_target_debug_opts[] = {
+static const struct option cmd_target_openocd_opts[] = {
 	OPT_STRING('p', "port", &opt_port, "dev",
 		   "serial port for the chip's UART (auto-detected if omitted)",
 		   serial_complete_port),
@@ -126,13 +126,13 @@ static const struct option cmd_target_debug_opts[] = {
 };
 /* clang-format on */
 
-int cmd_target_debug(int argc, const char **argv);
+int cmd_target_openocd(int argc, const char **argv);
 
-const struct cmd_desc cmd_target_debug_desc = {
-    .name = "debug",
-    .fn = cmd_target_debug,
-    .opts = cmd_target_debug_opts,
-    .manual = &target_debug_manual,
+const struct cmd_desc cmd_target_openocd_desc = {
+    .name = "openocd",
+    .fn = cmd_target_openocd,
+    .opts = cmd_target_openocd_opts,
+    .manual = &target_openocd_manual,
 };
 
 /* ------------------------------------------------------------------ */
@@ -264,7 +264,7 @@ static char *resolve_openocd(char **version_out)
 	 * caller already short-circuited above. */
 	const char *idf_path = config_get("_project.idf-path");
 	if (!idf_path || !*idf_path)
-		die("ice target debug: openocd not installed and no "
+		die("ice target openocd: openocd not installed and no "
 		    "@b{_project.idf-path} for auto-install; pass "
 		    "@b{--openocd-bin} or run @b{ice init} first");
 
@@ -276,7 +276,8 @@ static char *resolve_openocd(char **version_out)
 
 	sbuf_addf(&manifest, "%s/tools/tools.json", idf_path);
 	if (access(manifest.buf, F_OK) != 0)
-		die("ice target debug: cannot install openocd, '%s' not found",
+		die("ice target openocd: cannot install openocd, '%s' not "
+		    "found",
 		    manifest.buf);
 
 	svec_push(&icmd, exe ? exe : "ice");
@@ -292,11 +293,13 @@ static char *resolve_openocd(char **version_out)
 	svec_clear(&icmd);
 	sbuf_release(&manifest);
 	if (irc != 0)
-		die("ice target debug: openocd install failed (exit %d)", irc);
+		die("ice target openocd: openocd install failed (exit %d)",
+		    irc);
 
 	bin = resolve_tool(pkg, sub, version_out);
 	if (!bin)
-		die("ice target debug: '%s' install completed but openocd not "
+		die("ice target openocd: '%s' install completed but openocd "
+		    "not "
 		    "found under @b{~/.ice/tools/%s/<version>/}",
 		    pkg, pkg);
 	return bin;
@@ -316,7 +319,7 @@ static char *resolve_gdb(const struct debug_chip *dc)
 	if (opt_gdb_bin)
 		return sbuf_strdup(opt_gdb_bin);
 	if (!dc)
-		die("ice target debug: --chip is required to pick a gdb "
+		die("ice target openocd: --chip is required to pick a gdb "
 		    "binary (or pass --gdb-bin)");
 
 	struct sbuf sub = SBUF_INIT;
@@ -389,7 +392,7 @@ static int spawn_openocd(struct process *proc, const char *openocd_bin,
 
 	if (process_start(proc) < 0) {
 		fprintf(stderr,
-			"ice target debug: cannot launch %s\n"
+			"ice target openocd: cannot launch %s\n"
 			"  Pass --openocd-bin or run "
 			"@b{ice tools install --tool openocd-esp32}.\n",
 			openocd_bin);
@@ -428,7 +431,7 @@ static int spawn_openocd(struct process *proc, const char *openocd_bin,
 
 	if (!ready) {
 		fprintf(stderr,
-			"ice target debug: openocd did not announce a gdb "
+			"ice target openocd: openocd did not announce a gdb "
 			"port within ~10s\n");
 		kill(proc->pid, SIGTERM);
 		process_finish(proc);
@@ -585,7 +588,7 @@ static void draw_hrule(struct sbuf *out, int row_y, int row_x, int row_w)
 /*  Cmd-level help modal                                              */
 /* ------------------------------------------------------------------ */
 
-static const char DEBUG_HELP_TITLE[] = "ice target debug";
+static const char DEBUG_HELP_TITLE[] = "ice target openocd";
 
 static const char DEBUG_HELP_TEXT[] =
     "Spawns an OpenOCD daemon (JTAG -> gdb stub on tcp::<port>) and\n"
@@ -661,7 +664,7 @@ static int run_debug(struct process *oocd_proc, const char *gdb_bin,
 		term_screen_leave();
 		term_raw_leave();
 		fprintf(stderr,
-			"ice target debug: cannot launch %s\n"
+			"ice target openocd: cannot launch %s\n"
 			"  Pass --gdb-bin or add the chip's gdb to PATH.\n",
 			gdb_bin);
 		sbuf_release(&gdb_remote);
@@ -941,7 +944,7 @@ static int run_debug(struct process *oocd_proc, const char *gdb_bin,
 /*  Entry point                                                       */
 /* ------------------------------------------------------------------ */
 
-int cmd_target_debug(int argc, const char **argv)
+int cmd_target_openocd(int argc, const char **argv)
 {
 	opt_port = NULL;
 	opt_elf = NULL;
@@ -954,22 +957,22 @@ int cmd_target_debug(int argc, const char **argv)
 	opt_no_reset = 0;
 	opt_scrollback = 10000;
 
-	argc = parse_options(argc, argv, &cmd_target_debug_desc);
+	argc = parse_options(argc, argv, &cmd_target_openocd_desc);
 	if (argc > 0)
 		die("unexpected argument '%s'", argv[0]);
 
 	if (!opt_elf || !*opt_elf)
-		die("ice target debug: --elf is required");
+		die("ice target openocd: --elf is required");
 	if (access(opt_elf, R_OK) != 0)
-		die("ice target debug: cannot read elf '%s': %s", opt_elf,
+		die("ice target openocd: cannot read elf '%s': %s", opt_elf,
 		    strerror(errno));
 	if (!opt_openocd_cmd || !*opt_openocd_cmd)
-		die("ice target debug: --openocd-cmd is required (e.g. "
+		die("ice target openocd: --openocd-cmd is required (e.g. "
 		    "\"-f board/esp32-wrover-kit-3.3v.cfg\")");
 	if (opt_scrollback < 1)
 		die("--scrollback must be at least 1");
 	if (!isatty(STDIN_FILENO) || !isatty(STDOUT_FILENO))
-		die("ice target debug requires an interactive terminal");
+		die("ice target openocd requires an interactive terminal");
 
 	const struct debug_chip *dc = find_debug_chip(opt_chip);
 
@@ -986,7 +989,7 @@ int cmd_target_debug(int argc, const char **argv)
 		enum ice_chip scan_chip = ice_chip_from_idf_name(opt_chip);
 		autoport = esf_find_esp_port(scan_chip);
 		if (!autoport)
-			die("ice target debug: no ESP device found; use "
+			die("ice target openocd: no ESP device found; use "
 			    "--port to specify a port explicitly");
 		opt_port = autoport;
 	}
