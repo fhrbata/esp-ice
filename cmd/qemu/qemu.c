@@ -23,7 +23,7 @@
  *
  * Then delegates to @ref cmd_target_qemu for the actual qemu spawn /
  * UI loop.  Same porcelain-mirrors-plumbing shape as @c{ice debug} ↔
- * @c{ice target debug}.
+ * @c{ice target openocd}.
  */
 #include "ice.h"
 #include "json.h"

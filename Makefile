@@ -197,7 +197,7 @@ LIB_SRCS := \
 	cmd/status/status.c \
 	cmd/target/target.c \
 	cmd/monitor/monitor.c \
-	cmd/target/debug/debug.c \
+	cmd/target/openocd/openocd.c \
 	cmd/target/flash/flash.c \
 	cmd/target/list/list.c \
 	cmd/target/monitor/monitor.c \

@@ -6,7 +6,7 @@
 
 /**
  * @file cmd/debug/debug.c
- * @brief `ice debug` -- porcelain wrapper around `ice target debug`.
+ * @brief `ice debug` -- porcelain wrapper around `ice target openocd`.
  *
  * Reads the active profile to fill in:
  *
@@ -19,7 +19,7 @@
  *   - @c serial.port             -- UART for the chip
  *   - @c serial.baud             -- baud rate
  *
- * then delegates to @ref cmd_target_debug for the I/O loop.  Same
+ * then delegates to @ref cmd_target_openocd for the I/O loop.  Same
  * porcelain-mirrors-plumbing shape as @c{ice monitor} ↔
  * @c{ice target monitor}.
  */
@@ -28,8 +28,8 @@
 #include "sbuf.h"
 #include "serial.h"
 
-/* Plumbing entry point declared in cmd/target/debug/debug.c. */
-int cmd_target_debug(int argc, const char **argv);
+/* Plumbing entry point declared in cmd/target/openocd/openocd.c. */
+int cmd_target_openocd(int argc, const char **argv);
 
 int cmd_debug(int argc, const char **argv);
 
@@ -110,7 +110,7 @@ static const struct cmd_manual manual = {
 	       "Alias for @b{serial.baud} (env scope).")
 
 	H_SECTION("SEE ALSO")
-	H_ITEM("ice target debug",
+	H_ITEM("ice target openocd",
 	       "Plumbing: takes openocd args / chip / ELF on the command line."),
 };
 /* clang-format on */
@@ -183,7 +183,7 @@ int cmd_debug(int argc, const char **argv)
 		port = autoport;
 	}
 
-	/* ---- build argv for ice target debug ---- */
+	/* ---- build argv for ice target openocd ---- */
 	char baud_str[32];
 	char gdb_port_str[32];
 	snprintf(baud_str, sizeof(baud_str), "%u", (unsigned)opt_baud);
@@ -191,7 +191,7 @@ int cmd_debug(int argc, const char **argv)
 
 	const char *dbg_argv[24];
 	int fa = 0;
-	dbg_argv[fa++] = "ice target debug";
+	dbg_argv[fa++] = "ice target openocd";
 	dbg_argv[fa++] = "--port";
 	dbg_argv[fa++] = port;
 	dbg_argv[fa++] = "--baud";
@@ -216,7 +216,7 @@ int cmd_debug(int argc, const char **argv)
 		dbg_argv[fa++] = "--no-reset";
 	dbg_argv[fa] = NULL;
 
-	int rc = cmd_target_debug(fa, dbg_argv);
+	int rc = cmd_target_openocd(fa, dbg_argv);
 
 	sbuf_release(&gdb_bin);
 	free(autoport);

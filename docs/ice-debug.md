@@ -33,7 +33,7 @@ explicit args and works against any ELF.
 
 Mirrors `ice monitor` ↔ `ice target monitor`.
 
-### Plumbing — `cmd/target/debug/debug.c`
+### Plumbing — `cmd/target/openocd/openocd.c`
 
 Owns the dual-pane orchestrator.  No `.needs` — works against
 explicit args, debuggable without a project.
@@ -58,7 +58,7 @@ Options:
 
 ### Porcelain — `cmd/debug/debug.c`
 
-Declares `int cmd_target_debug(int argc, const char **argv);`
+Declares `int cmd_target_openocd(int argc, const char **argv);`
 extern, fills argv from project state, delegates.
 
 `.needs = PROJECT_BUILT` so `project_description.json` is guaranteed
@@ -94,8 +94,9 @@ into the debug cmd in step 1.4.
 
 ### 1.3  OpenOCD launcher helper — `~150 LOC`
 
-New helper (probably `cmd/target/debug/openocd.{c,h}` or inline
-under `cmd/target/debug/debug.c` for v1 — see open item below).
+New helper (probably `cmd/target/openocd/openocd.{c,h}` split or
+inline under `cmd/target/openocd/openocd.c` for v1 — see open item
+below).
 Spawns the daemon with stderr redirected to a pipe we hold;
 tail-poll for `Listening on port \d+ for gdb connections` (esp-idf
 does 5 × 500ms; we can match that), or until exit / timeout.
@@ -133,7 +134,7 @@ bar, modals) is reused verbatim.  Differences:
 ### 1.5  Porcelain cmd — `~80 LOC`
 
 `cmd/debug/debug.c`.  Reads the project keys listed above, builds
-argv, calls `cmd_target_debug`.  Manual entry mirrors `ice monitor`'s
+argv, calls `cmd_target_openocd`.  Manual entry mirrors `ice monitor`'s
 porcelain manual.
 
 ### 1.6  Tests + manual verification
@@ -166,7 +167,7 @@ porcelain manual.
 ## Open items for phase 1
 
 - **OpenOCD launcher placement**: inline in
-  `cmd/target/debug/debug.c` vs. a separate `openocd.{c,h}` pair.
+  `cmd/target/openocd/openocd.c` vs. a separate `openocd.{c,h}` pair.
   v1 inline; factor out if a second user appears.
 - **`debug_arguments_openocd` shape**: confirm with a real built
   project — single string vs. shell-tokenised list.  esp-idf seems
