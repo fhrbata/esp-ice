@@ -11,16 +11,54 @@
 tap_setup
 
 # ---- Build a deterministic 200-byte binary "core image" ----
+# Use python rather than awk: BSD awk's printf("%c", n) for n>=128 is
+# locale-dependent even with LC_ALL=C, so the byte content can drift
+# across platforms.  Python writes to sys.stdout.buffer, which always
+# emits raw bytes regardless of locale.
 
-# LC_ALL=C: in UTF-8 locales awk's %c expands high bytes into multi-byte
-# sequences, breaking the size invariant we want for a binary fixture.
-LC_ALL=C awk 'BEGIN { for (i = 0; i < 200; i++) printf("%c", i % 256) }' >original.bin
+python3 - <<'PY' >original.bin
+import sys
+sys.stdout.buffer.write(bytes(i % 256 for i in range(200)))
+PY
 tap_check test "$(wc -c <original.bin)" -eq 200
 tap_done "fixture is 200 bytes"
 
-# ---- 1. b64 round-trip, single-line (no internal padding) ----
+# ---- Generate a tiny but valid ELF32 LSB file with no segments. ----
+# We can't reuse $BINARY for "real ELF" tests because on macOS it's a
+# Mach-O and on Windows it's a PE; both lack the \x7fELF magic ice's
+# auto-detect looks for.  A 52-byte EHDR-only ELF is enough -- ice's
+# elf passthrough doesn't parse contents, just the magic.
 
-base64 -w 0 original.bin >single.b64 2>/dev/null || base64 original.bin | tr -d '\n' >single.b64
+python3 - <<'PY' >some.elf
+import struct, sys
+EI_MAG       = b'\x7fELF'
+EI_CLASS32   = 1
+EI_DATA2LSB  = 1
+EI_VERSION   = 1
+e_ident      = EI_MAG + bytes([EI_CLASS32, EI_DATA2LSB, EI_VERSION]) + b'\x00' * 9
+ehdr = struct.pack('<HHIIIIIHHHHHH',
+                   2,          # e_type    = ET_EXEC
+                   94,         # e_machine = EM_XTENSA
+                   1,          # e_version
+                   0,          # e_entry
+                   0,          # e_phoff
+                   0,          # e_shoff
+                   0,          # e_flags
+                   52,         # e_ehsize
+                   0, 0,       # e_phentsize, e_phnum
+                   0, 0, 0)    # e_shentsize, e_shnum, e_shstrndx
+sys.stdout.buffer.write(e_ident + ehdr)
+PY
+tap_check test "$(wc -c <some.elf)" -eq 52
+tap_done "synthesised 52-byte ELF32 file"
+
+# ---- 1. b64 round-trip, single-line (no internal padding) ----
+# Use stdin redirection: BSD base64 (macOS) doesn't accept a positional
+# file argument and lacks -w; redirecting from stdin works on every
+# platform we care about.
+
+(base64 -w 0 <original.bin || base64 <original.bin | tr -d '\n') 2>/dev/null \
+	>single.b64
 "$BINARY" idf coredump --core single.b64 --core-format b64 --save-raw out_single.bin
 tap_check cmp -s original.bin out_single.bin
 tap_done "b64 single-line decodes to original bytes"
@@ -30,7 +68,7 @@ tap_done "b64 single-line decodes to original bytes"
 # Some of those lines can end in '=' padding internally, which is the
 # whole point of decoding line-by-line rather than as one stream.
 
-base64 original.bin >wrapped.b64
+base64 <original.bin >wrapped.b64
 tap_check test "$(wc -l <wrapped.b64)" -ge 2
 "$BINARY" idf coredump --core wrapped.b64 --core-format b64 --save-raw out_wrapped.bin
 tap_check cmp -s original.bin out_wrapped.bin
@@ -41,12 +79,12 @@ tap_done "b64 line-wrapped decodes to original bytes"
 # naive concatenated decode would stop at the first '==' and lose the
 # second half.
 
-LC_ALL=C awk 'BEGIN { for (i = 0; i < 16; i++) printf("%c", i) }' >chunkA.bin
-LC_ALL=C awk 'BEGIN { for (i = 16; i < 32; i++) printf("%c", i) }' >chunkB.bin
+python3 -c 'import sys; sys.stdout.buffer.write(bytes(range(16)))' >chunkA.bin
+python3 -c 'import sys; sys.stdout.buffer.write(bytes(range(16, 32)))' >chunkB.bin
 {
-	base64 -w 0 chunkA.bin 2>/dev/null || base64 chunkA.bin | tr -d '\n'
+	(base64 -w 0 <chunkA.bin || base64 <chunkA.bin | tr -d '\n') 2>/dev/null
 	echo
-	base64 -w 0 chunkB.bin 2>/dev/null || base64 chunkB.bin | tr -d '\n'
+	(base64 -w 0 <chunkB.bin || base64 <chunkB.bin | tr -d '\n') 2>/dev/null
 	echo
 } >chunked.b64
 cat chunkA.bin chunkB.bin >chunked.expected
@@ -56,9 +94,7 @@ tap_check cmp -s chunked.expected out_chunked.bin
 tap_done "b64 chunks separated by '==' newline boundaries decode correctly"
 
 # ---- 4. ELF passthrough: --core-format=elf copies bytes through ----
-# Use a real ELF file (the ice binary itself) so the magic bytes match.
 
-cp "$BINARY" some.elf
 "$BINARY" idf coredump --core some.elf --core-format elf --save-raw out_elf.bin
 tap_check cmp -s some.elf out_elf.bin
 tap_done "elf format is copied through unchanged"
