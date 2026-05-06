@@ -6,21 +6,36 @@
 
 /**
  * @file cmd/idf/ldgen/gen.c
- * @brief Full-expansion linker-script generator.
+ * @brief Rule-driven linker-script generator.
  *
  * Pipeline:
- *   gen_compile()  -- walks parsed .lf fragments, produces a sorted
- *                     rule list (specificity descending, stable).
- *   gen_resolve()  -- for every (archive, object, section) triple in
- *                     the entity DB, finds the first matching rule and
- *                     records a placement.
- *   gen_emit()     -- sorts placements by (target, rule, archive, obj),
- *                     emits per-target explicit listings with flag
- *                     wrappers.
  *
- * See gen.h for the data shape and cmd/idf/ldgen/README.md for the
- * fragment grammar.  The design rationale -- why we don't port
- * Python's entity tree -- is recorded in the project plan.
+ *   gen_compile() -- walks parsed .lf fragments, produces a rule list
+ *                    sorted by (specificity ASC, source_order ASC).
+ *   gen_resolve() -- four sub-passes:
+ *                      (a) drop symbol rules whose archive or object
+ *                          isn't in the DB;
+ *                      (b) walk the DB and attach every (archive,
+ *                          object, section) triple to its most-
+ *                          specific surviving rule's @c matches;
+ *                      (c) drop symbol rules left with empty matches;
+ *                      (d) populate every surviving rule's per-rule
+ *                          @c exclude_list with the file patterns of
+ *                          more-specific rules that route to a
+ *                          different target -- the basis's glob-
+ *                          emitting line carries this list as
+ *                          @c{EXCLUDE_FILE(...)} so cross-target
+ *                          placement is order-independent.
+ *   gen_emit()    -- iterates rules per target.  Each non-dropped rule
+ *                    emits its frame (SURROUND/ALIGN/KEEP/SORT
+ *                    wrappers) plus a body of literal-section
+ *                    listings per (archive, object) group.  Root
+ *                    rules also emit a @c{*(...)} catch-all carrying
+ *                    @c{EXCLUDE_FILE(<R->exclude_list>)} when set.
+ *                    Archive rules without DB matches emit a fallback
+ *                    selector with the same EXCLUDE_FILE treatment.
+ *
+ * See gen.h and cmd/idf/ldgen/README.md for the design rationale.
  */
 #include "ice.h"
 
@@ -53,18 +68,6 @@ struct gen_scheme {
 };
 
 /* ---- Small helpers ---------------------------------------------- */
-
-/* Strip trailing ".o" or ".obj" suffix.  Returns a fresh heap
- * allocation, or a copy if neither suffix is present. */
-static char *strip_obj_suffix(const char *name)
-{
-	size_t n = strlen(name);
-	if (n >= 2 && !strcmp(name + n - 2, ".o"))
-		return sbuf_strndup(name, n - 2);
-	if (n >= 4 && !strcmp(name + n - 4, ".obj"))
-		return sbuf_strndup(name, n - 4);
-	return sbuf_strdup(name);
-}
 
 /* Append a string pointer if not already present (linear scan, fine
  * for the 1-3 entries per sections fragment). */
@@ -110,11 +113,10 @@ static void expand_section_entry(const char *entry, char ***v, int *n,
 /*
  * Evaluate a @c .lf conditional expression using the kconfgen engine.
  *
- * Parses @p expr into a @ref kexpr tree against @p cfg's symbol table
- * and evaluates it to a boolean.  @p cfg is declared const to match the
- * rest of gen.c's signatures, but kc_expr_parse_string may intern new
- * unknown identifiers into the symtab -- harmless here since ldgen
- * does not write sdkconfig back.
+ * @p cfg is declared const to match the rest of gen.c's signatures,
+ * but kc_expr_parse_string may intern new unknown identifiers into
+ * the symtab -- harmless here since ldgen does not write sdkconfig
+ * back.
  */
 static int eval_lf_cond(const struct kc_ctx *cfg, const char *expr)
 {
@@ -125,9 +127,9 @@ static int eval_lf_cond(const struct kc_ctx *cfg, const char *expr)
 	return result;
 }
 
-/* Evaluate a conditional's branch list against @p cfg and return the
- * active arm's statement list (or NULL if none).  @p cfg may be NULL,
- * in which case no branch is chosen. */
+/* Evaluate a conditional's branch list and return the active arm's
+ * statement list (or NULL if none).  @p cfg may be NULL, in which
+ * case no branch is chosen. */
 static const struct lf_stmt *pick_cond_branch(const struct lf_branch *branches,
 					      int nb, const struct kc_ctx *cfg,
 					      int *out_n)
@@ -198,7 +200,7 @@ static struct gen_scheme *ctx_find_scheme(struct gen_ctx *ctx, const char *name)
 	return NULL;
 }
 
-/* ---- Rule emission from mappings -------------------------------- */
+/* ---- Rule construction from mappings ---------------------------- */
 
 /* Find the flag list attached to an entry for a given (sections, target)
  * pair.  Returns NULL if none. */
@@ -248,10 +250,10 @@ static int compute_specificity(const char *arch, const char *obj,
 	return 0;
 }
 
-static void emit_rule(struct gen_ctx *ctx, const char *archive, const char *obj,
-		      const char *sym, const struct gen_sections *secs,
-		      const char *target, const struct lf_flag *flags,
-		      int n_flags)
+static void add_rule(struct gen_ctx *ctx, const char *archive, const char *obj,
+		     const char *sym, const struct gen_sections *secs,
+		     const char *target, const struct lf_flag *flags,
+		     int n_flags)
 {
 	ALLOC_GROW(ctx->rules, ctx->n_rules + 1, ctx->alloc_rules);
 	struct gen_rule *r = &ctx->rules[ctx->n_rules];
@@ -323,8 +325,8 @@ static void compile_entry(struct gen_ctx *ctx, const char *archive,
 
 		const struct lf_flag_item *fi =
 		    find_flag_item(e, sections_ref, target);
-		emit_rule(ctx, archive, obj, sym, secs, target,
-			  fi ? fi->flags : NULL, fi ? fi->n_flags : 0);
+		add_rule(ctx, archive, obj, sym, secs, target,
+			 fi ? fi->flags : NULL, fi ? fi->n_flags : 0);
 	}
 }
 
@@ -363,11 +365,10 @@ static void compile_mapping(struct gen_ctx *ctx, const struct lf_frag *f,
 
 static int rule_cmp(const void *a, const void *b)
 {
-	/* Sort ASCENDING by specificity so emission order matches Python's:
-	 * root-level wildcards first, then archive, object, symbol.
-	 * Within a specificity level, preserve source order for stability.
-	 * Resolution walks the array backwards to implement most-specific-
-	 * wins without disturbing emit order. */
+	/* Sort ASCENDING by specificity so the resolution loop (in
+	 * find_rule) can walk the array backwards to implement
+	 * most-specific-wins.  Within a specificity level, preserve source
+	 * order for stability. */
 	const struct gen_rule *ra = a;
 	const struct gen_rule *rb = b;
 	if (ra->specificity != rb->specificity)
@@ -522,8 +523,7 @@ static int match_section(const struct gen_rule *r, const char *section)
 }
 
 static int find_rule(const struct gen_ctx *ctx, const char *archive,
-		     const char *object_stripped, const char *object_raw,
-		     const char *section)
+		     const char *object, const char *section)
 {
 	/* Rules are sorted specificity ASC; walk backwards so most-
 	 * specific candidates are tried first. */
@@ -531,108 +531,294 @@ static int find_rule(const struct gen_ctx *ctx, const char *archive,
 		const struct gen_rule *r = &ctx->rules[i];
 		if (!match_archive(r, archive))
 			continue;
-		if (!match_object(r, object_raw))
+		if (!match_object(r, object))
 			continue;
 		if (!match_section(r, section))
 			continue;
-		(void)object_stripped;
 		return i;
 	}
 	return -1;
 }
 
-void gen_resolve(struct gen_ctx *ctx, const struct sinfo_db *db)
+/* Append a (archive, object, section) triple to a rule's matches array.
+ * All three pointers are borrowed from sinfo_db. */
+static void rule_add_match(struct gen_rule *r, const char *archive,
+			   const char *object, const char *section)
+{
+	ALLOC_GROW(r->matches, r->n_matches + 1, r->alloc_matches);
+	struct gen_rule_match *m = &r->matches[r->n_matches++];
+	m->archive = archive;
+	m->object = object;
+	m->section = section;
+}
+
+/* Append @p entry (space-separated token, e.g. "*libfoo.a" or
+ * "*libfoo.a:bar.*") to @p sb if not already present.  Whole-token
+ * comparison so "*libfoo.a" and "*libfoo.a:bar.*" don't collide. */
+static void exclude_token_append(struct sbuf *sb, const char *entry)
+{
+	size_t elen = strlen(entry);
+	const char *p = sb->buf;
+	while (p && *p) {
+		const char *space = strchr(p, ' ');
+		size_t tlen = space ? (size_t)(space - p) : strlen(p);
+		if (tlen == elen && !memcmp(p, entry, elen))
+			return;
+		p = space ? space + 1 : NULL;
+	}
+	if (sb->len)
+		sbuf_addch(sb, ' ');
+	sbuf_addstr(sb, entry);
+}
+
+/* ---- DB lookup helpers ------------------------------------------ */
+
+static const struct sinfo_archive *db_find_archive(const struct sinfo_db *db,
+						   const char *archive)
+{
+	for (int i = 0; i < db->n_archives; i++)
+		if (!strcmp(db->archives[i].name, archive))
+			return &db->archives[i];
+	return NULL;
+}
+
+/* True iff the rule's (archive, object) pair refers to anything in
+ * @p db.  Object-less rules need only their archive; object-bearing
+ * rules need at least one DB object whose name matches the rule's
+ * object pattern under the suffix-glob semantics of @ref match_object. */
+static int rule_entity_in_db(const struct sinfo_db *db,
+			     const struct gen_rule *r)
+{
+	const struct sinfo_archive *a = db_find_archive(db, r->archive);
+	if (!a)
+		return 0;
+	if (!r->object)
+		return 1;
+	for (int i = 0; i < a->n_objs; i++)
+		if (match_object(r, a->objs[i].name))
+			return 1;
+	return 0;
+}
+
+/* ---- Rule-overlap helpers --------------------------------------- */
+
+/* Whether @p container's entity scope is a less-specific superset of
+ * @p inner's: a root rule contains everything; an archive-only rule
+ * contains every object of that archive; an object rule contains only
+ * its own object.  Symbol scope isn't a structural container -- two
+ * symbol rules on the same object don't contain each other. */
+static int entity_contains_scope(const struct gen_rule *container,
+				 const struct gen_rule *inner)
+{
+	if (!container->archive)
+		return 1;
+	if (!inner->archive)
+		return 0;
+	if (strcmp(container->archive, inner->archive) != 0)
+		return 0;
+	if (!container->object)
+		return 1;
+	if (!inner->object)
+		return 0;
+	return strcmp(container->object, inner->object) == 0;
+}
+
+/* Two rules' section-pattern sets overlap iff they share at least one
+ * exact pattern string.  IDF .lf files name their @c [sections]
+ * fragments by purpose (text, data, rodata, ...), so two rules
+ * covering the same family expand to identical pattern arrays --
+ * an exact-string set intersection suffices. */
+static int patterns_intersect(const struct gen_rule *a,
+			      const struct gen_rule *b)
+{
+	for (int i = 0; i < a->n_section_patterns; i++)
+		for (int j = 0; j < b->n_section_patterns; j++)
+			if (!strcmp(a->section_patterns[i],
+				    b->section_patterns[j]))
+				return 1;
+	return 0;
+}
+
+/* Find the closest less-specific surviving rule whose entity scope
+ * contains @p R's and whose section patterns intersect R's.  This is
+ * R's "basis" -- the rule whose wildcard R narrows.  ctx->rules is
+ * sorted by (specificity ASC, source_order ASC), so scanning backward
+ * walks down through progressively less-specific tiers. */
+static const struct gen_rule *walk_back_for_overlap(const struct gen_ctx *ctx,
+						    const struct gen_rule *R)
+{
+	int idx = (int)(R - ctx->rules);
+	for (int i = idx - 1; i >= 0; i--) {
+		const struct gen_rule *Rp = &ctx->rules[i];
+		if (Rp->dropped)
+			continue;
+		if (Rp->specificity >= R->specificity)
+			continue;
+		if (!entity_contains_scope(Rp, R))
+			continue;
+		if (!patterns_intersect(Rp, R))
+			continue;
+		return Rp;
+	}
+	return NULL;
+}
+
+/* Compute the EXCLUDE_FILE entry @p R contributes to @p basis.
+ *
+ * The shape depends on what kind of glob @p basis will emit:
+ *
+ *   - **basis is archive-scoped** (its fallback glob is
+ *     @c{*<basis->archive>(...)}): always narrow to the object.  An
+ *     archive-level entry would shadow the entire archive selector
+ *     so the basis would emit nothing at link time.
+ *
+ *   - **basis is the root rule** (its catch-all is @c{*(...)}):
+ *     archive-level when @p R's archive is in the DB (every section
+ *     of that archive is enumerated in some rule's literal listings,
+ *     so excluding the whole archive from the catch-all is exact);
+ *     per-object when the archive is unknown (other objects of the
+ *     same archive must keep falling through so the catch-all still
+ *     routes them to the basis's target).
+ *
+ * Writes into @p sb (caller resets); returns sb->buf for chaining. */
+static const char *rule_exclude_pattern(const struct sinfo_db *db,
+					const struct gen_rule *R,
+					const struct gen_rule *basis,
+					struct sbuf *sb)
+{
+	sbuf_reset(sb);
+	sbuf_addch(sb, '*');
+	sbuf_addstr(sb, R->archive);
+	int per_object;
+	if (basis->archive)
+		per_object = (R->object != NULL);
+	else
+		per_object = R->object && !db_find_archive(db, R->archive);
+	if (per_object) {
+		sbuf_addch(sb, ':');
+		sbuf_addstr(sb, R->object);
+		sbuf_addstr(sb, ".*");
+	}
+	return sb->buf;
+}
+
+/* ---- Resolution -------------------------------------------------- */
+
+/* Walk the DB and attach every (archive, object, section) triple to
+ * its most-specific matching surviving rule. */
+static void attach_db_matches(struct gen_ctx *ctx, const struct sinfo_db *db)
 {
 	for (int ai = 0; ai < db->n_archives; ai++) {
 		const struct sinfo_archive *a = &db->archives[ai];
 		for (int oi = 0; oi < a->n_objs; oi++) {
 			const struct sinfo_object *o = &a->objs[oi];
-			char *ostripped = strip_obj_suffix(o->name);
 			for (int si = 0; si < o->n_sections; si++) {
 				const char *s = o->sections[si];
-				int ri = find_rule(ctx, a->name, ostripped,
-						   o->name, s);
+				int ri = find_rule(ctx, a->name, o->name, s);
 				if (ri < 0)
 					continue;
-				ALLOC_GROW(ctx->placements,
-					   ctx->n_placements + 1,
-					   ctx->alloc_placements);
-				struct gen_placement *p =
-				    &ctx->placements[ctx->n_placements++];
-				p->archive = a->name;
-				p->object = o->name;
-				p->section = s;
-				p->target = ctx->rules[ri].target;
-				p->rule_idx = ri;
+				rule_add_match(&ctx->rules[ri], a->name,
+					       o->name, s);
 			}
-			free(ostripped);
 		}
 	}
+}
 
-	/*
-	 * Root-level (archive: *) rules must emit even when the entity
-	 * DB has no matching section -- the linker resolves the
-	 * @c{*(...)} catch-all against whatever input files it actually
-	 * sees at link time, and any SURROUND wrappers on the rule
-	 * (e.g. @c{_coredump_iram_start} from espcoredump's linker.lf)
-	 * have to land regardless.  Synthesise a phantom placement for
-	 * each such rule that didn't get a real match above; the
-	 * empty archive / object / section strings are fine because
-	 * @c emit_root_wildcard ignores them.
-	 */
+/* Drop symbol-specific rules whose archive or object doesn't exist in
+ * @p db.  Match-time would already skip them (no DB section can carry
+ * a non-DB archive name), but we want the warning *before* the DB
+ * walk so users see one diagnostic per dropped rule rather than a
+ * silent disappearance plus a downstream link error. */
+static void drop_symbol_rules_not_in_db(struct gen_ctx *ctx,
+					const struct sinfo_db *db)
+{
 	for (int i = 0; i < ctx->n_rules; i++) {
-		const struct gen_rule *r = &ctx->rules[i];
-		if (r->archive || r->object || r->symbol)
+		struct gen_rule *R = &ctx->rules[i];
+		if (!R->symbol || R->dropped)
 			continue;
-		int has_placement = 0;
-		for (int p = 0; p < ctx->n_placements; p++) {
-			if (ctx->placements[p].rule_idx == i) {
-				has_placement = 1;
-				break;
-			}
-		}
-		if (has_placement)
+		if (rule_entity_in_db(db, R))
 			continue;
-		ALLOC_GROW(ctx->placements, ctx->n_placements + 1,
-			   ctx->alloc_placements);
-		struct gen_placement *p = &ctx->placements[ctx->n_placements++];
-		p->archive = "";
-		p->object = "";
-		p->section = "";
-		p->target = r->target;
-		p->rule_idx = i;
+		warn("rule references symbol %s:%s:%s, but %s is not in the "
+		     "entity DB; rule dropped",
+		     R->archive, R->object, R->symbol, R->archive);
+		R->dropped = 1;
 	}
+}
+
+/* Drop symbol-specific rules whose section patterns matched no real
+ * section.  At symbol granularity an empty match means the function
+ * or data the rule named was inlined or DCE'd: the surrounded area
+ * is genuinely a single section that doesn't exist, so the rule's
+ * frame (SURROUND symbols, etc.) has nothing meaningful to bracket. */
+static void drop_symbol_rules_with_no_matches(struct gen_ctx *ctx)
+{
+	for (int i = 0; i < ctx->n_rules; i++) {
+		struct gen_rule *R = &ctx->rules[i];
+		if (!R->symbol || R->dropped)
+			continue;
+		if (R->n_matches > 0)
+			continue;
+		warn("rule references symbol %s:%s:%s, but no matching "
+		     "section was found in the object; rule dropped "
+		     "(symbol may have been inlined or eliminated)",
+		     R->archive, R->object, R->symbol);
+		R->dropped = 1;
+	}
+}
+
+/* For every surviving rule R that narrows a less-specific basis
+ * routing to a *different* target, append R's file pattern to the
+ * basis's per-rule @c exclude_list.  At emit time the basis's glob-
+ * emitting line (root catch-all, or archive-fallback for an unknown
+ * archive) carries this list as @c{EXCLUDE_FILE(...)} so cross-target
+ * placement holds regardless of output-section order in the template. */
+static void build_cross_target_excludes(struct gen_ctx *ctx,
+					const struct sinfo_db *db)
+{
+	struct sbuf *staged = calloc((size_t)ctx->n_rules, sizeof(*staged));
+	if (!staged)
+		die_errno("calloc");
+
+	struct sbuf entry = SBUF_INIT;
+	for (int i = 0; i < ctx->n_rules; i++) {
+		struct gen_rule *R = &ctx->rules[i];
+		if (R->dropped)
+			continue;
+		if (R->specificity == 0)
+			continue; /* root rules have no basis */
+		const struct gen_rule *basis = walk_back_for_overlap(ctx, R);
+		if (!basis)
+			continue;
+		if (!strcmp(basis->target, R->target))
+			continue;
+		rule_exclude_pattern(db, R, basis, &entry);
+		int bidx = (int)(basis - ctx->rules);
+		exclude_token_append(&staged[bidx], entry.buf);
+	}
+	sbuf_release(&entry);
+
+	for (int i = 0; i < ctx->n_rules; i++) {
+		free(ctx->rules[i].exclude_list);
+		if (staged[i].len) {
+			ctx->rules[i].exclude_list = staged[i].buf;
+			/* Ownership transferred; do not sbuf_release(). */
+		} else {
+			ctx->rules[i].exclude_list = NULL;
+			sbuf_release(&staged[i]);
+		}
+	}
+	free(staged);
+}
+
+void gen_resolve(struct gen_ctx *ctx, const struct sinfo_db *db)
+{
+	drop_symbol_rules_not_in_db(ctx, db);
+	attach_db_matches(ctx, db);
+	drop_symbol_rules_with_no_matches(ctx);
+	build_cross_target_excludes(ctx, db);
 }
 
 /* ---- Emission ---------------------------------------------------- */
-
-static int placement_cmp_emit(const void *a, const void *b)
-{
-	const struct gen_placement *pa = a;
-	const struct gen_placement *pb = b;
-	int c;
-	if ((c = strcmp(pa->target, pb->target)) != 0)
-		return c;
-	if (pa->rule_idx != pb->rule_idx)
-		return pa->rule_idx - pb->rule_idx;
-	if ((c = strcmp(pa->archive, pb->archive)) != 0)
-		return c;
-	if ((c = strcmp(pa->object, pb->object)) != 0)
-		return c;
-	return strcmp(pa->section, pb->section);
-}
-
-static int placement_cmp_canonical(const void *a, const void *b)
-{
-	const struct gen_placement *pa = a;
-	const struct gen_placement *pb = b;
-	int c;
-	if ((c = strcmp(pa->archive, pb->archive)) != 0)
-		return c;
-	if ((c = strcmp(pa->object, pb->object)) != 0)
-		return c;
-	return strcmp(pa->section, pb->section);
-}
 
 static int has_flag(const struct gen_rule *r, enum gen_flag_kind k)
 {
@@ -642,13 +828,21 @@ static int has_flag(const struct gen_rule *r, enum gen_flag_kind k)
 	return 0;
 }
 
+static const struct gen_flag *find_flag(const struct gen_rule *r,
+					enum gen_flag_kind k)
+{
+	for (int i = 0; i < r->n_flags; i++)
+		if (r->flags[i].kind == k)
+			return &r->flags[i];
+	return NULL;
+}
+
 static void emit_pre_wrappers(FILE *out, const char *indent,
 			      const struct gen_rule *r)
 {
 	for (int i = 0; i < r->n_flags; i++) {
 		const struct gen_flag *f = &r->flags[i];
 		if (f->kind == GF_SURROUND) {
-			/* SURROUND always wraps both sides. */
 			fprintf(out, "%s_%s_start = ABSOLUTE(.);\n", indent,
 				f->symbol);
 		} else if (f->kind == GF_ALIGN && f->pre) {
@@ -673,18 +867,9 @@ static void emit_post_wrappers(FILE *out, const char *indent,
 	}
 }
 
-static const struct gen_flag *find_flag(const struct gen_rule *r,
-					enum gen_flag_kind k)
-{
-	for (int i = 0; i < r->n_flags; i++)
-		if (r->flags[i].kind == k)
-			return &r->flags[i];
-	return NULL;
-}
-
 /* Wrap a sections-list string in SORT_BY_<first>[(SORT_BY_<second>)] per
  * Python's output_commands.py.  Returns the number of closing ')' the
- * caller must emit after the section list. */
+ * caller must emit after each section pattern. */
 static int emit_sort_open(FILE *out, const struct gen_flag *sort)
 {
 	if (!sort)
@@ -715,16 +900,21 @@ static int emit_sort_open(FILE *out, const struct gen_flag *sort)
 	return (f_wrap ? 1 : 0) + (s_wrap ? 1 : 0);
 }
 
-static void emit_input_section_desc(FILE *out, const char *indent,
-				    const struct gen_rule *r,
-				    const char *archive, const char *object,
-				    char *const *sections, int n_sections)
+/* Emit one input section description.
+ *
+ * @p file_pattern is the file-side pattern, e.g. "*libfoo.a:bar.o" or
+ * "*libfoo.a" or "*".  Used for explicit literal listings; the root
+ * catch-all has its own emitter (@ref emit_root_catchall) that knows
+ * how to nest EXCLUDE_FILE inside SORT properly. */
+static void emit_isd(FILE *out, const char *indent, const struct gen_rule *r,
+		     const char *file_pattern, char *const *sections,
+		     int n_sections)
 {
 	fputs(indent, out);
 	int keep = has_flag(r, GF_KEEP);
 	if (keep)
 		fputs("KEEP(", out);
-	fprintf(out, "*%s:%s(", archive, object);
+	fprintf(out, "%s(", file_pattern);
 	const struct gen_flag *sort = find_flag(r, GF_SORT);
 	for (int i = 0; i < n_sections; i++) {
 		if (i)
@@ -740,24 +930,126 @@ static void emit_input_section_desc(FILE *out, const char *indent,
 	fputc('\n', out);
 }
 
-/* Emit a root-level rule (archive wildcard) as a single catch-all
- * `*(section_patterns)` line.  This is how Python emits the default
- * mapping and also the only way to claim sections from archives that
- * weren't passed to ldgen (e.g. libc.a that the linker pulls in). */
-static void emit_root_wildcard(FILE *out, const char *indent,
-			       const struct gen_rule *r)
+/* Emit body lines for the rule's matches, grouped by (archive, object).
+ * Matches are appended in DB walk order (archive[0]:obj[0]:s0, s1, ...
+ * archive[0]:obj[1]:..., ...) so they are naturally contiguous per
+ * (archive, object) -- we just walk and detect group boundaries. */
+static void emit_rule_matches(FILE *out, const char *indent,
+			      const struct gen_rule *r)
 {
+	int i = 0;
+	while (i < r->n_matches) {
+		int j = i + 1;
+		while (j < r->n_matches &&
+		       r->matches[j].archive == r->matches[i].archive &&
+		       r->matches[j].object == r->matches[i].object)
+			j++;
+
+		struct sbuf fp = SBUF_INIT;
+		sbuf_addch(&fp, '*');
+		sbuf_addstr(&fp, r->matches[i].archive);
+		sbuf_addch(&fp, ':');
+		sbuf_addstr(&fp, r->matches[i].object);
+
+		int n = j - i;
+		char **secs = malloc((size_t)n * sizeof(*secs));
+		if (!secs)
+			die_errno("malloc");
+		for (int k = 0; k < n; k++)
+			secs[k] = (char *)r->matches[i + k].section;
+		emit_isd(out, indent, r, fp.buf, secs, n);
+		free(secs);
+
+		sbuf_release(&fp);
+		i = j;
+	}
+}
+
+/* For a symbol-specific rule, build the effective pattern set as it
+ * would expand against the named symbol (".text.<sym>", ".text.<sym>.*",
+ * etc).  Non-symbol rules return their @c section_patterns array
+ * unchanged.  Returns a NULL-terminated array of borrowed/freshly-
+ * allocated strings via @p heap_owns_out: if non-NULL, caller frees
+ * each entry plus the array itself. */
+static char **expand_symbol_patterns(const struct gen_rule *r, int *n_out,
+				     int *heap_owns_out)
+{
+	if (!r->symbol) {
+		*n_out = r->n_section_patterns;
+		*heap_owns_out = 0;
+		return r->section_patterns;
+	}
+	/* Each ".*"-bearing pattern expands to two entries: ".<sym>"
+	 * (exact) and ".<sym>.*" (glob).  Patterns without ".*" produce
+	 * no symbol-level placement and are skipped. */
+	int cap = 2 * r->n_section_patterns;
+	char **out = calloc((size_t)cap, sizeof(*out));
+	if (!out)
+		die_errno("calloc");
+	int n = 0;
+	struct sbuf sb = SBUF_INIT;
+	for (int i = 0; i < r->n_section_patterns; i++) {
+		const char *pat = r->section_patterns[i];
+		const char *star = strstr(pat, ".*");
+		if (!star)
+			continue;
+		size_t prefix = (size_t)(star - pat);
+		const char *after = star + 2;
+
+		sbuf_reset(&sb);
+		sbuf_add(&sb, pat, prefix);
+		sbuf_addch(&sb, '.');
+		sbuf_addstr(&sb, r->symbol);
+		sbuf_addstr(&sb, after);
+		out[n++] = sbuf_strdup(sb.buf);
+
+		sbuf_reset(&sb);
+		sbuf_add(&sb, pat, prefix);
+		sbuf_addch(&sb, '.');
+		sbuf_addstr(&sb, r->symbol);
+		sbuf_addstr(&sb, ".*");
+		sbuf_addstr(&sb, after);
+		out[n++] = sbuf_strdup(sb.buf);
+	}
+	sbuf_release(&sb);
+	*n_out = n;
+	*heap_owns_out = 1;
+	return out;
+}
+
+/* Emit a glob-style line ("*(...)" or "*libfoo.a(...)" /
+ * "*libfoo.a:bar.*(...)") for a rule with zero DB matches or for a
+ * root-rule catch-all.  Per GNU ld grammar, EXCLUDE_FILE can appear
+ * either as a wildcard_spec by itself ("EXCLUDE_FILE(...) <pattern>")
+ * or wrapped inside SORT_BY_NAME ("SORT_BY_NAME(EXCLUDE_FILE(...)
+ * <pattern>)") -- but NOT the other way around.  We always emit
+ * EXCLUDE_FILE per pattern (rather than relying on the propagating
+ * form documented in the manual but inconsistently implemented by
+ * binutils versions) so the same code path handles SORT and non-SORT
+ * cases. */
+static void emit_glob_line(FILE *out, const char *indent,
+			   const struct gen_rule *r, const char *file_pattern)
+{
+	int n_pats, owns;
+	char **pats = expand_symbol_patterns(r, &n_pats, &owns);
+	if (n_pats == 0) {
+		if (owns)
+			free(pats);
+		return;
+	}
 	fputs(indent, out);
 	int keep = has_flag(r, GF_KEEP);
 	if (keep)
 		fputs("KEEP(", out);
-	fputs("*(", out);
+	fprintf(out, "%s(", file_pattern);
 	const struct gen_flag *sort = find_flag(r, GF_SORT);
-	for (int i = 0; i < r->n_section_patterns; i++) {
+	for (int i = 0; i < n_pats; i++) {
 		if (i)
 			fputc(' ', out);
 		int close = emit_sort_open(out, sort);
-		fputs(r->section_patterns[i], out);
+		if (r->exclude_list && *r->exclude_list)
+			fprintf(out, "EXCLUDE_FILE(%s) ", r->exclude_list);
+		fputs(pats[i], out);
 		while (close-- > 0)
 			fputc(')', out);
 	}
@@ -765,123 +1057,144 @@ static void emit_root_wildcard(FILE *out, const char *indent,
 	if (keep)
 		fputc(')', out);
 	fputc('\n', out);
-}
-
-/* Emit a single target's worth of placements starting from v[*i].
- * Consumes v[*i..j) where all have the same target; on return *i == j.
- * If @p with_header is nonzero, prefixes with a "[target]\n" line.
- */
-static void emit_one_target(FILE *out, const char *indent,
-			    const struct gen_ctx *ctx, struct gen_placement *v,
-			    int n_total, int *i, int with_header)
-{
-	const char *target = v[*i].target;
-	if (with_header)
-		fprintf(out, "[%s]\n", target);
-
-	int prev_rule = -1;
-	while (*i < n_total && !strcmp(v[*i].target, target)) {
-		const struct gen_rule *r = &ctx->rules[v[*i].rule_idx];
-
-		if (v[*i].rule_idx != prev_rule) {
-			if (prev_rule >= 0)
-				emit_post_wrappers(out, indent,
-						   &ctx->rules[prev_rule]);
-			emit_pre_wrappers(out, indent, r);
-			prev_rule = v[*i].rule_idx;
-		}
-
-		/* Root-level rule (archive == NULL && object == NULL):
-		 * emit ONE catch-all wildcard and skip all its placements.
-		 * This is what lets orphan sections from archives not in our
-		 * entity DB still get placed -- the linker resolves the
-		 * wildcard against whatever input files it actually sees. */
-		if (!r->archive && !r->object && !r->symbol) {
-			emit_root_wildcard(out, indent, r);
-			int j = *i;
-			while (j < n_total && !strcmp(v[j].target, target) &&
-			       v[j].rule_idx == v[*i].rule_idx)
-				j++;
-			*i = j;
-			continue;
-		}
-
-		/* Coalesce same (archive, object): collect all sections for
-		 * one emit line.  The outer while already confirmed
-		 * v[*i].target == target and rule_idx matches, and the
-		 * (archive, object) pair at *i trivially matches itself --
-		 * so walk starts at *i+1 and n >= 1 by construction. */
-		int n = 1;
-		int j = *i + 1;
-		while (j < n_total && !strcmp(v[j].target, target) &&
-		       v[j].rule_idx == v[*i].rule_idx &&
-		       !strcmp(v[j].archive, v[*i].archive) &&
-		       !strcmp(v[j].object, v[*i].object)) {
-			j++;
-			n++;
-		}
-		char **secs = malloc((size_t)n * sizeof(*secs));
-		if (!secs)
-			die_errno("malloc");
-		for (int k = 0; k < n; k++)
-			secs[k] = (char *)v[*i + k].section;
-		emit_input_section_desc(out, indent, r, v[*i].archive,
-					v[*i].object, secs, n);
-		free(secs);
-		*i = j;
+	if (owns) {
+		for (int i = 0; i < n_pats; i++)
+			free(pats[i]);
+		free(pats);
 	}
-	if (prev_rule >= 0)
-		emit_post_wrappers(out, indent, &ctx->rules[prev_rule]);
 }
 
-void gen_emit(FILE *out, const struct gen_ctx *ctx)
+/* Fallback for archive-specific rules with zero DB matches: emit the
+ * rule's own selector with its (symbol-expanded if applicable) section
+ * patterns.  Without this, a rule like `archive: libwifi_phy.a
+ * (in_iram)` for an archive ldgen does not see would silently
+ * disappear.  Carries the rule's @c exclude_list when more-specific
+ * narrowing rules route to a different target. */
+static void emit_rule_archive_fallback(FILE *out, const char *indent,
+				       const struct gen_rule *r)
 {
-	if (!ctx->n_placements)
+	struct sbuf fp = SBUF_INIT;
+	sbuf_addch(&fp, '*');
+	sbuf_addstr(&fp, r->archive);
+	if (r->object) {
+		sbuf_addch(&fp, ':');
+		sbuf_addstr(&fp, r->object);
+		/* The linker accepts a plain glob in the file pattern, so
+		 * `obj.*.o` covers both legacy `bar.o` and IDF's `bar.c.obj`
+		 * forms in one selector. */
+		sbuf_addstr(&fp, ".*");
+	}
+	emit_glob_line(out, indent, r, fp.buf);
+	sbuf_release(&fp);
+}
+
+/* Emit the root rule's catch-all line.  Sections from archives the
+ * libraries-file doesn't enumerate land here.  The rule's
+ * @c exclude_list (built by @ref build_cross_target_excludes) lists
+ * file patterns of more-specific rules routing to other targets, so
+ * the catch-all doesn't pull their content into the wrong target. */
+static void emit_root_catchall(FILE *out, const char *indent,
+			       const struct gen_rule *r)
+{
+	emit_glob_line(out, indent, r, "*");
+}
+
+static int rule_is_root(const struct gen_rule *r)
+{
+	return !r->archive && !r->object && !r->symbol;
+}
+
+/* Emit one rule's contribution to its target's body. */
+static void emit_rule(FILE *out, const char *indent, const struct gen_rule *r)
+{
+	if (r->dropped)
 		return;
 
-	/* Copy placements so we can sort without disturbing the canonical
-	 * order the caller may rely on afterwards. */
-	struct gen_placement *v =
-	    malloc((size_t)ctx->n_placements * sizeof(*v));
-	if (!v)
-		die_errno("malloc");
-	memcpy(v, ctx->placements, (size_t)ctx->n_placements * sizeof(*v));
-	qsort(v, (size_t)ctx->n_placements, sizeof(*v), placement_cmp_emit);
+	emit_pre_wrappers(out, indent, r);
 
-	int i = 0;
-	while (i < ctx->n_placements) {
-		emit_one_target(out, "    ", ctx, v, ctx->n_placements, &i, 1);
-		fputc('\n', out);
+	if (r->n_matches > 0)
+		emit_rule_matches(out, indent, r);
+	else if (r->archive)
+		emit_rule_archive_fallback(out, indent, r);
+
+	if (rule_is_root(r))
+		emit_root_catchall(out, indent, r);
+
+	emit_post_wrappers(out, indent, r);
+}
+
+/* Iterate ctx->rules in source order, return the index of the first
+ * rule with the given target after @p start, or ctx->n_rules if none. */
+static int find_next_rule_for_target(const struct gen_ctx *ctx, int start,
+				     const char *target)
+{
+	for (int i = start; i < ctx->n_rules; i++) {
+		const struct gen_rule *r = &ctx->rules[i];
+		if (!strcmp(r->target, target))
+			return i;
 	}
-	free(v);
+	return ctx->n_rules;
+}
+
+/* Emit all rules with the given target, in source-order (which is the
+ * stable order from rule_cmp's secondary key).  ctx->rules is sorted
+ * primarily by specificity, but rules with the same target may appear
+ * at any position -- so we scan and select. */
+static void emit_target_rules(FILE *out, const char *indent,
+			      const struct gen_ctx *ctx, const char *target)
+{
+	/* ctx->rules is currently sorted by (specificity ASC, source_order
+	 * ASC) for resolution.  Re-collect rules for this target in
+	 * source-order so multiple SURROUND wrappers within the same
+	 * target appear in the order the user wrote them. */
+	int *idx = malloc((size_t)ctx->n_rules * sizeof(*idx));
+	if (!idx)
+		die_errno("malloc");
+	int n = 0;
+	for (int i = 0; i < ctx->n_rules; i++)
+		if (!strcmp(ctx->rules[i].target, target))
+			idx[n++] = i;
+	/* Sort by source_order (stable -- already partially sorted). */
+	for (int i = 1; i < n; i++) {
+		int v = idx[i];
+		int j = i - 1;
+		while (j >= 0 && ctx->rules[idx[j]].source_order >
+				     ctx->rules[v].source_order) {
+			idx[j + 1] = idx[j];
+			j--;
+		}
+		idx[j + 1] = v;
+	}
+
+	for (int i = 0; i < n; i++)
+		emit_rule(out, indent, &ctx->rules[idx[i]]);
+
+	free(idx);
 }
 
 void gen_emit_target(FILE *out, const char *indent, const struct gen_ctx *ctx,
 		     const char *target)
 {
-	if (!ctx->n_placements)
-		return;
-	struct gen_placement *v =
-	    malloc((size_t)ctx->n_placements * sizeof(*v));
-	if (!v)
-		die_errno("malloc");
-	memcpy(v, ctx->placements, (size_t)ctx->n_placements * sizeof(*v));
-	qsort(v, (size_t)ctx->n_placements, sizeof(*v), placement_cmp_emit);
-
-	int i = 0;
-	while (i < ctx->n_placements) {
-		if (!strcmp(v[i].target, target)) {
-			emit_one_target(out, indent, ctx, v, ctx->n_placements,
-					&i, 0);
-			break;
-		}
-		/* Skip to next target boundary. */
-		const char *t = v[i].target;
-		while (i < ctx->n_placements && !strcmp(v[i].target, t))
-			i++;
-	}
-	free(v);
+	emit_target_rules(out, indent, ctx, target);
 }
+
+void gen_emit(FILE *out, const struct gen_ctx *ctx)
+{
+	/* Walk rules in source order, emitting each unique target's block
+	 * the first time we encounter it.  Duplicate-target detection is
+	 * O(n_targets^2) but n_targets is small (~10). */
+	for (int i = 0; i < ctx->n_rules; i++) {
+		const char *target = ctx->rules[i].target;
+		int j = find_next_rule_for_target(ctx, 0, target);
+		if (j != i)
+			continue; /* not the first rule for this target */
+		fprintf(out, "[%s]\n", target);
+		emit_target_rules(out, "    ", ctx, target);
+		fputc('\n', out);
+	}
+}
+
+/* ---- Template fill ---------------------------------------------- */
 
 enum marker_kind {
 	MK_MAPPING,
@@ -972,21 +1285,54 @@ void gen_fill_template(FILE *out, const struct gen_ctx *ctx,
 	sbuf_release(&sb);
 }
 
+/* ---- Canonical dump --------------------------------------------- */
+
+struct canon_row {
+	const char *archive;
+	const char *object;
+	const char *section;
+	const char *target;
+};
+
+static int canon_cmp(const void *a, const void *b)
+{
+	const struct canon_row *ra = a;
+	const struct canon_row *rb = b;
+	int c;
+	if ((c = strcmp(ra->archive, rb->archive)) != 0)
+		return c;
+	if ((c = strcmp(ra->object, rb->object)) != 0)
+		return c;
+	return strcmp(ra->section, rb->section);
+}
+
 void gen_emit_canonical(FILE *out, const struct gen_ctx *ctx)
 {
-	if (!ctx->n_placements)
+	int total = 0;
+	for (int i = 0; i < ctx->n_rules; i++)
+		total += ctx->rules[i].n_matches;
+	if (!total)
 		return;
-	struct gen_placement *v =
-	    malloc((size_t)ctx->n_placements * sizeof(*v));
-	if (!v)
+
+	struct canon_row *rows = malloc((size_t)total * sizeof(*rows));
+	if (!rows)
 		die_errno("malloc");
-	memcpy(v, ctx->placements, (size_t)ctx->n_placements * sizeof(*v));
-	qsort(v, (size_t)ctx->n_placements, sizeof(*v),
-	      placement_cmp_canonical);
-	for (int i = 0; i < ctx->n_placements; i++)
-		fprintf(out, "%s|%s|%s|%s\n", v[i].archive, v[i].object,
-			v[i].section, v[i].target);
-	free(v);
+	int k = 0;
+	for (int i = 0; i < ctx->n_rules; i++) {
+		const struct gen_rule *r = &ctx->rules[i];
+		for (int j = 0; j < r->n_matches; j++) {
+			rows[k].archive = r->matches[j].archive;
+			rows[k].object = r->matches[j].object;
+			rows[k].section = r->matches[j].section;
+			rows[k].target = r->target;
+			k++;
+		}
+	}
+	qsort(rows, (size_t)total, sizeof(*rows), canon_cmp);
+	for (int i = 0; i < total; i++)
+		fprintf(out, "%s|%s|%s|%s\n", rows[i].archive, rows[i].object,
+			rows[i].section, rows[i].target);
+	free(rows);
 }
 
 /* ---- Cleanup ----------------------------------------------------- */
@@ -1006,6 +1352,8 @@ static void free_rule(struct gen_rule *r)
 		free(r->flags[i].symbol);
 	}
 	free(r->flags);
+	free(r->matches);
+	free(r->exclude_list);
 }
 
 void gen_free(struct gen_ctx *ctx)
@@ -1032,6 +1380,5 @@ void gen_free(struct gen_ctx *ctx)
 		free_rule(&ctx->rules[i]);
 	free(ctx->rules);
 
-	free(ctx->placements);
 	memset(ctx, 0, sizeof(*ctx));
 }

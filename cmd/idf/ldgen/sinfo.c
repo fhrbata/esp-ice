@@ -20,6 +20,14 @@ static const char *basename_of(const char *path)
 
 static struct sinfo_archive *archive_add(struct sinfo_db *db, const char *name)
 {
+	/* The libraries-file CMake hands ldgen can list the same archive
+	 * multiple times (cyclic --start-group / --end-group inputs).
+	 * Merge into the existing entry rather than producing duplicate
+	 * (archive, obj, section) triples that downstream emit would
+	 * faithfully duplicate in the linker script. */
+	for (int i = 0; i < db->n_archives; i++)
+		if (!strcmp(db->archives[i].name, name))
+			return &db->archives[i];
 	ALLOC_GROW(db->archives, db->n_archives + 1, db->alloc_archives);
 	struct sinfo_archive *a = &db->archives[db->n_archives++];
 	memset(a, 0, sizeof(*a));
