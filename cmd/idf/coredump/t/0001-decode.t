@@ -67,8 +67,12 @@ tap_done "b64 single-line decodes to original bytes"
 # 200 bytes -> 268 b64 chars -> three 76-col lines + a 40-char tail.
 # Some of those lines can end in '=' padding internally, which is the
 # whole point of decoding line-by-line rather than as one stream.
+#
+# GNU base64 wraps at 76 cols by default, BSD base64 (macOS) does
+# not -- pass the wrap explicitly: -w on GNU, -b on BSD.
 
-base64 <original.bin >wrapped.b64
+(base64 -w 76 <original.bin || base64 -b 76 <original.bin) 2>/dev/null \
+	>wrapped.b64
 tap_check test "$(wc -l <wrapped.b64)" -ge 2
 "$BINARY" idf coredump --core wrapped.b64 --core-format b64 --save-raw out_wrapped.bin
 tap_check cmp -s original.bin out_wrapped.bin
@@ -201,7 +205,7 @@ tap_done "elf input prints a minimal info block"
 # ---- 10d. b64 input is decoded then header-parsed ----
 # Wrap our V2 raw image in base64 and verify the info comes out the same.
 
-base64 v2.bin >v2.b64
+(base64 -w 76 <v2.bin || base64 -b 76 <v2.bin) 2>/dev/null >v2.b64
 "$BINARY" idf coredump --core v2.b64 --core-format b64 >v2b64_info 2>err
 tap_check grep -q 'format *b64' v2b64_info
 tap_check grep -q 'BIN_V2' v2b64_info
@@ -313,6 +317,14 @@ tap_done "BIN_V2 esp32c3 dump synthesises a valid RISC-V ELF core file"
 tap_check cmp -s some.elf out_savecore_elf.bin
 tap_done "--save-core for elf-format input passes the file through"
 
+# ---- Tests below this point spawn a bash-shebang fake-gdb script via
+# ice's --gdb option.  Windows process spawn doesn't honour shebangs,
+# so the script can't execute on the windows runner.  Skip the
+# fake-gdb-dependent subtests; tests 17 and 17c remain since they
+# exercise error paths that don't actually invoke the script. ----
+
+if [ "$S" != "windows" ]; then
+
 # ---- 15. <prog> without --save-core: temp file is allocated, gdb runs, then it is unlinked ----
 # Use a separate fake-gdb that writes the --core arg + an existence
 # probe so we can verify (a) the file existed during the gdb run
@@ -385,6 +397,8 @@ tap_check grep -qx 'argv\[12\]=info threads' fake-gdb.log
 tap_check grep -qx 'argv\[14\]=thread apply all bt' fake-gdb.log
 tap_done "<prog> with --save-core spawns gdb with the expected argv"
 
+fi  # S != windows
+
 # ---- 17. --gdb path that doesn't exist is reported, not a crash ----
 
 if "$BINARY" idf coredump --core v22.bin --save-core v22_run2.elf \
@@ -394,6 +408,8 @@ else
 	tap_check grep -q 'gdb' err
 fi
 tap_done "missing --gdb binary is reported gracefully"
+
+if [ "$S" != "windows" ]; then
 
 # ---- 17b. --rom-elf passes 'add-symbol-file' through to gdb's argv ----
 
@@ -411,8 +427,15 @@ tap_check grep -qx 'argv\[14\]=info threads' fake-gdb.log
 tap_check grep -qx 'argv\[16\]=thread apply all bt' fake-gdb.log
 tap_done "--rom-elf passes 'add-symbol-file <path>' to gdb"
 
-# ---- 17c. --rom-elf with a nonexistent path errors out before spawning gdb ----
+fi  # S != windows
 
+# ---- 17c. --rom-elf with a nonexistent path errors out before spawning gdb ----
+# Need fake-rom touched even when the fake-gdb block above was
+# skipped, and fake-gdb itself needs to exist as a file (the path
+# check happens before exec on every platform).
+
+touch fake-rom.elf
+[ -e fake-gdb ] || : >fake-gdb
 rm -f fake-gdb.log
 if "$BINARY" idf coredump --core v22.bin --save-core v22_run4.elf \
 	--gdb "$PWD/fake-gdb" --rom-elf /nonexistent/rom.elf \
@@ -424,6 +447,8 @@ else
 	tap_check test ! -e fake-gdb.log
 fi
 tap_done "missing --rom-elf path is rejected before gdb is spawned"
+
+if [ "$S" != "windows" ]; then
 
 # ---- 17d. --interactive strips --batch / --quiet / --nh and the canned commands ----
 
@@ -471,5 +496,7 @@ tap_check grep -qx 'argv\[9\]=synth_run.elf' fake-gdb.log
 # The saved file is a real ELF.
 tap_check test "$(head -c 4 synth_run.elf | od -An -tx1 | tr -d ' \n')" = "7f454c46"
 tap_done "BIN_V2 + <prog>: gdb runs on the synthesised ELF"
+
+fi  # S != windows
 
 tap_result
