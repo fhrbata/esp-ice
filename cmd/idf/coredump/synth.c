@@ -77,7 +77,7 @@
 #define XTENSA_REG_NUM 129
 #define XTENSA_PRSTATUS_HDR 76
 #define XTENSA_PRSTATUS_SIZE                                                   \
-	(XTENSA_PRSTATUS_HDR + XTENSA_REG_NUM * 4) /* 592 */
+	(XTENSA_PRSTATUS_HDR + XTENSA_REG_NUM * (size_t)4) /* 592 */
 
 #define RISCV_REG_NUM 32
 #define RISCV_PRSTATUS_SIZE                                                    \
@@ -178,25 +178,31 @@ static int extract_xtensa_regs(const uint8_t *stack, size_t stack_len,
 			       uint32_t out_regs[XTENSA_REG_NUM],
 			       const char **err)
 {
-	if (stack_len < (size_t)XT_STK_FRMSZ * 4) {
+	if (stack_len < (size_t)XT_STK_FRMSZ * sizeof(uint32_t)) {
 		*err = "Xtensa task stack smaller than exception frame";
 		return -1;
 	}
 
-	memset(out_regs, 0, XTENSA_REG_NUM * 4);
+	memset(out_regs, 0, XTENSA_REG_NUM * sizeof(uint32_t));
 
-	uint32_t rc = rd_le32(stack + XT_STK_EXIT * 4);
+	uint32_t rc = rd_le32(stack + XT_STK_EXIT * sizeof(uint32_t));
 	if (rc != 0) {
 		/* Hardware exception entry: full register set. */
-		out_regs[X_REG_PC] = rd_le32(stack + XT_STK_PC * 4);
-		out_regs[X_REG_PS] = rd_le32(stack + XT_STK_PS * 4);
+		out_regs[X_REG_PC] =
+		    rd_le32(stack + XT_STK_PC * sizeof(uint32_t));
+		out_regs[X_REG_PS] =
+		    rd_le32(stack + XT_STK_PS * sizeof(uint32_t));
 		for (int i = 0; i < XT_STK_AR_NUM; i++)
-			out_regs[X_REG_AR_START + i] =
-			    rd_le32(stack + (XT_STK_AR_START + i) * 4);
-		out_regs[X_REG_SAR] = rd_le32(stack + XT_STK_SAR * 4);
-		out_regs[X_REG_LB] = rd_le32(stack + XT_STK_LBEG * 4);
-		out_regs[X_REG_LE] = rd_le32(stack + XT_STK_LEND * 4);
-		out_regs[X_REG_LC] = rd_le32(stack + XT_STK_LCOUNT * 4);
+			out_regs[X_REG_AR_START + i] = rd_le32(
+			    stack + (XT_STK_AR_START + i) * sizeof(uint32_t));
+		out_regs[X_REG_SAR] =
+		    rd_le32(stack + XT_STK_SAR * sizeof(uint32_t));
+		out_regs[X_REG_LB] =
+		    rd_le32(stack + XT_STK_LBEG * sizeof(uint32_t));
+		out_regs[X_REG_LE] =
+		    rd_le32(stack + XT_STK_LEND * sizeof(uint32_t));
+		out_regs[X_REG_LC] =
+		    rd_le32(stack + XT_STK_LCOUNT * sizeof(uint32_t));
 		/*
 		 * Crashed / running tasks (e.g. prvIdleTask) have the
 		 * EXCM bit set in PS, which makes GDB unwind them as
@@ -207,11 +213,13 @@ static int extract_xtensa_regs(const uint8_t *stack, size_t stack_len,
 			out_regs[X_REG_PS] &= ~(1u << 4);
 	} else {
 		/* Solicited (yield) entry: fewer registers. */
-		out_regs[X_REG_PC] = rd_le32(stack + XT_SOL_PC * 4);
-		out_regs[X_REG_PS] = rd_le32(stack + XT_SOL_PS * 4);
+		out_regs[X_REG_PC] =
+		    rd_le32(stack + XT_SOL_PC * sizeof(uint32_t));
+		out_regs[X_REG_PS] =
+		    rd_le32(stack + XT_SOL_PS * sizeof(uint32_t));
 		for (int i = 0; i < XT_SOL_AR_NUM; i++)
-			out_regs[X_REG_AR_START + i] =
-			    rd_le32(stack + (XT_SOL_AR_START + i) * 4);
+			out_regs[X_REG_AR_START + i] = rd_le32(
+			    stack + (XT_SOL_AR_START + i) * sizeof(uint32_t));
 	}
 	return 0;
 }
@@ -224,12 +232,12 @@ static int extract_riscv_regs(const uint8_t *stack, size_t stack_len,
 			      uint32_t out_regs[RISCV_REG_NUM],
 			      const char **err)
 {
-	if (stack_len < (size_t)RISCV_REG_NUM * 4) {
+	if (stack_len < (size_t)RISCV_REG_NUM * sizeof(uint32_t)) {
 		*err = "RISC-V task stack smaller than register set";
 		return -1;
 	}
 	for (int i = 0; i < RISCV_REG_NUM; i++)
-		out_regs[i] = rd_le32(stack + i * 4);
+		out_regs[i] = rd_le32(stack + i * sizeof(uint32_t));
 	return 0;
 }
 
@@ -271,7 +279,8 @@ static void build_xtensa_prstatus(uint32_t tcb_addr, const uint32_t *regs,
 	/* pr_pid lives at offset 24 in the 76-byte header. */
 	wr_le32(out + 24, tcb_addr);
 	for (int i = 0; i < XTENSA_REG_NUM; i++)
-		wr_le32(out + XTENSA_PRSTATUS_HDR + i * 4, regs[i]);
+		wr_le32(out + XTENSA_PRSTATUS_HDR + i * sizeof(uint32_t),
+			regs[i]);
 }
 
 /*
@@ -285,7 +294,7 @@ static void build_riscv_prstatus(uint32_t tcb_addr, const uint32_t *regs,
 	memset(out, 0, RISCV_PRSTATUS_SIZE);
 	wr_le32(out + 24, tcb_addr); /* pr_pid */
 	for (int i = 0; i < RISCV_REG_NUM; i++)
-		wr_le32(out + 72 + i * 4, regs[i]);
+		wr_le32(out + 72 + i * sizeof(uint32_t), regs[i]);
 }
 
 /* ------------------------------------------------------------------ */
