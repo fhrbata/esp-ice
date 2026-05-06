@@ -323,7 +323,7 @@ tap_done "--save-core for elf-format input passes the file through"
 # fake-gdb-dependent subtests; tests 17 and 17c remain since they
 # exercise error paths that don't actually invoke the script. ----
 
-if [ "$S" != "windows" ]; then
+if [ "$S" != "win" ]; then
 
 # ---- 15. <prog> without --save-core: temp file is allocated, gdb runs, then it is unlinked ----
 # Use a separate fake-gdb that writes the --core arg + an existence
@@ -397,7 +397,7 @@ tap_check grep -qx 'argv\[12\]=info threads' fake-gdb.log
 tap_check grep -qx 'argv\[14\]=thread apply all bt' fake-gdb.log
 tap_done "<prog> with --save-core spawns gdb with the expected argv"
 
-fi  # S != windows
+fi  # S != win
 
 # ---- 17. --gdb path that doesn't exist is reported, not a crash ----
 
@@ -409,7 +409,7 @@ else
 fi
 tap_done "missing --gdb binary is reported gracefully"
 
-if [ "$S" != "windows" ]; then
+if [ "$S" != "win" ]; then
 
 # ---- 17b. --rom-elf passes 'add-symbol-file' through to gdb's argv ----
 
@@ -427,7 +427,7 @@ tap_check grep -qx 'argv\[14\]=info threads' fake-gdb.log
 tap_check grep -qx 'argv\[16\]=thread apply all bt' fake-gdb.log
 tap_done "--rom-elf passes 'add-symbol-file <path>' to gdb"
 
-fi  # S != windows
+fi  # S != win
 
 # ---- 17c. --rom-elf with a nonexistent path errors out before spawning gdb ----
 # Need fake-rom touched even when the fake-gdb block above was
@@ -448,7 +448,7 @@ else
 fi
 tap_done "missing --rom-elf path is rejected before gdb is spawned"
 
-if [ "$S" != "windows" ]; then
+if [ "$S" != "win" ]; then
 
 # ---- 17d. --interactive strips --batch / --quiet / --nh and the canned commands ----
 
@@ -497,6 +497,6 @@ tap_check grep -qx 'argv\[9\]=synth_run.elf' fake-gdb.log
 tap_check test "$(head -c 4 synth_run.elf | od -An -tx1 | tr -d ' \n')" = "7f454c46"
 tap_done "BIN_V2 + <prog>: gdb runs on the synthesised ELF"
 
-fi  # S != windows
+fi  # S != win
 
 tap_result
