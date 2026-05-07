@@ -409,20 +409,36 @@ static int spawn_openocd(struct process *proc, const char *openocd_bin,
 	 * digging in scrollback). */
 	struct sbuf prelog = SBUF_INIT;
 	int ready = 0;
+	int daemon_exited = 0;
 
 	for (int attempt = 0; attempt < 20; attempt++) {
 		uint8_t buf[2048];
 		ssize_t n = pipe_read_timed(proc->out, buf, sizeof buf, 500);
-		if (n < 0)
+		if (n < 0) {
+			daemon_exited = 1;
 			break; /* EOF -- daemon died */
+		}
 		if (n > 0) {
 			fwrite(buf, 1, (size_t)n, stderr);
 			fflush(stderr);
 			sbuf_add(&prelog, buf, (size_t)n);
 			/* sbuf is NUL-terminated and OpenOCD's output is
 			 * text, so strstr is safe and portable (memmem is
-			 * a GNU extension we don't depend on elsewhere). */
-			if (strstr(prelog.buf, "Listening on port ")) {
+			 * a GNU extension we don't depend on elsewhere).
+			 *
+			 * Match the gdb-listener line specifically rather
+			 * than any "Listening on port " prefix.  OpenOCD
+			 * opens its TCL (6666) and telnet (4444) servers
+			 * during the config phase -- before jtag_init runs
+			 * -- and only opens the gdb stub after init finishes
+			 * probing and examining the chip.  Matching the
+			 * earlier TCL/telnet lines races the gdb listener
+			 * (gdb's `target remote :<port>` is then spawned
+			 * against an unbound socket and errors out before
+			 * OpenOCD finishes init).  The "for gdb connections"
+			 * suffix is uniquely emitted by gdb_server.c's
+			 * listener, so the match holds across versions. */
+			if (strstr(prelog.buf, "for gdb connections")) {
 				ready = 1;
 				break;
 			}
@@ -430,9 +446,14 @@ static int spawn_openocd(struct process *proc, const char *openocd_bin,
 	}
 
 	if (!ready) {
-		fprintf(stderr,
-			"ice target openocd: openocd did not announce a gdb "
-			"port within ~10s\n");
+		if (daemon_exited)
+			fprintf(stderr,
+				"ice target openocd: openocd exited before "
+				"opening a gdb port (see banner above)\n");
+		else
+			fprintf(stderr,
+				"ice target openocd: openocd did not announce "
+				"a gdb port within ~10s\n");
 		kill(proc->pid, SIGTERM);
 		process_finish(proc);
 		svec_clear(&argv);
