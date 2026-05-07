@@ -1,3 +1,27 @@
+## v0.13.0 (2026-05-07)
+
+### ✨ New Features
+
+- **coredump**: add ice coredump porcelain (chip -> idf coredump) *(Frantisek Hrbata - e36b064)*
+- **idf/coredump**: synthesise GDB-loadable ELF from BIN_V* dumps *(Frantisek Hrbata - c3bfd4e)*
+- **idf/coredump**: add --interactive (mirrors upstream dbg_corefile) *(Frantisek Hrbata - e763f57)*
+- **idf/coredump**: add --rom-elf pass-through to gdb *(Frantisek Hrbata - 37344ca)*
+- **fs**: add temp_dir() / make_temp_file(); use them in coredump *(Frantisek Hrbata - 25710cb)*
+- **idf/coredump**: add ice idf coredump (info, verify, extract, gdb) *(Frantisek Hrbata - 7e84016)*
+- **base64**: add base64 decoder helper at the project root *(Frantisek Hrbata - 5961352)*
+
+### 🐛 Bug Fixes
+
+- **idf/coredump**: silence clang-tidy bugprone-implicit-widening errors *(Frantisek Hrbata - 8452fd1)*
+- **idf/ldgen**: per-rule EXCLUDE_FILE, symbol-rule lifecycle, dedup archives *(Frantisek Hrbata - c0b6345)*
+- **idf/ldgen**: emit root-level (archive: *) rules unconditionally *(Frantisek Hrbata - b74905e)*
+
+### 🔧 Code Refactoring
+
+- **target**: rename ice target debug -> ice target openocd *(Frantisek Hrbata - 00e9cb5)*
+- **qemu**: split into ice qemu (porcelain) + ice target qemu (plumbing) *(Frantisek Hrbata - 55c025d)*
+
+
 ## v0.12.0 (2026-05-04)
 
 ### ✨ New Features
