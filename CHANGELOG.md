@@ -1,3 +1,19 @@
+## v0.14.0 (2026-05-07)
+
+### ✨ New Features
+
+- **target/openocd**: print hint about Ctrl-T r in the UART pane *(Frantisek Hrbata - 0979fd6)*
+- **init**: persist serial.port / serial.baud in .ice/config *(Frantisek Hrbata - 57866a5)*
+- **serial**: add serial_pick_default_port and serial_complete_baud *(Frantisek Hrbata - 0a230ec)*
+
+### 🐛 Bug Fixes
+
+- **target/openocd**: atomic DTR/RTS toggle on UART open *(Frantisek Hrbata - 8acff60)*
+- **target/openocd**: distinguish openocd-exited from spawn timeout *(Frantisek Hrbata - 9241920)*
+- **target/openocd**: wait for the gdb listener, not the first listener *(Frantisek Hrbata - e33861d)*
+- **idf/kconfgen**: ignore stale sdkconfig values for promptless symbols *(Frantisek Hrbata - 093adfc)*
+
+
 ## v0.13.0 (2026-05-07)
 
 ### ✨ New Features
