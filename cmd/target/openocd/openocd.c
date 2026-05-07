@@ -409,12 +409,15 @@ static int spawn_openocd(struct process *proc, const char *openocd_bin,
 	 * digging in scrollback). */
 	struct sbuf prelog = SBUF_INIT;
 	int ready = 0;
+	int daemon_exited = 0;
 
 	for (int attempt = 0; attempt < 20; attempt++) {
 		uint8_t buf[2048];
 		ssize_t n = pipe_read_timed(proc->out, buf, sizeof buf, 500);
-		if (n < 0)
+		if (n < 0) {
+			daemon_exited = 1;
 			break; /* EOF -- daemon died */
+		}
 		if (n > 0) {
 			fwrite(buf, 1, (size_t)n, stderr);
 			fflush(stderr);
@@ -443,9 +446,14 @@ static int spawn_openocd(struct process *proc, const char *openocd_bin,
 	}
 
 	if (!ready) {
-		fprintf(stderr,
-			"ice target openocd: openocd did not announce a gdb "
-			"port within ~10s\n");
+		if (daemon_exited)
+			fprintf(stderr,
+				"ice target openocd: openocd exited before "
+				"opening a gdb port (see banner above)\n");
+		else
+			fprintf(stderr,
+				"ice target openocd: openocd did not announce "
+				"a gdb port within ~10s\n");
 		kill(proc->pid, SIGTERM);
 		process_finish(proc);
 		svec_clear(&argv);
