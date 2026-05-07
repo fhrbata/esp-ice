@@ -1001,8 +1001,20 @@ int cmd_target_openocd(int argc, const char **argv)
 		die("cannot open %s: %s", opt_port, strerror(-rc));
 
 	if (!opt_no_reset) {
-		serial_set_dtr(s, 0);
-		serial_set_rts(s, 0);
+		/*
+		 * Drive DTR=0 RTS=0 atomically.  Two separate TIOCMBIC
+		 * ioctls (one per bit) walk the lines through the
+		 * asymmetric (0, 1) state on the way to idle -- on the
+		 * standard Espressif auto-reset circuit (DTR asserted
+		 * drives BOOT low, RTS asserted drives RESET low) that
+		 * intermediate (0, 1) means BOOT high, RESET low, i.e.
+		 * the chip is briefly held in reset.  A single TIOCMSET
+		 * via @ref serial_set_dtr_rts emits one clean edge.
+		 * Mirrors the rationale already spelled out in
+		 * @c esf_port.c (commit "fix(esf): drive DTR/RTS
+		 * atomically to avoid bootloader-entry glitch") -- the
+		 * helper exists; ice's debug path just wasn't using it. */
+		serial_set_dtr_rts(s, 0, 0);
 	}
 
 	rc = serial_set_baud(s, (unsigned)opt_baud);
