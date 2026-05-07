@@ -421,8 +421,21 @@ static int spawn_openocd(struct process *proc, const char *openocd_bin,
 			sbuf_add(&prelog, buf, (size_t)n);
 			/* sbuf is NUL-terminated and OpenOCD's output is
 			 * text, so strstr is safe and portable (memmem is
-			 * a GNU extension we don't depend on elsewhere). */
-			if (strstr(prelog.buf, "Listening on port ")) {
+			 * a GNU extension we don't depend on elsewhere).
+			 *
+			 * Match the gdb-listener line specifically rather
+			 * than any "Listening on port " prefix.  OpenOCD
+			 * opens its TCL (6666) and telnet (4444) servers
+			 * during the config phase -- before jtag_init runs
+			 * -- and only opens the gdb stub after init finishes
+			 * probing and examining the chip.  Matching the
+			 * earlier TCL/telnet lines races the gdb listener
+			 * (gdb's `target remote :<port>` is then spawned
+			 * against an unbound socket and errors out before
+			 * OpenOCD finishes init).  The "for gdb connections"
+			 * suffix is uniquely emitted by gdb_server.c's
+			 * listener, so the match holds across versions. */
+			if (strstr(prelog.buf, "for gdb connections")) {
 				ready = 1;
 				break;
 			}
