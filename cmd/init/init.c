@@ -26,6 +26,7 @@
  * + @b{ice build}, which keeps the cmake configuration intact.
  */
 #include "ice.h"
+#include "serial.h"
 
 /* ------------------------------------------------------------------ */
 /* Manual / options                                                    */
@@ -80,6 +81,12 @@ static const struct cmd_manual init_manual = {
 	       "cmake generator (default: @b{Ninja}).")
 	H_ITEM("project.<name>.define",
 	       "Extra @b{-D<key>=<value>} entries (multi-value).")
+	H_ITEM("project.<name>.serial.port",
+	       "Default serial port (set via @b{--port}; consumed by "
+	       "ice debug / monitor / flash).")
+	H_ITEM("project.<name>.serial.baud",
+	       "Default serial baud rate (set via @b{--baud}; "
+	       "consumed by ice debug / monitor / flash).")
 
 	H_SECTION("SEE ALSO")
 	H_ITEM("ice repo checkout",
@@ -98,6 +105,8 @@ static struct svec opt_sdkconfig_defaults;
 static const char *opt_build_dir;
 static const char *opt_generator;
 static struct svec opt_defines;
+static const char *opt_port;
+static int opt_baud; /* 0 means "leave serial.baud unset in .ice/config" */
 
 /* ------------------------------------------------------------------ */
 /* Per-slot completion                                                 */
@@ -182,6 +191,14 @@ static const struct option cmd_init_opts[] = {
 	       "cmake generator (default: Ninja)", NULL),
     OPT_STRING_LIST('d', "define", &opt_defines, "key=val",
 		    "extra cmake -D<key>=<value> entry (repeatable)", NULL),
+    OPT_STRING('p', "port", &opt_port, "dev",
+	       "default serial port for ice debug / monitor / flash "
+	       "(stored as @b{serial.port} in .ice/config)",
+	       serial_complete_port),
+    OPT_INT(0, "baud", &opt_baud, "rate",
+	    "default serial baud rate "
+	    "(stored as @b{serial.baud} in .ice/config when set)",
+	    serial_complete_baud),
     OPT_BOOL(0, "preview", &opt_preview, "allow preview chip targets"),
     OPT_POSITIONAL("chip", complete_chip),
     OPT_POSITIONAL("idf", complete_idf),
@@ -790,7 +807,8 @@ static void stage_local_config(struct config *out, const char *name,
 			       const char *sdkconfig,
 			       const struct svec *sdkconfig_defaults,
 			       const char *build_dir, const char *generator,
-			       const struct svec *defines)
+			       const struct svec *defines, const char *port,
+			       int baud)
 {
 	struct sbuf key = SBUF_INIT;
 
@@ -816,6 +834,23 @@ static void stage_local_config(struct config *out, const char *name,
 	sbuf_reset(&key);
 	sbuf_addf(&key, "project.%s.generator", name);
 	config_set(out, key.buf, generator, CONFIG_SCOPE_LOCAL);
+
+	/* Optional serial defaults: only persist when the user actually
+	 * passed --port / --baud, so a re-init without those flags doesn't
+	 * stomp on a previous setting (and we don't bake 115200 into every
+	 * .ice/config when no one cares). */
+	sbuf_reset(&key);
+	sbuf_addf(&key, "project.%s.serial.port", name);
+	if (port && *port)
+		config_set(out, key.buf, port, CONFIG_SCOPE_LOCAL);
+
+	sbuf_reset(&key);
+	sbuf_addf(&key, "project.%s.serial.baud", name);
+	if (baud > 0) {
+		char baud_str[16];
+		snprintf(baud_str, sizeof baud_str, "%d", baud);
+		config_set(out, key.buf, baud_str, CONFIG_SCOPE_LOCAL);
+	}
 
 	/* Multi-values (clear + re-add so re-init replaces, not appends). */
 	sbuf_reset(&key);
@@ -1046,7 +1081,7 @@ int cmd_init(int argc, const char **argv)
 
 		stage_local_config(&staged, name, chip, idf_path, sdkconfig,
 				   &opt_sdkconfig_defaults, build_dir,
-				   generator, &opt_defines);
+				   generator, &opt_defines, opt_port, opt_baud);
 		config_render_ini(&staged, CONFIG_SCOPE_LOCAL, &rendered);
 
 		fp = fopen(lock_path.buf, "wb");

@@ -136,6 +136,33 @@ void serial_free_port_list(char **ports);
 void serial_complete_port(void);
 
 /**
+ * @brief Pick a sensible default serial port without opening or probing.
+ *
+ * Calls @ref serial_list_ports and ranks each candidate by name to
+ * pick the most likely "ESP UART bridge" first, falling back to
+ * native USB-Serial/JTAG CDC and finally to anything else.  Filters
+ * out paths that look like Bluetooth / system consoles on macOS.
+ *
+ * Strictly read-only -- no @c open(), no @c TIOCMSET, no ROM-mode
+ * handshake -- so it never resets a running chip.  Used by porcelain
+ * commands that attach to a running chip (@c ice debug, @c ice monitor)
+ * when no @c --port / @c serial.port is configured.
+ *
+ * @return Newly-allocated path string (caller frees), or NULL when
+ *         nothing acceptable was found.
+ */
+char *serial_pick_default_port(void);
+
+/**
+ * @brief Completion callback for --baud options.
+ *
+ * Emits the standard ESP-IDF baud rates (9600, 19200, 38400, 57600,
+ * 74880, 115200, 230400, 460800, 921600, 1500000, 2000000) one per
+ * line.  Users can still type any value -- this is just suggestions.
+ */
+void serial_complete_baud(void);
+
+/**
  * @brief Read the USB VID and PID for a serial device.
  *
  * On Linux this is read from sysfs.  On other platforms the function

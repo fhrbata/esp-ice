@@ -25,7 +25,6 @@
  * needs an IDF tools manifest; without one (no project), the user has
  * to point at a system openocd via @b{--openocd-bin}.
  */
-#include "esf_port.h"
 #include "ice.h"
 #include "platform.h"
 #include "sbuf.h"
@@ -696,6 +695,18 @@ static int run_debug(struct process *oocd_proc, const char *gdb_bin,
 		return 1;
 	}
 
+	/* One-line hint at the top of the UART pane: ice debug attaches
+	 * without resetting (preserves chip state for post-mortem -- the
+	 * key reason to use JTAG-attach in the first place), so a
+	 * long-running app's UART pane will look "empty" until the user
+	 * either interacts with the chip or restarts it.  Tell them how. */
+	static const char hint[] =
+	    "\x1b[2m"
+	    "ice debug: attached, chip state preserved.  "
+	    "Ctrl-T r resets and shows boot logs.\n"
+	    "\x1b[0m";
+	vt100_input(uart_p.V, hint, sizeof hint - 1);
+
 	int focus = 0;
 	int in_prefix = 0;
 	int quit = 0;
@@ -1005,13 +1016,24 @@ int cmd_target_openocd(int argc, const char **argv)
 	char *gdb_bin = resolve_gdb(dc);
 
 	/* ---- resolve port ---- */
+	/*
+	 * @c opt_port has already absorbed @c --port, @c $ESPPORT, and the
+	 * configured @c serial.port via @c OPT_STRING_CFG.  If still unset,
+	 * pick a port passively (no @c open(), no DTR/RTS toggle, no ROM
+	 * handshake).  ice debug attaches to a *running* chip, so the
+	 * destructive @ref esf_find_esp_port probe used by ice flash is the
+	 * wrong tool here -- it would reset the chip into ROM mode and back
+	 * just to read the chip id, and on a chip whose USB-Serial/JTAG is
+	 * the JTAG transport that renumeration races OpenOCD's libusb scan
+	 * and reliably breaks the attach.
+	 */
 	char *autoport = NULL;
 	if (!opt_port) {
-		enum ice_chip scan_chip = ice_chip_from_idf_name(opt_chip);
-		autoport = esf_find_esp_port(scan_chip);
+		autoport = serial_pick_default_port();
 		if (!autoport)
-			die("ice target openocd: no ESP device found; use "
-			    "--port to specify a port explicitly");
+			die("ice target openocd: no ESP device found; pass "
+			    "@b{--port <dev>} or run @b{ice init --port "
+			    "<dev>} to remember a default");
 		opt_port = autoport;
 	}
 
@@ -1022,8 +1044,20 @@ int cmd_target_openocd(int argc, const char **argv)
 		die("cannot open %s: %s", opt_port, strerror(-rc));
 
 	if (!opt_no_reset) {
-		serial_set_dtr(s, 0);
-		serial_set_rts(s, 0);
+		/*
+		 * Drive DTR=0 RTS=0 atomically.  Two separate TIOCMBIC
+		 * ioctls (one per bit) walk the lines through the
+		 * asymmetric (0, 1) state on the way to idle -- on the
+		 * standard Espressif auto-reset circuit (DTR asserted
+		 * drives BOOT low, RTS asserted drives RESET low) that
+		 * intermediate (0, 1) means BOOT high, RESET low, i.e.
+		 * the chip is briefly held in reset.  A single TIOCMSET
+		 * via @ref serial_set_dtr_rts emits one clean edge.
+		 * Mirrors the rationale already spelled out in
+		 * @c esf_port.c (commit "fix(esf): drive DTR/RTS
+		 * atomically to avoid bootloader-entry glitch") -- the
+		 * helper exists; ice's debug path just wasn't using it. */
+		serial_set_dtr_rts(s, 0, 0);
 	}
 
 	rc = serial_set_baud(s, (unsigned)opt_baud);

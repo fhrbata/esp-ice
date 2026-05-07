@@ -23,7 +23,6 @@
  * porcelain-mirrors-plumbing shape as @c{ice monitor} ↔
  * @c{ice target monitor}.
  */
-#include "esf_port.h"
 #include "ice.h"
 #include "sbuf.h"
 #include "serial.h"
@@ -166,22 +165,9 @@ int cmd_debug(int argc, const char **argv)
 		}
 	}
 
-	const char *port = opt_port;
-	char *autoport = NULL;
-	if (!port) {
-		enum ice_chip scan_chip = ice_chip_from_idf_name(chip);
-
-		if (scan_chip != ICE_CHIP_UNKNOWN)
-			fprintf(stderr, "Scanning for %s...\n",
-				ice_chip_name(scan_chip));
-		else
-			fprintf(stderr, "Scanning for ESP device...\n");
-
-		autoport = esf_find_esp_port(scan_chip);
-		if (!autoport)
-			die("no ESP device found; use -p to specify a port");
-		port = autoport;
-	}
+	/* No auto-port here -- delegated to @ref cmd_target_openocd, which
+	 * runs the same passive picker.  Single source of truth for the
+	 * auto-detection rules. */
 
 	/* ---- build argv for ice target openocd ---- */
 	char baud_str[32];
@@ -192,8 +178,10 @@ int cmd_debug(int argc, const char **argv)
 	const char *dbg_argv[24];
 	int fa = 0;
 	dbg_argv[fa++] = "ice target openocd";
-	dbg_argv[fa++] = "--port";
-	dbg_argv[fa++] = port;
+	if (opt_port) {
+		dbg_argv[fa++] = "--port";
+		dbg_argv[fa++] = opt_port;
+	}
 	dbg_argv[fa++] = "--baud";
 	dbg_argv[fa++] = baud_str;
 	dbg_argv[fa++] = "--elf";
@@ -219,6 +207,5 @@ int cmd_debug(int argc, const char **argv)
 	int rc = cmd_target_openocd(fa, dbg_argv);
 
 	sbuf_release(&gdb_bin);
-	free(autoport);
 	return rc;
 }
