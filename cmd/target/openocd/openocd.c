@@ -25,7 +25,6 @@
  * needs an IDF tools manifest; without one (no project), the user has
  * to point at a system openocd via @b{--openocd-bin}.
  */
-#include "esf_port.h"
 #include "ice.h"
 #include "platform.h"
 #include "sbuf.h"
@@ -984,13 +983,24 @@ int cmd_target_openocd(int argc, const char **argv)
 	char *gdb_bin = resolve_gdb(dc);
 
 	/* ---- resolve port ---- */
+	/*
+	 * @c opt_port has already absorbed @c --port, @c $ESPPORT, and the
+	 * configured @c serial.port via @c OPT_STRING_CFG.  If still unset,
+	 * pick a port passively (no @c open(), no DTR/RTS toggle, no ROM
+	 * handshake).  ice debug attaches to a *running* chip, so the
+	 * destructive @ref esf_find_esp_port probe used by ice flash is the
+	 * wrong tool here -- it would reset the chip into ROM mode and back
+	 * just to read the chip id, and on a chip whose USB-Serial/JTAG is
+	 * the JTAG transport that renumeration races OpenOCD's libusb scan
+	 * and reliably breaks the attach.
+	 */
 	char *autoport = NULL;
 	if (!opt_port) {
-		enum ice_chip scan_chip = ice_chip_from_idf_name(opt_chip);
-		autoport = esf_find_esp_port(scan_chip);
+		autoport = serial_pick_default_port();
 		if (!autoport)
-			die("ice target openocd: no ESP device found; use "
-			    "--port to specify a port explicitly");
+			die("ice target openocd: no ESP device found; pass "
+			    "@b{--port <dev>} or run @b{ice init --port "
+			    "<dev>} to remember a default");
 		opt_port = autoport;
 	}
 

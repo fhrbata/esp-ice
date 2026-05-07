@@ -12,7 +12,6 @@
  * Calls project_load() to resolve port and chip from the active
  * profile, then delegates to cmd_target_monitor() for the I/O loop.
  */
-#include "esf_port.h"
 #include "ice.h"
 #include "serial.h"
 
@@ -119,25 +118,12 @@ int cmd_monitor(int argc, const char **argv)
 		return process_run(&proc);
 	}
 
-	const char *chip_str = config_get("_project.chip");
 	const char *port = opt_port;
 	unsigned baud = (unsigned)opt_baud;
-	char *autoport = NULL;
 
-	if (!port) {
-		enum ice_chip scan_chip = ice_chip_from_idf_name(chip_str);
-
-		if (scan_chip != ICE_CHIP_UNKNOWN)
-			fprintf(stderr, "Scanning for %s...\n",
-				ice_chip_name(scan_chip));
-		else
-			fprintf(stderr, "Scanning for ESP device...\n");
-
-		autoport = esf_find_esp_port(scan_chip);
-		if (!autoport)
-			die("no ESP device found; use -p to specify a port");
-		port = autoport;
-	}
+	/* No auto-port here -- delegated to @ref cmd_target_monitor, which
+	 * runs the same passive picker.  Single source of truth for the
+	 * auto-detection rules. */
 
 	/* ---- build argv for ice target monitor ---- */
 	char baud_str[32];
@@ -146,16 +132,15 @@ int cmd_monitor(int argc, const char **argv)
 	const char *mon_argv[8];
 	int fa = 0;
 	mon_argv[fa++] = "ice target monitor";
-	mon_argv[fa++] = "--port";
-	mon_argv[fa++] = port;
+	if (port) {
+		mon_argv[fa++] = "--port";
+		mon_argv[fa++] = port;
+	}
 	mon_argv[fa++] = "--baud";
 	mon_argv[fa++] = baud_str;
 	if (opt_no_reset)
 		mon_argv[fa++] = "--no-reset";
 	mon_argv[fa] = NULL;
 
-	int rc = cmd_target_monitor(fa, mon_argv);
-
-	free(autoport);
-	return rc;
+	return cmd_target_monitor(fa, mon_argv);
 }

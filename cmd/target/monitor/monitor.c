@@ -31,7 +31,6 @@
  *   ice target monitor [--port <dev>] [--chip <name>] [--baud <rate>]
  *                      [--no-reset] [--scrollback <lines>]
  */
-#include "esf_port.h"
 #include "ice.h"
 #include "serial.h"
 #include "tui.h"
@@ -429,14 +428,14 @@ int cmd_target_monitor(int argc, const char **argv)
 	if (opt_scrollback < 1)
 		die("--scrollback must be at least 1");
 
-	/* ---- resolve port (auto-detect if omitted) ---- */
+	/* ---- resolve port (passive: no probe, no chip reset) ---- */
 	char *autoport = NULL;
 	if (!opt_port) {
-		enum ice_chip scan_chip = ice_chip_from_idf_name(opt_chip);
-		autoport = esf_find_esp_port(scan_chip);
+		autoport = serial_pick_default_port();
 		if (!autoport)
-			die("no ESP device found; use --port to specify a port "
-			    "explicitly");
+			die("no ESP device found; pass @b{--port <dev>} or "
+			    "run @b{ice init --port <dev>} to remember a "
+			    "default");
 		opt_port = autoport;
 	}
 
