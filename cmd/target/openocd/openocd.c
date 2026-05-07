@@ -674,6 +674,18 @@ static int run_debug(struct process *oocd_proc, const char *gdb_bin,
 		return 1;
 	}
 
+	/* One-line hint at the top of the UART pane: ice debug attaches
+	 * without resetting (preserves chip state for post-mortem -- the
+	 * key reason to use JTAG-attach in the first place), so a
+	 * long-running app's UART pane will look "empty" until the user
+	 * either interacts with the chip or restarts it.  Tell them how. */
+	static const char hint[] =
+	    "\x1b[2m"
+	    "ice debug: attached, chip state preserved.  "
+	    "Ctrl-T r resets and shows boot logs.\n"
+	    "\x1b[0m";
+	vt100_input(uart_p.V, hint, sizeof hint - 1);
+
 	int focus = 0;
 	int in_prefix = 0;
 	int quit = 0;
