@@ -104,4 +104,40 @@ EOF
 tap_check grep -q '^CONFIG_CHILD_FLAG=y$' out5.sdkconfig
 tap_done "rsource pulls in child Kconfig"
 
+# ---- Promptless derived bool re-evaluates after choice change ------
+# Regression: when sdkconfig carries a stale `CONFIG_DERIVED=y` from a
+# previous solve and the choice winner has since changed, the loader
+# must not seed it as user_set. Otherwise the evaluator's stick rule
+# freezes the value and the `default y if ...` chain never re-fires.
+# Mirrors the bootloader_console_init duplicate-definition bug seen
+# in esp-idf when ESP_CONSOLE_USB_SERIAL_JTAG was selected but the
+# stale derived ESP_CONSOLE_UART=y survived the round-trip.
+
+cat >derived.kconfig <<'EOF'
+mainmenu "Test"
+choice
+	prompt "Pick one"
+	default A_DEFAULT
+	config A_DEFAULT
+		bool "A"
+	config B_DEFAULT
+		bool "B"
+endchoice
+config DERIVED
+	bool
+	default y if A_DEFAULT
+EOF
+
+cat >stale.sdkconfig <<'EOF'
+# CONFIG_A_DEFAULT is not set
+CONFIG_B_DEFAULT=y
+CONFIG_DERIVED=y
+EOF
+
+"$BINARY" idf kconfgen --kconfig derived.kconfig --config stale.sdkconfig \
+	--output config:out6.sdkconfig >/dev/null 2>&1
+tap_check ! grep -q '^CONFIG_DERIVED=y$' out6.sdkconfig
+tap_check grep -q '^CONFIG_B_DEFAULT=y$' out6.sdkconfig
+tap_done "promptless derived bool re-evaluates after choice change"
+
 tap_result

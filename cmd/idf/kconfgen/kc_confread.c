@@ -220,6 +220,27 @@ static void set_default_seeded(struct kc_ctx *ctx, const char *name,
 	s->user_default_seeded = 1;
 }
 
+/*
+ * True iff the symbol has any KP_PROMPT property declared in its
+ * Kconfig source, regardless of per-prompt @c if guards.  Promptless
+ * symbols (like the internal `bool default y if A || B` flag
+ * ESP_CONSOLE_UART) are not user-settable -- their value is fully
+ * derived from defaults / select / imply.  Matches python kconfiglib:
+ * a CONFIG_X line in sdkconfig for a no-prompt symbol is at most a
+ * round-tripped derivation from a previous solve, never user input,
+ * so the loader must not seed it as @c user_set or @c default_seeded.
+ * Otherwise the evaluator's `stick` rule freezes the stale value and
+ * the default chain never re-fires when its inputs change (e.g. a
+ * choice winner switches and a sibling-derived bool should flip).
+ */
+static int sym_has_any_prompt(const struct ksym *s)
+{
+	for (const struct kprop *p = s->props; p; p = p->next)
+		if (p->kind == KP_PROMPT)
+			return 1;
+	return 0;
+}
+
 static void process_config_line(struct kc_ctx *ctx, char *line,
 				int *default_pending)
 {
@@ -264,6 +285,15 @@ static void process_config_line(struct kc_ctx *ctx, char *line,
 		char *name_copy = sbuf_strndup(name, (size_t)(end - name));
 		char *val = sbuf_strdup("n");
 		kc_rename_translate(ctx, &name_copy, &val);
+		struct ksym *s = smap_get(&ctx->symtab, name_copy);
+		if (s && !sym_has_any_prompt(s)) {
+			/* Derived symbol: ignore the line, let the chain
+			 * re-evaluate. Consume any pending `# default:`. */
+			*default_pending = 0;
+			free(name_copy);
+			free(val);
+			return;
+		}
 		if (*default_pending) {
 			set_default_seeded(ctx, name_copy, val);
 		} else {
@@ -278,7 +308,6 @@ static void process_config_line(struct kc_ctx *ctx, char *line,
 			 * user override; otherwise leave the existing
 			 * user_set / cur_val alone.
 			 */
-			struct ksym *s = smap_get(&ctx->symtab, name_copy);
 			if (!s || !s->cur_val ||
 			    (strcmp(s->cur_val, val) != 0 && !s->user_set))
 				kc_sym_set_user(ctx, name_copy, val);
@@ -316,30 +345,37 @@ static void process_config_line(struct kc_ctx *ctx, char *line,
 
 	kc_rename_translate(ctx, &name, &val);
 
+	struct ksym *s = smap_get(&ctx->symtab, name);
+	if (s && !sym_has_any_prompt(s)) {
+		/* Derived symbol: ignore the line, let the chain
+		 * re-evaluate. Consume any pending `# default:`. */
+		*default_pending = 0;
+		free(name);
+		free(val);
+		return;
+	}
+
 	/*
 	 * Reject malformed CONFIG_* lines here rather than letting a
 	 * typo round-trip through the writer.  Unknown symbols are
 	 * still silently dropped downstream (python parity); we only
 	 * validate once we know the target's declared type.
 	 */
-	{
-		struct ksym *s = smap_get(&ctx->symtab, name);
-		if (s && !value_matches_type(val, s->type)) {
-			kc_ctx_notify(ctx,
-				      "value '%s' is not a valid %s "
-				      "for CONFIG_%s; ignoring",
-				      val,
-				      s->type == KS_INT	    ? "int"
-				      : s->type == KS_HEX   ? "hex"
-				      : s->type == KS_FLOAT ? "float"
-				      : s->type == KS_BOOL  ? "bool"
-							    : "value",
-				      name);
-			*default_pending = 0;
-			free(name);
-			free(val);
-			return;
-		}
+	if (s && !value_matches_type(val, s->type)) {
+		kc_ctx_notify(ctx,
+			      "value '%s' is not a valid %s "
+			      "for CONFIG_%s; ignoring",
+			      val,
+			      s->type == KS_INT	    ? "int"
+			      : s->type == KS_HEX   ? "hex"
+			      : s->type == KS_FLOAT ? "float"
+			      : s->type == KS_BOOL  ? "bool"
+						    : "value",
+			      name);
+		*default_pending = 0;
+		free(name);
+		free(val);
+		return;
 	}
 
 	if (*default_pending) {
@@ -354,7 +390,6 @@ static void process_config_line(struct kc_ctx *ctx, char *line,
 		 * via the matching primary entry.  Same idempotent check as
 		 * the `# is not set` branch.
 		 */
-		struct ksym *s = smap_get(&ctx->symtab, name);
 		if (!s || !s->cur_val ||
 		    (strcmp(s->cur_val, val) != 0 && !s->user_set))
 			kc_sym_set_user(ctx, name, val);
