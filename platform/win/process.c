@@ -592,3 +592,43 @@ const char *process_exe(void)
 	free(utf8);
 	return result;
 }
+
+const char *temp_dir(void)
+{
+	static char buf[4096];
+	static const char *result;
+	static int initialized;
+	wchar_t wbuf[MAX_PATH + 1];
+	DWORD n;
+	char *utf8;
+	size_t len;
+
+	if (initialized)
+		return result;
+	initialized = 1;
+
+	/* GetTempPathW writes a path that always ends in a backslash;
+	 * if the buffer is too small or the call fails, the contract
+	 * matches the POSIX side -- return NULL and let the caller
+	 * treat it as fatal. */
+	n = GetTempPathW((DWORD)(sizeof(wbuf) / sizeof(wbuf[0])), wbuf);
+	if (n == 0 || n >= (DWORD)(sizeof(wbuf) / sizeof(wbuf[0])))
+		return NULL;
+
+	utf8 = wcs_to_mbs(wbuf);
+	if (!utf8)
+		return NULL;
+
+	len = strlen(utf8);
+	/* Strip the trailing separator so concatenation in
+	 * make_temp_file() can use a single "/" join just like POSIX. */
+	while (len > 0 && (utf8[len - 1] == '\\' || utf8[len - 1] == '/'))
+		utf8[--len] = '\0';
+
+	if (len < sizeof(buf)) {
+		memcpy(buf, utf8, len + 1);
+		result = buf;
+	}
+	free(utf8);
+	return result;
+}

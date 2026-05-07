@@ -119,6 +119,7 @@ PKG_NAME := $(NAME)-$(VERSION)-$(S)-$(ARCH)$(PKG_SUFFIX)
 # (today: ar.c, elf.c, http.c have no live callers from main()).
 LIB_SRCS := \
 	ar.c \
+	base64.c \
 	ca_certs.c \
 	cmake.c \
 	cmakecache.c \
@@ -127,6 +128,7 @@ LIB_SRCS := \
 	cmd/clean/clean.c \
 	cmd/completion/completion.c \
 	cmd/config/config.c \
+	cmd/coredump/coredump.c \
 	cmd/debug/debug.c \
 	cmd/docs/docs.c \
 	cmd/docs/getting-started/getting-started.c \
@@ -144,6 +146,9 @@ LIB_SRCS := \
 	cmd/idf/component/prepare/prepare.c \
 	cmd/idf/component/inject/inject.c \
 	cmd/idf/configdep/configdep.c \
+	cmd/idf/coredump/coredump.c \
+	cmd/idf/coredump/loader.c \
+	cmd/idf/coredump/synth.c \
 	cmd/idf/crt-bundle/crt-bundle.c \
 	cmd/idf/hints/hints.c \
 	cmd/idf/kconfgen/kc_confread.c \

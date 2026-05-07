@@ -17,6 +17,8 @@
 
 #include <stddef.h>
 
+struct sbuf;
+
 /**
  * @brief Create a directory and any missing intermediate parents.
  *
@@ -77,6 +79,32 @@ int rmtree(const char *path, int verbose);
  * @return 1 if found and executable, 0 otherwise.
  */
 int find_in_path(const char *name);
+
+/**
+ * @brief Atomically create a unique writable file in @c temp_dir().
+ *
+ * Builds a path of the form
+ * @c{<temp_dir()>/<prefix><random>.<suffix>} (the leading dot is
+ * inserted iff @p suffix is non-NULL and non-empty), and tries
+ * @c{open(O_CREAT|O_EXCL)} until a unique name lands or the retry
+ * budget is exhausted.  The atomicity is the kernel's, not just
+ * filesystem semantics, so this is safe under concurrent callers.
+ *
+ * On success, @p out_path is filled with the chosen path and an
+ * open @c O_RDWR file descriptor is returned.  The caller is
+ * responsible for @c close()'ing the fd and @c unlink()'ing the
+ * path when done.
+ *
+ * @param prefix    Filename stem (e.g. @c "ice-coredump-").  May
+ *                  be empty but not NULL.
+ * @param suffix    Optional extension without the leading dot
+ *                  (e.g. @c "elf").  Pass NULL or "" for none.
+ * @param out_path  Receives the absolute path on success.  Caller
+ *                  must @c sbuf_release() it.
+ * @return Open fd on success, -1 with @c errno set on failure.
+ */
+int make_temp_file(const char *prefix, const char *suffix,
+		   struct sbuf *out_path);
 
 /**
  * @brief Acquire an exclusive advisory lock by creating @p path.
