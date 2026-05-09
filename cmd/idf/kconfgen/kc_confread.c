@@ -208,6 +208,11 @@ static void set_default_seeded(struct kc_ctx *ctx, const char *name,
 		return;
 	free(s->cur_val);
 	s->cur_val = sbuf_strdup(val);
+	/* user_val is the input-only stable copy the fixpoint reads in
+	 * the `stick` branch; same lifecycle as cur_val on input but
+	 * never touched by the evaluator. */
+	free(s->user_val);
+	s->user_val = sbuf_strdup(val);
 	/* s->user_set stays 0; mark default_seeded so the evaluator can
 	 * honour KCONFIG_DEFAULTS_POLICY=sdkconfig and emit can still
 	 * write the `# default:` pragma regardless of policy.

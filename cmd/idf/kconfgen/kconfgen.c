@@ -282,6 +282,10 @@ int cmd_idf_kconfgen(int argc, const char **argv)
 			}
 			free(s->cur_val);
 			s->cur_val = sbuf_strdup(env_val);
+			/* user_val mirrors cur_val on input but is never
+			 * touched by the evaluator -- see kc_ast.h. */
+			free(s->user_val);
+			s->user_val = sbuf_strdup(env_val);
 			/*
 			 * Python kconfgen treats env-set values as user
 			 * input (no `# default:` pragma) and env-unset

@@ -207,6 +207,7 @@ void kc_ctx_release(struct kc_ctx *ctx)
 		expr_free(s->rev_dep);
 		expr_free(s->weak_rev_dep);
 		free(s->cur_val);
+		free(s->user_val);
 		free(s->name);
 		free(s);
 	}

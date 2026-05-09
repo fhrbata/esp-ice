@@ -140,4 +140,38 @@ tap_check ! grep -q '^CONFIG_DERIVED=y$' out6.sdkconfig
 tap_check grep -q '^CONFIG_B_DEFAULT=y$' out6.sdkconfig
 tap_done "promptless derived bool re-evaluates after choice change"
 
+# ---- depends-on visibility flip during fixpoint --------------------
+#
+# A symbol declared BEFORE its `depends on` target sees that target's
+# cur_val as NULL during the first fixpoint pass, so eval_bool on the
+# dep returns 0 and new_visible momentarily evaluates to false.  Falling
+# through to the type's zero value at that point would clobber the
+# user-set cur_val; the next pass (with the dep now resolved) would
+# then copy the already-zeroed value back.  Range-clamping a zeroed int
+# pins it to the range minimum, which is how this regressed IDF's
+# bootloader sdkconfig (CONFIG_ESP_CONSOLE_UART_BAUDRATE got rewritten
+# from 115200 to 1200, the `range 1200 4000000` lower bound).
+
+cat >fpvis.kconfig <<'EOF'
+mainmenu "Test"
+config DEPENDENT_BAUD
+	int "baud"
+	depends on GATE
+	default 115200
+	range 1200 4000000
+config GATE
+	bool
+	default y
+EOF
+
+cat >fpvis.sdkconfig <<'EOF'
+CONFIG_DEPENDENT_BAUD=115200
+CONFIG_GATE=y
+EOF
+
+"$BINARY" idf kconfgen --kconfig fpvis.kconfig --config fpvis.sdkconfig \
+	--output config:out7.sdkconfig >/dev/null 2>&1
+tap_check grep -q '^CONFIG_DEPENDENT_BAUD=115200$' out7.sdkconfig
+tap_done "user int survives fixpoint visibility flip on depends-on"
+
 tap_result

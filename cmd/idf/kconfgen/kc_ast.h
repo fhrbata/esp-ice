@@ -166,6 +166,20 @@ struct ksym {
 	struct kexpr *weak_rev_dep;  /**< Same but for `imply`. */
 	char *cur_val;		     /**< Owned resolved value: "y"/"n"/
 				      *   int/hex/float/string body. */
+	char *user_val;		     /**< Input-only stable copy of the value
+				      *   loaded from sdkconfig / set by
+				      *   @ref kc_sym_set_user / seeded via
+				      *   @ref set_default_seeded.  Never
+				      *   touched by the evaluator -- the
+				      *   fixpoint reads it (instead of the
+				      *   working @c cur_val) when resolving
+				      *   the `stick` branch, so a transient
+				      *   visibility flip during fixpoint
+				      *   convergence cannot lose the user's
+				      *   input.  Mirrors the relationship
+				      *   between @c default_seeded (resolver
+				      *   scratch) and @c user_default_seeded
+				      *   (input-only stable). */
 	int visible;		     /**< Computed visibility (bool). */
 	int user_set;		     /**< Value came from --config or
 				      *   --defaults (not a built-in
