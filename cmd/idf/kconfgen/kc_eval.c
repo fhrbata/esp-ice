@@ -749,7 +749,20 @@ static int fixpoint_step(struct kc_ctx *ctx)
 		int stick = s->user_set ||
 			    (s->default_seeded && ctx->defaults_policy == 0);
 		if (stick && new_visible) {
-			new_val = sbuf_strdup(s->cur_val ? s->cur_val : "");
+			/* Use the loader's stable input (user_val), not the
+			 * fixpoint's working cur_val.  In an iteration where
+			 * a `depends on` sibling hasn't been resolved yet,
+			 * new_visible momentarily evaluates to 0 -- this
+			 * branch is skipped and the fall-through writes the
+			 * type's zero value into cur_val (matching python's
+			 * "invisible symbol value = type zero" semantics for
+			 * cross-symbol expression evaluation).  When the
+			 * sibling resolves on a later pass and new_visible
+			 * flips back to 1, copying cur_val would carry the
+			 * stale type-zero forward; user_val is the
+			 * never-clobbered input so the original value comes
+			 * back unscathed. */
+			new_val = sbuf_strdup(s->user_val ? s->user_val : "");
 			/* A stuck-default is still a default for emit
 			 * purposes; only a genuine user_set drops the pragma.
 			 * Propagate default_seeded to default_applied so the
@@ -961,6 +974,12 @@ void kc_sym_set_user(struct kc_ctx *ctx, const char *name, const char *val)
 		return; /* tolerant: skip unknown (matches python kconfgen) */
 	free(s->cur_val);
 	s->cur_val = sbuf_strdup(val ? val : "");
+	/* user_val is the input-only stable copy the fixpoint reads in
+	 * the `stick` branch; the evaluator never writes to it, so a
+	 * mid-fixpoint cur_val clobber (when a `depends on` sibling
+	 * hasn't resolved yet) can't lose the user's input. */
+	free(s->user_val);
+	s->user_val = sbuf_strdup(val ? val : "");
 	s->user_set = 1;
 	/* A direct user-set line (CONFIG_X=y without a `# default:` pragma)
 	 * clears any previously-seeded default state: the user has taken
