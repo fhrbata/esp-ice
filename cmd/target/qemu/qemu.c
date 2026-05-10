@@ -911,15 +911,8 @@ static int run_debug(struct process *qemu_proc, const struct qemu_chip *chip,
 	int gdb_freeze_for_help = 0;
 	int uart_freeze_for_help = 0;
 
-	/* Force a paint on the first iteration: same reason as
-	 * cmd/target/openocd/openocd.c -- the alt screen would otherwise
-	 * stay blank until gdb's first output (or a keystroke) arrives.
-	 */
-	int first_paint = 1;
-
 	while (!quit) {
-		int dirty = first_paint;
-		first_paint = 0;
+		int dirty = 0;
 
 		if (term_resize_pending()) {
 			term_size(&cols, &rows);
