@@ -797,11 +797,40 @@ static int run_debug(struct process *oocd_proc, const char *gdb_bin,
 		 * a beat, nudge gdb so its prompt redraws below any
 		 * trailing openocd "Info : ..." lines that landed past the
 		 * initial @b{(gdb)}.  See the rationale next to the
-		 * @c settle_sent declaration. */
+		 * @c settle_sent declaration.
+		 *
+		 * Two-step:
+		 *
+		 *   1. Skip entirely if the vt100 cursor is at col != 0
+		 *      -- gdb's "(gdb) " is the last thing on the grid
+		 *      (cursor parked at col 6 right after the prompt),
+		 *      the prompt is already where it should be, and a
+		 *      redundant nudge would just stack a duplicate
+		 *      prompt below the real one.  Buried-prompt symptom
+		 *      is cursor at col 0, parked there by openocd's
+		 *      trailing CRLF.
+		 *
+		 *   2. When buried, push a bare cursor-up into the gdb
+		 *      pane's vt100 *before* the newline goes to gdb.
+		 *      Without this, gdb's "\r\n(gdb) " echo would land
+		 *      the redrawn prompt one row below where the cursor
+		 *      currently sits -- leaving the cursor's row blank
+		 *      between the buried prompt and the new one.  The
+		 *      cursor-up moves vt100 onto the buried row first,
+		 *      so the echo's "\n" steps onto what was the empty
+		 *      successor row and "(gdb) " writes there.  vt100's
+		 *      cursor and gdb's mental cursor end up on the same
+		 *      row, so subsequent readline manipulation
+		 *      (backspace, tab redraw) operates against a
+		 *      consistent model. */
 		if (gdb_seen && !settle_sent && !user_typed &&
 		    mono_ms() - last_act_ms > 300) {
-			static const uint8_t nl = '\n';
-			(void)write(gdb_proc.in, &nl, 1);
+			if (vt100_cursor_col(gdb_p.V) == 0) {
+				static const char up[] = "\x1b[A";
+				vt100_input(gdb_p.V, up, sizeof up - 1);
+				static const uint8_t nl = '\n';
+				(void)write(gdb_proc.in, &nl, 1);
+			}
 			settle_sent = 1;
 		}
 
