@@ -892,6 +892,44 @@ char *getcwd_w(char *buf, size_t size)
 }
 
 /*
+ * Canonicalize a path to absolute form.  GetFullPathNameW makes the
+ * path absolute, normalizes separators, and collapses "."/".."; it
+ * does not resolve symlinks (rare on Windows -- see platform.h doc).
+ * Two-call dance: first to discover the required buffer length, then
+ * to fill it.  Result is a malloc'd UTF-8 string the caller frees.
+ */
+char *path_realpath(const char *path)
+{
+	wchar_t *wpath;
+	wchar_t *wfull = NULL;
+	char *result = NULL;
+	DWORD n, m;
+
+	wpath = mbs_to_wcs(path);
+	if (!wpath)
+		return NULL;
+
+	n = GetFullPathNameW(wpath, 0, NULL, NULL);
+	if (n == 0)
+		goto done;
+
+	wfull = malloc(n * sizeof(wchar_t));
+	if (!wfull)
+		goto done;
+
+	m = GetFullPathNameW(wpath, n, wfull, NULL);
+	if (m == 0 || m >= n)
+		goto done;
+
+	result = wcs_to_mbs(wfull);
+
+done:
+	free(wpath);
+	free(wfull);
+	return result;
+}
+
+/*
  * Atomic-replace rename: POSIX rename() already replaces an existing
  * target atomically, but the Windows CRT rename() fails with EEXIST.
  * Use MoveFileExW with MOVEFILE_REPLACE_EXISTING to match POSIX

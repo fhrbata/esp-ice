@@ -230,12 +230,21 @@ static int in_list(const char *target, const char *const *list)
  *
  * A bare name (no separator, no leading @b{.} / @b{~} / @b{/}) maps to
  * @b{~/.ice/checkouts/<name>/}, mirroring @b{ice repo checkout}'s
- * shorthand.  Anything else is taken verbatim.  Returns a malloc'd
- * string the caller owns.
+ * shorthand.  Anything else is taken verbatim.  The result is then
+ * canonicalized to an absolute path via @c path_realpath: this value
+ * is exported as @c IDF_PATH and embedded in @c .ice/config, and
+ * esp-idf's @c project.cmake runs @c try_compile from a temp dir
+ * under @c build/, where a relative @c IDF_PATH resolves against the
+ * wrong cwd and the generated @c build/toolchain/toolchain-<chip>.cmake's
+ * @c include($ENV{IDF_PATH}/...) fails.  If the path doesn't exist
+ * yet, fall through with the verbatim string -- the tools/tools.json
+ * check below will report it.  Returns a malloc'd string the caller
+ * owns.
  */
 static char *resolve_idf_arg(const char *arg)
 {
 	struct sbuf p = SBUF_INIT;
+	char *real;
 	int bare;
 
 	bare = *arg && arg[0] != '/' && arg[0] != '.' && arg[0] != '~' &&
@@ -245,6 +254,12 @@ static char *resolve_idf_arg(const char *arg)
 		sbuf_addf(&p, "%s/checkouts/%s", ice_home(), arg);
 	else
 		sbuf_addstr(&p, arg);
+
+	real = path_realpath(p.buf);
+	if (real) {
+		sbuf_release(&p);
+		return real;
+	}
 	return sbuf_detach(&p);
 }
 
