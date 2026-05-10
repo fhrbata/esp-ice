@@ -355,7 +355,8 @@ static char *resolve_gdb(const struct debug_chip *dc)
  * openocd terminal.
  */
 static int spawn_openocd(struct process *proc, const char *openocd_bin,
-			 const char *openocd_version, char *openocd_cmd_buf)
+			 const char *openocd_version, char *openocd_cmd_buf,
+			 struct sbuf *prelog)
 {
 	struct svec argv = SVEC_INIT;
 	const char *env_kv[2] = {NULL, NULL};
@@ -405,8 +406,11 @@ static int spawn_openocd(struct process *proc, const char *openocd_bin,
 	 * the gdb stub up.  Stream what we read to stderr in real time so
 	 * the user sees the banner / probe progress before the alt screen
 	 * takes over (and so failure diagnostics are visible without
-	 * digging in scrollback). */
-	struct sbuf prelog = SBUF_INIT;
+	 * digging in scrollback).  Bytes are also accumulated in @p prelog
+	 * for the caller -- on success @ref run_debug seeds the gdb pane's
+	 * scrollback with this so the banner is reachable from inside the
+	 * alt screen via Ctrl-T inspect; on failure the @c{see banner
+	 * above} diagnostic in the caller's stderr is enough. */
 	int ready = 0;
 	int daemon_exited = 0;
 
@@ -420,7 +424,7 @@ static int spawn_openocd(struct process *proc, const char *openocd_bin,
 		if (n > 0) {
 			fwrite(buf, 1, (size_t)n, stderr);
 			fflush(stderr);
-			sbuf_add(&prelog, buf, (size_t)n);
+			sbuf_add(prelog, buf, (size_t)n);
 			/* sbuf is NUL-terminated and OpenOCD's output is
 			 * text, so strstr is safe and portable (memmem is
 			 * a GNU extension we don't depend on elsewhere).
@@ -437,7 +441,7 @@ static int spawn_openocd(struct process *proc, const char *openocd_bin,
 			 * OpenOCD finishes init).  The "for gdb connections"
 			 * suffix is uniquely emitted by gdb_server.c's
 			 * listener, so the match holds across versions. */
-			if (strstr(prelog.buf, "for gdb connections")) {
+			if (strstr(prelog->buf, "for gdb connections")) {
 				ready = 1;
 				break;
 			}
@@ -456,12 +460,10 @@ static int spawn_openocd(struct process *proc, const char *openocd_bin,
 		kill(proc->pid, SIGTERM);
 		process_finish(proc);
 		svec_clear(&argv);
-		sbuf_release(&prelog);
 		sbuf_release(&scripts_env);
 		return -1;
 	}
 
-	sbuf_release(&prelog);
 	/* argv strings are owned by svec; the process struct stores
 	 * proc->argv as a borrow.  Clearing svec here is safe: the child
 	 * has already exec'd, so its argv copy is independent. */
@@ -642,7 +644,7 @@ static const char DEBUG_HELP_TEXT[] =
 static int run_debug(struct process *oocd_proc, const char *gdb_bin,
 		     const char *elf, struct serial *uart_s,
 		     const char *port_label, unsigned baud,
-		     const char *chip_label)
+		     const char *chip_label, const struct sbuf *prelog)
 {
 	int rc = term_raw_enter(TERM_RAW_MOUSE | TERM_RAW_BRACKETED_PASTE);
 	if (rc < 0)
@@ -662,6 +664,15 @@ static int run_debug(struct process *oocd_proc, const char *gdb_bin,
 		tui_log_set_decorator(&uart_p.L, decorate_idf_level, NULL);
 	tui_log_set_grid(&gdb_p.L, gdb_p.V);
 	tui_log_set_grid(&uart_p.L, uart_p.V);
+
+	/* Seed the gdb pane's scrollback with the openocd startup banner
+	 * captured during @ref spawn_openocd.  The banner already streamed
+	 * to the user's stderr before the alt screen took over (so failure
+	 * diagnostics stay visible after exit), but inside the alt screen
+	 * it's otherwise lost.  Pushing it to the ring keeps it reachable
+	 * via Ctrl-T inspect / scrollback for the duration of the session. */
+	if (prelog && prelog->len)
+		tui_log_append(&gdb_p.L, prelog->buf, prelog->len);
 
 	struct tui_rect status_r, divider_r;
 	debug_layout(rows, cols, &gdb_p, &uart_p, &status_r, &divider_r);
@@ -1121,10 +1132,15 @@ int cmd_target_openocd(int argc, const char **argv)
 	 * we don't trip the const-qualifier on opt_openocd_cmd. */
 	char *oocd_cmd_owned = sbuf_strdup(opt_openocd_cmd);
 	struct process oocd_proc = PROCESS_INIT;
+	/* Owned here, filled by spawn_openocd, consumed by run_debug to
+	 * seed the gdb pane's scrollback so the openocd startup banner
+	 * stays reachable inside the alt screen. */
+	struct sbuf prelog = SBUF_INIT;
 
 	fprintf(stderr, "Starting openocd ...\n");
 	if (spawn_openocd(&oocd_proc, openocd_bin, openocd_version,
-			  oocd_cmd_owned) < 0) {
+			  oocd_cmd_owned, &prelog) < 0) {
+		sbuf_release(&prelog);
 		free(oocd_cmd_owned);
 		serial_close(s);
 		free(autoport);
@@ -1137,8 +1153,9 @@ int cmd_target_openocd(int argc, const char **argv)
 	/* ---- run dual-pane ---- */
 	const char *chip_label = opt_chip ? opt_chip : "?";
 	int run_rc = run_debug(&oocd_proc, gdb_bin, opt_elf, s, opt_port,
-			       (unsigned)opt_baud, chip_label);
+			       (unsigned)opt_baud, chip_label, &prelog);
 
+	sbuf_release(&prelog);
 	free(oocd_cmd_owned);
 	serial_close(s);
 	free(autoport);
