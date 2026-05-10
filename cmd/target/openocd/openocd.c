@@ -695,16 +695,17 @@ static int run_debug(struct process *oocd_proc, const char *gdb_bin,
 		return 1;
 	}
 
-	/* One-line hint at the top of the UART pane: ice debug attaches
-	 * without resetting (preserves chip state for post-mortem -- the
-	 * key reason to use JTAG-attach in the first place), so a
-	 * long-running app's UART pane will look "empty" until the user
-	 * either interacts with the chip or restarts it.  Tell them how. */
-	static const char hint[] =
-	    "\x1b[2m"
-	    "ice debug: attached, chip state preserved.  "
-	    "Ctrl-T r resets and shows boot logs.\n"
-	    "\x1b[0m";
+	/* One-line hint at the top of the UART pane: gdb's `target
+	 * remote` halts the chip on attach, so the UART pane stays
+	 * silent until the inferior runs again -- tell the user how to
+	 * resume.  Yellow so it stands out on the first glance; CRLF
+	 * because vt100's bare LF only moves the cursor down (no column
+	 * reset), which would leave subsequent UART output starting at
+	 * the column past the hint instead of column 1. */
+	static const char hint[] = "\x1b[33m"
+				   "ice debug: chip halted on attach -- "
+				   "run 'continue' in gdb to resume.\r\n"
+				   "\x1b[0m";
 	vt100_input(uart_p.V, hint, sizeof hint - 1);
 
 	int focus = 0;
