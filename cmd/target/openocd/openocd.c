@@ -685,13 +685,55 @@ static int run_debug(struct process *oocd_proc, const char *gdb_bin,
 			tui_log_pull_from_vt100(&gdb_p.L, gdb_p.V);
 	}
 
-	/* gdb in a pty pre-loaded with target remote :<port> + ELF. */
+	/* gdb in a pty pre-loaded with the standard ESP-IDF startup
+	 * sequence, mirroring tools/cmake/gdbinit.cmake's "connect"
+	 * fragment:
+	 *
+	 *   target remote :<port>          attach
+	 *   monitor reset halt             reset chip + halt at reset vector
+	 *   maintenance flush register-cache
+	 *                                  drop gdb's stale cached regs
+	 *   thbreak app_main               temp HW breakpoint at user entry
+	 *   continue                       run from reset vector to app_main
+	 *
+	 * Without this preamble openocd's own @c{init} resets the chip
+	 * (so the "preserve chip state for post-mortem" framing this
+	 * cmd used to claim was already untrue -- the standard
+	 * board files do @c{reset halt} regardless of what we type),
+	 * but the chip then runs free for a few hundred ms before gdb
+	 * dials in.  By the time gdb's connect-halt lands, PC happens
+	 * to be sitting right on @c{app_main}'s prologue -- and if the
+	 * user then types @c{b app_main; c}, the HW breakpoint they
+	 * just armed and the resume PC are the same address, so the
+	 * very first fetch on resume re-trips the match register
+	 * before the instruction commits.  openocd-esp32's recovery
+	 * for "halted at PC == HW-breakpoint address right after a
+	 * resume" is to software-reset CPU0, which puts the chip back
+	 * at the reset vector, the chip runs through boot, hits
+	 * @c{app_main} again, breakpoint fires for real this time --
+	 * and the user @c{c}s, and we loop.  Loops at ~10 Hz, no
+	 * @c{printf} ever flushes to UART.
+	 *
+	 * The preamble side-steps the trap entirely: we issue our own
+	 * @c{reset halt} so the chip is at the reset vector, install a
+	 * *temporary* HW breakpoint at @c{app_main}, and let the chip
+	 * run through boot.  The temp breakpoint fires once when the
+	 * boot path reaches @c{app_main}, gdb auto-removes it, the
+	 * chip is parked at @c{app_main} with no breakpoint at PC, and
+	 * subsequent user @c{b app_main; c} works because the
+	 * breakpoint isn't sitting on the resume PC any longer (the
+	 * one-instruction step over the freshly-installed breakpoint
+	 * is the standard auto-skip path that does work). */
 	struct sbuf gdb_remote = SBUF_INIT;
 	sbuf_addf(&gdb_remote, "target remote :%d", opt_gdb_port);
 	const char *gdb_argv[] = {gdb_bin, "-q",
 				  "-ex",   "set pagination off",
 				  "-ex",   "set confirm off",
 				  "-ex",   gdb_remote.buf,
+				  "-ex",   "monitor reset halt",
+				  "-ex",   "maintenance flush register-cache",
+				  "-ex",   "thbreak app_main",
+				  "-ex",   "continue",
 				  elf,	   NULL};
 	struct process gdb_proc = PROCESS_INIT;
 	gdb_proc.argv = gdb_argv;
@@ -1116,12 +1158,16 @@ int cmd_target_openocd(int argc, const char **argv)
 	 * @c opt_port has already absorbed @c --port, @c $ESPPORT, and the
 	 * configured @c serial.port via @c OPT_STRING_CFG.  If still unset,
 	 * pick a port passively (no @c open(), no DTR/RTS toggle, no ROM
-	 * handshake).  ice debug attaches to a *running* chip, so the
-	 * destructive @ref esf_find_esp_port probe used by ice flash is the
-	 * wrong tool here -- it would reset the chip into ROM mode and back
-	 * just to read the chip id, and on a chip whose USB-Serial/JTAG is
-	 * the JTAG transport that renumeration races OpenOCD's libusb scan
-	 * and reliably breaks the attach.
+	 * handshake).  The destructive @ref esf_find_esp_port probe used
+	 * by ice flash is the wrong tool here -- it would toggle the
+	 * UART's DTR/RTS to bounce the chip into ROM bootloader and back
+	 * just to read the chip id, and on a chip whose USB-Serial/JTAG
+	 * is the JTAG transport that renumeration races OpenOCD's libusb
+	 * scan and reliably breaks the attach.  (Note: openocd's own
+	 * @c{init} does a JTAG-side @c{reset halt} on the chip regardless,
+	 * so this isn't about preserving chip state -- it's about not
+	 * adding a *second* reset path through DTR/RTS that would
+	 * interfere with the JTAG one.)
 	 */
 	char *autoport = NULL;
 	if (!opt_port) {
