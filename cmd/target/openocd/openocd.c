@@ -717,8 +717,34 @@ static int run_debug(struct process *oocd_proc, const char *gdb_bin,
 	int gdb_freeze_for_help = 0;
 	int uart_freeze_for_help = 0;
 
+	/* Force a paint on the first iteration: the alt screen has just
+	 * taken over and the panes are otherwise blank until something
+	 * sets @c dirty.  Painting the empty panes + status bar up front
+	 * makes the layout visible immediately. */
+	int first_paint = 1;
+
+	/* Settle nudge: gdb writes its initial @b{(gdb)} prompt, then
+	 * openocd's post-attach "Info : ..." lines (e.g. FreeRTOS
+	 * detection) trail in and advance the shared vt100 cursor past
+	 * the prompt -- the user sees @b{(gdb) Info : Detected
+	 * FreeRTOS...} with the cursor on a blank line below, no way to
+	 * tell the prompt is live without pressing Enter first.  Once
+	 * both streams have been quiet for a beat we send a bare newline
+	 * to gdb, which prints a fresh prompt below the noise.  Empty
+	 * input is safe here: @b{set confirm off} is set, and @b{target
+	 * remote} / @b{set} are dont_repeat in gdb, so Enter on the
+	 * initial prompt is a guaranteed no-op apart from the redraw.
+	 * Suppressed if the user has already typed -- their characters
+	 * went to gdb and prefixing them with @c \n could change the
+	 * meaning of their command. */
+	unsigned long long last_act_ms = mono_ms();
+	int gdb_seen = 0;
+	int settle_sent = 0;
+	int user_typed = 0;
+
 	while (!quit) {
-		int dirty = 0;
+		int dirty = first_paint;
+		first_paint = 0;
 
 		if (term_resize_pending()) {
 			term_size(&cols, &rows);
@@ -739,16 +765,33 @@ static int run_debug(struct process *oocd_proc, const char *gdb_bin,
 		    pump_pipe(gdb_proc.out, gdb_proc.in, gdb_p.V, &gdb_p.L, 30);
 		if (rg < 0)
 			break;
-		if (rg > 0)
+		if (rg > 0) {
 			dirty = 1;
+			last_act_ms = mono_ms();
+			gdb_seen = 1;
+		}
 
 		int ro = pump_pipe(oocd_proc->out, -1, gdb_p.V, &gdb_p.L, 0);
-		if (ro > 0)
+		if (ro > 0) {
 			dirty = 1;
+			last_act_ms = mono_ms();
+		}
 		/* OpenOCD pipe EOF is non-fatal here: if the daemon dies
 		 * gdb will surface the broken connection on the next
 		 * remote command.  Quit only on gdb EOF (above) or user
 		 * action. */
+
+		/* Once gdb has spoken and both streams have been quiet for
+		 * a beat, nudge gdb so its prompt redraws below any
+		 * trailing openocd "Info : ..." lines that landed past the
+		 * initial @b{(gdb)}.  See the rationale next to the
+		 * @c settle_sent declaration. */
+		if (gdb_seen && !settle_sent && !user_typed &&
+		    mono_ms() - last_act_ms > 300) {
+			static const uint8_t nl = '\n';
+			(void)write(gdb_proc.in, &nl, 1);
+			settle_sent = 1;
+		}
 
 		int ru = pump_serial(uart_s, uart_p.V, &uart_p.L, 0);
 		if (ru < 0)
@@ -826,10 +869,11 @@ static int run_debug(struct process *oocd_proc, const char *gdb_bin,
 						 * gets it via the serial port.
 						 */
 						uint8_t k = 0x14;
-						if (focus == 0)
+						if (focus == 0) {
 							(void)write(gdb_proc.in,
 								    &k, 1);
-						else
+							user_typed = 1;
+						} else
 							serial_write(uart_s, &k,
 								     1);
 					} else if (ev.key == 'r' ||
@@ -849,6 +893,7 @@ static int run_debug(struct process *oocd_proc, const char *gdb_bin,
 						    "\x03monitor reset halt\n";
 						(void)write(gdb_proc.in, cmd,
 							    sizeof cmd - 1);
+						user_typed = 1;
 					} else if (ev.key == 'h' ||
 						   ev.key == 'H') {
 						tui_info_init(&help_info,
@@ -884,19 +929,21 @@ static int run_debug(struct process *oocd_proc, const char *gdb_bin,
 					dirty = 1;
 				} else if (ev.key < 0x100) {
 					uint8_t k = (uint8_t)ev.key;
-					if (focus == 0)
+					if (focus == 0) {
 						(void)write(gdb_proc.in, &k, 1);
-					else
+						user_typed = 1;
+					} else
 						serial_write(uart_s, &k, 1);
 				} else {
 					const char *seq =
 					    term_key_to_xterm_seq(ev.key);
 					if (seq) {
 						size_t slen = strlen(seq);
-						if (focus == 0)
+						if (focus == 0) {
 							(void)write(gdb_proc.in,
 								    seq, slen);
-						else
+							user_typed = 1;
+						} else
 							serial_write(uart_s,
 								     seq, slen);
 					}
