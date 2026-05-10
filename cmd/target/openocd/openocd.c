@@ -665,17 +665,25 @@ static int run_debug(struct process *oocd_proc, const char *gdb_bin,
 	tui_log_set_grid(&gdb_p.L, gdb_p.V);
 	tui_log_set_grid(&uart_p.L, uart_p.V);
 
-	/* Seed the gdb pane's scrollback with the openocd startup banner
+	struct tui_rect status_r, divider_r;
+	debug_layout(rows, cols, &gdb_p, &uart_p, &status_r, &divider_r);
+
+	/* Seed the gdb pane's vt100 with the openocd startup banner
 	 * captured during @ref spawn_openocd.  The banner already streamed
 	 * to the user's stderr before the alt screen took over (so failure
 	 * diagnostics stay visible after exit), but inside the alt screen
-	 * it's otherwise lost.  Pushing it to the ring keeps it reachable
-	 * via Ctrl-T inspect / scrollback for the duration of the session. */
-	if (prelog && prelog->len)
-		tui_log_append(&gdb_p.L, prelog->buf, prelog->len);
-
-	struct tui_rect status_r, divider_r;
-	debug_layout(rows, cols, &gdb_p, &uart_p, &status_r, &divider_r);
+	 * it's otherwise lost.  Feeding it to the live grid (rather than
+	 * the scrollback ring via @ref tui_log_append) means the banner
+	 * occupies the top of the pane on entry and is naturally pushed
+	 * into the ring as gdb's output fills the grid -- you don't have
+	 * to PgUp to see it.  Drained explicitly so any rows that scroll
+	 * off the grid land in the ring before the first @ref pump_pipe
+	 * gets a chance to. */
+	if (prelog && prelog->len) {
+		vt100_input(gdb_p.V, prelog->buf, prelog->len);
+		if (!tui_log_is_frozen(&gdb_p.L))
+			tui_log_pull_from_vt100(&gdb_p.L, gdb_p.V);
+	}
 
 	/* gdb in a pty pre-loaded with target remote :<port> + ELF. */
 	struct sbuf gdb_remote = SBUF_INIT;
