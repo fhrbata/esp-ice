@@ -1,3 +1,24 @@
+## v0.15.0 (2026-05-11)
+
+### ✨ New Features
+
+- **target/openocd**: preserve openocd startup banner in gdb pane scrollback *(Frantisek Hrbata - 47d7cfd)*
+
+### 🐛 Bug Fixes
+
+- **init**: canonicalize idf-path to absolute via path_realpath *(Frantisek Hrbata - 5eab60e)*
+- **target/openocd**: adopt idf.py-style gdb preamble (reset + thbreak app_main) *(Frantisek Hrbata - 7a935e7)*
+- **target/openocd**: show openocd startup banner in the gdb pane on entry *(Frantisek Hrbata - 52bc8e8)*
+- **target/openocd**: close the blank row between buried and redrawn (gdb) *(Frantisek Hrbata - 2da4fdf)*
+- **target/openocd**: UART pane hint -- yellow, CRLF-terminated, accurate text *(Frantisek Hrbata - 0841e61)*
+- **target/openocd,target/qemu**: paint immediately and unbury the gdb prompt *(Frantisek Hrbata - 97b9839)*
+- **idf/kconfgen**: preserve user value across fixpoint visibility flips *(Frantisek Hrbata - d4a125d)*
+
+### 📖 Documentation
+
+- add VHS walkthrough demo, hoist Experimental-PoC warning *(Frantisek Hrbata - 7617b3a)*
+
+
 ## v0.14.0 (2026-05-07)
 
 ### ✨ New Features
