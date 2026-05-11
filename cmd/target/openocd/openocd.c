@@ -355,7 +355,8 @@ static char *resolve_gdb(const struct debug_chip *dc)
  * openocd terminal.
  */
 static int spawn_openocd(struct process *proc, const char *openocd_bin,
-			 const char *openocd_version, char *openocd_cmd_buf)
+			 const char *openocd_version, char *openocd_cmd_buf,
+			 struct sbuf *prelog)
 {
 	struct svec argv = SVEC_INIT;
 	const char *env_kv[2] = {NULL, NULL};
@@ -405,8 +406,11 @@ static int spawn_openocd(struct process *proc, const char *openocd_bin,
 	 * the gdb stub up.  Stream what we read to stderr in real time so
 	 * the user sees the banner / probe progress before the alt screen
 	 * takes over (and so failure diagnostics are visible without
-	 * digging in scrollback). */
-	struct sbuf prelog = SBUF_INIT;
+	 * digging in scrollback).  Bytes are also accumulated in @p prelog
+	 * for the caller -- on success @ref run_debug seeds the gdb pane's
+	 * scrollback with this so the banner is reachable from inside the
+	 * alt screen via Ctrl-T inspect; on failure the @c{see banner
+	 * above} diagnostic in the caller's stderr is enough. */
 	int ready = 0;
 	int daemon_exited = 0;
 
@@ -420,7 +424,7 @@ static int spawn_openocd(struct process *proc, const char *openocd_bin,
 		if (n > 0) {
 			fwrite(buf, 1, (size_t)n, stderr);
 			fflush(stderr);
-			sbuf_add(&prelog, buf, (size_t)n);
+			sbuf_add(prelog, buf, (size_t)n);
 			/* sbuf is NUL-terminated and OpenOCD's output is
 			 * text, so strstr is safe and portable (memmem is
 			 * a GNU extension we don't depend on elsewhere).
@@ -437,7 +441,7 @@ static int spawn_openocd(struct process *proc, const char *openocd_bin,
 			 * OpenOCD finishes init).  The "for gdb connections"
 			 * suffix is uniquely emitted by gdb_server.c's
 			 * listener, so the match holds across versions. */
-			if (strstr(prelog.buf, "for gdb connections")) {
+			if (strstr(prelog->buf, "for gdb connections")) {
 				ready = 1;
 				break;
 			}
@@ -456,12 +460,10 @@ static int spawn_openocd(struct process *proc, const char *openocd_bin,
 		kill(proc->pid, SIGTERM);
 		process_finish(proc);
 		svec_clear(&argv);
-		sbuf_release(&prelog);
 		sbuf_release(&scripts_env);
 		return -1;
 	}
 
-	sbuf_release(&prelog);
 	/* argv strings are owned by svec; the process struct stores
 	 * proc->argv as a borrow.  Clearing svec here is safe: the child
 	 * has already exec'd, so its argv copy is independent. */
@@ -642,7 +644,7 @@ static const char DEBUG_HELP_TEXT[] =
 static int run_debug(struct process *oocd_proc, const char *gdb_bin,
 		     const char *elf, struct serial *uart_s,
 		     const char *port_label, unsigned baud,
-		     const char *chip_label)
+		     const char *chip_label, const struct sbuf *prelog)
 {
 	int rc = term_raw_enter(TERM_RAW_MOUSE | TERM_RAW_BRACKETED_PASTE);
 	if (rc < 0)
@@ -666,13 +668,72 @@ static int run_debug(struct process *oocd_proc, const char *gdb_bin,
 	struct tui_rect status_r, divider_r;
 	debug_layout(rows, cols, &gdb_p, &uart_p, &status_r, &divider_r);
 
-	/* gdb in a pty pre-loaded with target remote :<port> + ELF. */
+	/* Seed the gdb pane's vt100 with the openocd startup banner
+	 * captured during @ref spawn_openocd.  The banner already streamed
+	 * to the user's stderr before the alt screen took over (so failure
+	 * diagnostics stay visible after exit), but inside the alt screen
+	 * it's otherwise lost.  Feeding it to the live grid (rather than
+	 * the scrollback ring via @ref tui_log_append) means the banner
+	 * occupies the top of the pane on entry and is naturally pushed
+	 * into the ring as gdb's output fills the grid -- you don't have
+	 * to PgUp to see it.  Drained explicitly so any rows that scroll
+	 * off the grid land in the ring before the first @ref pump_pipe
+	 * gets a chance to. */
+	if (prelog && prelog->len) {
+		vt100_input(gdb_p.V, prelog->buf, prelog->len);
+		if (!tui_log_is_frozen(&gdb_p.L))
+			tui_log_pull_from_vt100(&gdb_p.L, gdb_p.V);
+	}
+
+	/* gdb in a pty pre-loaded with the standard ESP-IDF startup
+	 * sequence, mirroring tools/cmake/gdbinit.cmake's "connect"
+	 * fragment:
+	 *
+	 *   target remote :<port>          attach
+	 *   monitor reset halt             reset chip + halt at reset vector
+	 *   maintenance flush register-cache
+	 *                                  drop gdb's stale cached regs
+	 *   thbreak app_main               temp HW breakpoint at user entry
+	 *   continue                       run from reset vector to app_main
+	 *
+	 * Without this preamble openocd's own @c{init} resets the chip
+	 * (so the "preserve chip state for post-mortem" framing this
+	 * cmd used to claim was already untrue -- the standard
+	 * board files do @c{reset halt} regardless of what we type),
+	 * but the chip then runs free for a few hundred ms before gdb
+	 * dials in.  By the time gdb's connect-halt lands, PC happens
+	 * to be sitting right on @c{app_main}'s prologue -- and if the
+	 * user then types @c{b app_main; c}, the HW breakpoint they
+	 * just armed and the resume PC are the same address, so the
+	 * very first fetch on resume re-trips the match register
+	 * before the instruction commits.  openocd-esp32's recovery
+	 * for "halted at PC == HW-breakpoint address right after a
+	 * resume" is to software-reset CPU0, which puts the chip back
+	 * at the reset vector, the chip runs through boot, hits
+	 * @c{app_main} again, breakpoint fires for real this time --
+	 * and the user @c{c}s, and we loop.  Loops at ~10 Hz, no
+	 * @c{printf} ever flushes to UART.
+	 *
+	 * The preamble side-steps the trap entirely: we issue our own
+	 * @c{reset halt} so the chip is at the reset vector, install a
+	 * *temporary* HW breakpoint at @c{app_main}, and let the chip
+	 * run through boot.  The temp breakpoint fires once when the
+	 * boot path reaches @c{app_main}, gdb auto-removes it, the
+	 * chip is parked at @c{app_main} with no breakpoint at PC, and
+	 * subsequent user @c{b app_main; c} works because the
+	 * breakpoint isn't sitting on the resume PC any longer (the
+	 * one-instruction step over the freshly-installed breakpoint
+	 * is the standard auto-skip path that does work). */
 	struct sbuf gdb_remote = SBUF_INIT;
 	sbuf_addf(&gdb_remote, "target remote :%d", opt_gdb_port);
 	const char *gdb_argv[] = {gdb_bin, "-q",
 				  "-ex",   "set pagination off",
 				  "-ex",   "set confirm off",
 				  "-ex",   gdb_remote.buf,
+				  "-ex",   "monitor reset halt",
+				  "-ex",   "maintenance flush register-cache",
+				  "-ex",   "thbreak app_main",
+				  "-ex",   "continue",
 				  elf,	   NULL};
 	struct process gdb_proc = PROCESS_INIT;
 	gdb_proc.argv = gdb_argv;
@@ -695,16 +756,17 @@ static int run_debug(struct process *oocd_proc, const char *gdb_bin,
 		return 1;
 	}
 
-	/* One-line hint at the top of the UART pane: ice debug attaches
-	 * without resetting (preserves chip state for post-mortem -- the
-	 * key reason to use JTAG-attach in the first place), so a
-	 * long-running app's UART pane will look "empty" until the user
-	 * either interacts with the chip or restarts it.  Tell them how. */
-	static const char hint[] =
-	    "\x1b[2m"
-	    "ice debug: attached, chip state preserved.  "
-	    "Ctrl-T r resets and shows boot logs.\n"
-	    "\x1b[0m";
+	/* One-line hint at the top of the UART pane: gdb's `target
+	 * remote` halts the chip on attach, so the UART pane stays
+	 * silent until the inferior runs again -- tell the user how to
+	 * resume.  Yellow so it stands out on the first glance; CRLF
+	 * because vt100's bare LF only moves the cursor down (no column
+	 * reset), which would leave subsequent UART output starting at
+	 * the column past the hint instead of column 1. */
+	static const char hint[] = "\x1b[33m"
+				   "ice debug: chip halted on attach -- "
+				   "run 'continue' in gdb to resume.\r\n"
+				   "\x1b[0m";
 	vt100_input(uart_p.V, hint, sizeof hint - 1);
 
 	int focus = 0;
@@ -1020,12 +1082,16 @@ int cmd_target_openocd(int argc, const char **argv)
 	 * @c opt_port has already absorbed @c --port, @c $ESPPORT, and the
 	 * configured @c serial.port via @c OPT_STRING_CFG.  If still unset,
 	 * pick a port passively (no @c open(), no DTR/RTS toggle, no ROM
-	 * handshake).  ice debug attaches to a *running* chip, so the
-	 * destructive @ref esf_find_esp_port probe used by ice flash is the
-	 * wrong tool here -- it would reset the chip into ROM mode and back
-	 * just to read the chip id, and on a chip whose USB-Serial/JTAG is
-	 * the JTAG transport that renumeration races OpenOCD's libusb scan
-	 * and reliably breaks the attach.
+	 * handshake).  The destructive @ref esf_find_esp_port probe used
+	 * by ice flash is the wrong tool here -- it would toggle the
+	 * UART's DTR/RTS to bounce the chip into ROM bootloader and back
+	 * just to read the chip id, and on a chip whose USB-Serial/JTAG
+	 * is the JTAG transport that renumeration races OpenOCD's libusb
+	 * scan and reliably breaks the attach.  (Note: openocd's own
+	 * @c{init} does a JTAG-side @c{reset halt} on the chip regardless,
+	 * so this isn't about preserving chip state -- it's about not
+	 * adding a *second* reset path through DTR/RTS that would
+	 * interfere with the JTAG one.)
 	 */
 	char *autoport = NULL;
 	if (!opt_port) {
@@ -1073,10 +1139,15 @@ int cmd_target_openocd(int argc, const char **argv)
 	 * we don't trip the const-qualifier on opt_openocd_cmd. */
 	char *oocd_cmd_owned = sbuf_strdup(opt_openocd_cmd);
 	struct process oocd_proc = PROCESS_INIT;
+	/* Owned here, filled by spawn_openocd, consumed by run_debug to
+	 * seed the gdb pane's scrollback so the openocd startup banner
+	 * stays reachable inside the alt screen. */
+	struct sbuf prelog = SBUF_INIT;
 
 	fprintf(stderr, "Starting openocd ...\n");
 	if (spawn_openocd(&oocd_proc, openocd_bin, openocd_version,
-			  oocd_cmd_owned) < 0) {
+			  oocd_cmd_owned, &prelog) < 0) {
+		sbuf_release(&prelog);
 		free(oocd_cmd_owned);
 		serial_close(s);
 		free(autoport);
@@ -1089,8 +1160,9 @@ int cmd_target_openocd(int argc, const char **argv)
 	/* ---- run dual-pane ---- */
 	const char *chip_label = opt_chip ? opt_chip : "?";
 	int run_rc = run_debug(&oocd_proc, gdb_bin, opt_elf, s, opt_port,
-			       (unsigned)opt_baud, chip_label);
+			       (unsigned)opt_baud, chip_label, &prelog);
 
+	sbuf_release(&prelog);
 	free(oocd_cmd_owned);
 	serial_close(s);
 	free(autoport);

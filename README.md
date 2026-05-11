@@ -1,6 +1,12 @@
 # esp-ice
 
+> **Experimental PoC** -- this is a proof of concept, tested
+> primarily on Linux.  Windows may not work as expected, or at
+> all.  Not intended for production use.
+
 *Ice ice baby. Too cold -- slice like a ninja, cut like a razor blade.*
+
+![ice walkthrough](demo/demo.gif)
 
 ## What is ice?
 
@@ -21,9 +27,6 @@ Highlights:
   for multiple chips or sdkconfigs without conflict.
 - Managed ESP-IDF reference under `~/.ice/` with cheap named checkouts
   that share git objects across versions.
-
-> **Experimental PoC** -- this project is a proof of concept and is
-> not intended for production use.
 
 ## Install
 

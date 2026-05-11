@@ -312,6 +312,28 @@ int self_pid(void);
  */
 const char *temp_dir(void);
 
+/**
+ * @brief Canonicalize @p path to an absolute, normalized form.
+ *
+ * POSIX: @c realpath() with the @c NULL second-argument extension --
+ * resolves symlinks and collapses @c "." / @c ".." components.  All
+ * components must exist; for a non-existent path returns NULL with
+ * @c errno set.
+ *
+ * Windows: @c GetFullPathNameW() round-tripped through UTF-8.  Makes
+ * the path absolute and normalizes separators / @c "." / @c "..", but
+ * does @b{not} resolve symlinks (rare on Windows; callers needing
+ * full resolution should use @c GetFinalPathNameByHandle on a handle
+ * directly).  Does not require the path to exist.
+ *
+ * Both platforms return a malloc'd string the caller must @c free().
+ *
+ * @param path  Path to canonicalize.
+ * @return Malloc'd absolute path on success, NULL on failure (errno
+ *         set on POSIX; @c GetLastError() on Windows).
+ */
+char *path_realpath(const char *path);
+
 /* ------------------------------------------------------------------ */
 /*  Child process API                                                 */
 /* ------------------------------------------------------------------ */

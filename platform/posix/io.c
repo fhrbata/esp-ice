@@ -6,12 +6,23 @@
 
 /**
  * @file platform/posix/io.c
- * @brief Color-aware I/O overrides for POSIX.
+ * @brief Color-aware I/O overrides and filesystem helpers for POSIX.
  *
  * IMPORTANT: This file captures the real C-library fputs pointer
  * before ice.h overrides it. ice.h is NOT the first include.
  * (Same pattern as platform/win/wconv.c -- see its file-level comment.)
  */
+/* Pull in X/Open extensions -- the build's @c -D_POSIX_C_SOURCE=200112L
+ * doesn't expose realpath() under glibc.  Must be set before any system
+ * header is included.  The leading-underscore name is reserved for the
+ * implementation in general but is the canonical feature-test macro
+ * spelling here, so silence clang-tidy's bugprone-reserved-identifier
+ * check on this specific line. */
+#ifndef _XOPEN_SOURCE
+/* NOLINTNEXTLINE(bugprone-reserved-identifier) */
+#define _XOPEN_SOURCE 500
+#endif
+
 #include <dirent.h>
 #include <stdarg.h>
 #include <stdint.h>
@@ -123,4 +134,13 @@ int dir_foreach(const char *path, int (*cb)(const char *name, void *ud),
 	}
 	svec_clear(&names);
 	return rc;
+}
+
+char *path_realpath(const char *path)
+{
+	/* The NULL second-argument extension allocates the result with
+	 * malloc().  Standardized in POSIX.1-2008; pre-2008 glibc has
+	 * supported it for two decades.  _XOPEN_SOURCE=500 above exposes
+	 * realpath() in <stdlib.h>. */
+	return realpath(path, NULL);
 }
