@@ -280,7 +280,15 @@ ifeq ($(S),linux)
 ifeq ($(findstring musl,$(TRIPLE)),)
 $(error STATIC=1 on Linux requires a musl toolchain (got CC='$(CC)', triple='$(TRIPLE)'). Fetch one: eval "$$(make -f Makefile.toolchain linux-<arch>)")
 endif
-LDFLAGS += -static
+# -no-pie: avoid static-PIE.  The default GCC specs add -pie to executables,
+# so -static alone would yield a static-PIE binary that self-relocates at
+# startup via libc.  musl's minimal self-relocator only processes
+# R_*_RELATIVE; symbolic relocs (R_RISCV_64 / R_X86_64_64) the linker emits
+# for some absolute-pointer slots in static initialisers (e.g. &global in
+# an option table) get silently skipped, leaving NULL at runtime — a NULL
+# deref that bit us on riscv64.  Plain -no-pie produces an ET_EXEC with no
+# runtime relocations and sidesteps the whole class.
+LDFLAGS += -static -no-pie
 endif
 ifeq ($(S),macos)
 LIBS += -framework CoreFoundation -framework SystemConfiguration
