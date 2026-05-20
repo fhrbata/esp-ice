@@ -1,3 +1,10 @@
+## v0.15.1 (2026-05-20)
+
+### 🐛 Bug Fixes
+
+- **build**: force -no-pie for STATIC=1 on linux+musl *(Frantisek Hrbata - 63c544a)*
+
+
 ## v0.15.0 (2026-05-11)
 
 ### ✨ New Features
