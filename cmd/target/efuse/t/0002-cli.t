@@ -18,4 +18,13 @@ tap_check grep -q -- '--no-stub' out
 tap_check grep -q -- '--port' out
 tap_done "summary takes the common device options"
 
+"$BINARY" target efuse dump --help >out 2>&1
+tap_check grep -q -- '--port' out
+tap_done "dump takes the common device options"
+
+"$BINARY" target efuse dump extra >out 2>err
+tap_check test $? -ne 0
+tap_check grep -q 'too many arguments' err
+tap_done "dump rejects positional arguments"
+
 tap_result

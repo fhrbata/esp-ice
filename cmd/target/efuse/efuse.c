@@ -33,13 +33,16 @@ static const struct cmd_manual target_efuse_manual = {
 
 	.examples =
 	H_EXAMPLE("ice target efuse summary")
-	H_EXAMPLE("ice target efuse summary 'KEY_PURPOSE_*'"),
+	H_EXAMPLE("ice target efuse summary 'KEY_PURPOSE_*'")
+	H_EXAMPLE("ice target efuse dump"),
 };
 /* clang-format on */
 
+extern const struct cmd_desc cmd_target_efuse_dump_desc;
 extern const struct cmd_desc cmd_target_efuse_summary_desc;
 
 static const struct cmd_desc *const target_efuse_subs[] = {
+    &cmd_target_efuse_dump_desc,
     &cmd_target_efuse_summary_desc,
     NULL,
 };

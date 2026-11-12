@@ -204,6 +204,7 @@ LIB_SRCS := \
 	cmd/monitor/monitor.c \
 	cmd/target/openocd/openocd.c \
 	cmd/target/efuse/efuse.c \
+	cmd/target/efuse/dump/dump.c \
 	cmd/target/efuse/summary/summary.c \
 	cmd/target/flash/flash.c \
 	cmd/target/list/list.c \
