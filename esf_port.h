@@ -81,6 +81,19 @@ target_chip_t ice_chip_to_esf(enum ice_chip chip);
  */
 char *esf_find_esp_port(enum ice_chip required);
 
+/**
+ * @brief Connect to the chip's ROM bootloader and start the flasher stub.
+ *
+ * The stub is the small program esptool also uploads: it flashes and
+ * reads faster than the ROM, verifies writes with MD5, and supports
+ * compressed writes on every chip.  With @p no_stub the loader stays
+ * on the ROM bootloader, which is the fallback when a stub fails to
+ * start (e.g. a chip revision the bundled stub does not handle yet).
+ *
+ * @p loader must have been initialised with esp_loader_init_serial().
+ */
+esp_loader_error_t esf_connect(esp_loader_t *loader, int no_stub);
+
 #ifdef __cplusplus
 }
 #endif

@@ -340,6 +340,15 @@ target_chip_t ice_chip_to_esf(enum ice_chip chip)
 	}
 }
 
+esp_loader_error_t esf_connect(esp_loader_t *loader, int no_stub)
+{
+	esp_loader_connect_args_t args = ESP_LOADER_CONNECT_DEFAULT();
+
+	if (no_stub)
+		return esp_loader_connect(loader, &args);
+	return esp_loader_connect_with_stub(loader, &args);
+}
+
 char *esf_find_esp_port(enum ice_chip required)
 {
 	struct serial_port_info *ports;

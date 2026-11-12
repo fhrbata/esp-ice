@@ -70,6 +70,7 @@ const struct cmd_desc cmd_target_partition_desc = {
 
 const char *pt_opt_port;
 int pt_opt_baud = 460800;
+int pt_opt_no_stub;
 const char *pt_opt_pt_file;
 const char *pt_opt_pt_offset = "0x8000";
 const char *pt_opt_name;
@@ -89,6 +90,7 @@ void pt_target_reset_opts(void)
 {
 	pt_opt_port = NULL;
 	pt_opt_baud = 460800;
+	pt_opt_no_stub = 0;
 	pt_opt_pt_file = NULL;
 	pt_opt_pt_offset = "0x8000";
 	pt_opt_name = NULL;
@@ -248,7 +250,7 @@ const struct pt_entry *pt_target_select(const struct pt_entry *entries, int n,
 /* ------------------------------------------------------------------ */
 
 int pt_target_connect(esp_loader_t *loader, esf_port_t *sport, const char *port,
-		      int baud, char **autoport_out)
+		      int baud, int no_stub, char **autoport_out)
 {
 	esp_loader_error_t err_;
 
@@ -279,10 +281,7 @@ int pt_target_connect(esp_loader_t *loader, esf_port_t *sport, const char *port,
 		return -1;
 	}
 
-	{
-		esp_loader_connect_args_t cargs = ESP_LOADER_CONNECT_DEFAULT();
-		err_ = esp_loader_connect(loader, &cargs);
-	}
+	err_ = esf_connect(loader, no_stub);
 	if (err_ != ESP_LOADER_SUCCESS) {
 		err("connect failed -- is the device in bootloader mode? "
 		    "(Hold BOOT, tap RESET, then release BOOT)");

@@ -43,6 +43,9 @@ static const struct option cmd_target_partition_info_opts[] = {
 	       "serial port (omit to auto-detect)", serial_complete_port),
     OPT_INT('b', "baud", &pt_opt_baud, "rate",
 	    "negotiated baud rate (default 460800)", NULL),
+    OPT_BOOL_CFG(0, "no-stub", &pt_opt_no_stub, "serial.no-stub", NULL,
+		 "talk to the ROM bootloader; do not upload the flasher stub",
+		 NULL),
     OPT_STRING(0, "partition-table-file", &pt_opt_pt_file, "path",
 	       "load PT from file instead of device", NULL),
     OPT_STRING(0, "partition-table-offset", &pt_opt_pt_offset, "hex",
@@ -171,7 +174,7 @@ int cmd_target_partition_info(int argc, const char **argv)
 
 	if (!pt_opt_pt_file) {
 		if (pt_target_connect(&loader, &sport, pt_opt_port, pt_opt_baud,
-				      &autoport) != 0)
+				      pt_opt_no_stub, &autoport) != 0)
 			goto out;
 		connected = 1;
 	}

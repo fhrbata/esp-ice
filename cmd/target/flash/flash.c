@@ -29,6 +29,7 @@
 static const char *opt_port;
 static const char *opt_chip;
 static int opt_baud = 460800;
+static int opt_no_stub;
 
 /* clang-format off */
 static const struct option cmd_target_flash_opts[] = {
@@ -39,6 +40,8 @@ static const struct option cmd_target_flash_opts[] = {
 	OPT_INT('b', "baud", &opt_baud, "rate",
 		"negotiated baud rate after ROM handshake (default: 460800)",
 		NULL),
+	OPT_BOOL_CFG(0, "no-stub", &opt_no_stub, "serial.no-stub", NULL,
+		     "talk to the ROM bootloader; do not upload the flasher stub", NULL),
 	OPT_END(),
 };
 
@@ -285,8 +288,7 @@ int cmd_target_flash(int argc, const char **argv)
 	}
 	loader_open = 1;
 
-	esp_loader_connect_args_t connect = ESP_LOADER_CONNECT_DEFAULT();
-	err = esp_loader_connect(&loader, &connect);
+	err = esf_connect(&loader, opt_no_stub);
 	if (err != ESP_LOADER_SUCCESS) {
 		fprintf(stderr,
 			"ice target flash: connect failed — is the device in "
@@ -306,6 +308,8 @@ int cmd_target_flash(int argc, const char **argv)
 	}
 
 	printf("Connected  @G{%s}", ice_chip_name(chip));
+	if (!opt_no_stub)
+		printf("  @c{stub}");
 
 	if (baud != 115200) {
 		err = esp_loader_change_transmission_rate(&loader, baud);
