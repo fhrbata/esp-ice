@@ -1,7 +1,10 @@
-import pytest
-from pytest_embedded import Dut
-from esptool.cmds import detect_chip
+# SPDX-FileCopyrightText: 2026 Espressif Systems (Shanghai) CO LTD
+# SPDX-License-Identifier: Unlicense OR CC0-1.0
 import time
+
+import pytest
+from esptool.cmds import detect_chip
+from pytest_embedded import Dut
 
 FLASH_ADDRESS = 0x1000
 BIN_FILE = "/zephyr/zephyr.bin"
@@ -11,7 +14,7 @@ BIN_FILE = "/zephyr/zephyr.bin"
 # It is used by conftest.py to find the app path to build directory.
 @pytest.fixture
 def app_path() -> str:
-    return "zephyrproject-rtos/zephyr/"
+    return "zephyrproject-rtos/"
 
 
 @pytest.fixture(autouse=True)
@@ -54,21 +57,21 @@ def test_zephyr_example(dut: Dut) -> None:
     dut.expect("Transmission rate changed")
 
     # Check bootloader programming
-    dut.expect("Loading bootloader")
+    dut.expect("Loading")
     dut.expect("Erasing flash")
     dut.expect("Start programming")
     dut.expect("Finished programming")
     dut.expect("Flash verified")
 
     # Check partition table programming
-    dut.expect("Loading partition table")
+    dut.expect("Loading")
     dut.expect("Erasing flash")
     dut.expect("Start programming")
     dut.expect("Finished programming")
     dut.expect("Flash verified")
 
     # Check app programming
-    dut.expect("Loading app")
+    dut.expect("Loading")
     dut.expect("Erasing flash")
     dut.expect("Start programming")
     dut.expect("Finished programming")

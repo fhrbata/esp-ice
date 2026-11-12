@@ -17,11 +17,19 @@ repos:
         exclude: &excludes |
             (?x)^(
               .+\.bin
+              |include/efuse/.+
+              |src/efuse/.+
             )$
       - id: end-of-file-fixer
         exclude: *excludes
       - id: mixed-line-ending
         args: ['-f=lf']
+        exclude: *excludes
+  - repo: https://github.com/espressif/check-copyright/
+    rev: v1.1.2
+    hooks:
+      - id: check-copyright
+        args: ['--config', '.check_copyright_config.yaml', '--replace']
         exclude: *excludes
   - repo: https://github.com/espressif/astyle_py.git
     rev: v1.1.0
@@ -35,7 +43,7 @@ repos:
       - id: conventional-precommit-linter
         stages: [commit-msg]
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.15.9
+    rev: v0.16.10
     hooks:
       - id: ruff # Runs ruff linter
         args: [--fix, --exit-non-zero-on-fix] # --fix for fixing errors
@@ -43,13 +51,15 @@ repos:
       - id: ruff-format
         types: [python]
   - repo: https://github.com/codespell-project/codespell
-    rev: v2.4.2
+    rev: v2.4.3
     hooks:
       - id: codespell                                    # Code spell checker
         args: ["--write-changes"]
         exclude: |
             (?x)^(
               .+\.bin|
+              include/efuse/.+|
+              src/efuse/.+|
               zephyr/Kconfig|
               CHANGELOG\.md
             )$

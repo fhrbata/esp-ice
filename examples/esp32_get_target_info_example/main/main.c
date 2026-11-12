@@ -1,3 +1,8 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Espressif Systems (Shanghai) CO LTD
+ *
+ * SPDX-License-Identifier: Unlicense OR CC0-1.0
+ */
 /* Get target info example
 
    This example code is in the Public Domain (or CC0 licensed, at your option.)
@@ -30,7 +35,9 @@ static const char *get_target_string(target_chip_t target)
     const char *target_to_string_mapping[ESP_MAX_CHIP] = {
         "ESP8266", "ESP32", "ESP32-S2",
         "ESP32-C3", "ESP32-S3", "ESP32-C2",
-        "ESP32-C5", "ESP32-H2", "ESP32-C6"
+        "ESP32-C5", "ESP32-H2", "ESP32-C6",
+        "ESP32-P4", "ESP32-C61", "ESP32-S31",
+        "ESP32-H21", "ESP32-H4"
     };
 
     return target_to_string_mapping[target];
@@ -50,7 +57,7 @@ void app_main(void)
         .boot_pin          = GPIO_NUM_26,
     };
 
-    if (esp_loader_init_uart(&loader, &port.port) != ESP_LOADER_SUCCESS) {
+    if (esp_loader_init_serial(&loader, &port.port) != ESP_LOADER_SUCCESS) {
         ESP_LOGE(TAG, "serial initialization failed.");
         return;
     }

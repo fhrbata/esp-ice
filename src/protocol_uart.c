@@ -1,16 +1,7 @@
-/* Copyright 2020-2024 Espressif Systems (Shanghai) CO LTD
+/*
+ * SPDX-FileCopyrightText: 2020-2026 Espressif Systems (Shanghai) CO LTD
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * SPDX-License-Identifier: Apache-2.0
  */
 
 #include "protocol.h"
@@ -18,12 +9,10 @@
 #include "esp_loader.h"
 #include "esp_loader_protocol.h"
 #include "esp_targets.h"
-#include "md5_hash.h"
 #include "slip.h"
+#include "loader_log.h"
 #include <stddef.h>
 #include <string.h>
-
-#define UART_DEFAULT_TIMEOUT 1000
 
 static esp_loader_error_t uart_check_response(esp_loader_t *loader, const send_cmd_config *config);
 
@@ -55,6 +44,9 @@ static esp_loader_error_t uart_spi_attach(esp_loader_t *loader, uint32_t config)
 
 static esp_loader_error_t uart_send_cmd(esp_loader_t *loader, const send_cmd_config *config)
 {
+    command_t command = ((const command_common_t *)config->cmd)->command;
+    LOADER_LOGD(loader, "CMD -> %s (0x%02x)", loader_command_name(command), (unsigned)command);
+
     RETURN_ON_ERROR(SLIP_send_delimiter(loader));
 
     RETURN_ON_ERROR(SLIP_send(loader, (const uint8_t *)config->cmd, config->cmd_size));
@@ -65,7 +57,6 @@ static esp_loader_error_t uart_send_cmd(esp_loader_t *loader, const send_cmd_con
 
     RETURN_ON_ERROR(SLIP_send_delimiter(loader));
 
-    command_t command = ((const command_common_t *)config->cmd)->command;
     const uint8_t response_cnt = command == SYNC ? 8 : 1;
 
     for (uint8_t recv_cnt = 0; recv_cnt < response_cnt; recv_cnt++) {
@@ -102,6 +93,7 @@ static esp_loader_error_t uart_check_response(esp_loader_t *loader, const send_c
         log_loader_internal_error(loader, status->error);
         return ESP_LOADER_ERROR_INVALID_RESPONSE;
     }
+    LOADER_LOGD(loader, "CMD <- %s OK", loader_command_name(command));
 
     if (config->reg_value != NULL) {
         *config->reg_value = response->value;
@@ -120,73 +112,17 @@ static esp_loader_error_t uart_check_response(esp_loader_t *loader, const send_c
     return ESP_LOADER_SUCCESS;
 }
 
-static esp_loader_error_t uart_flash_read_stub(esp_loader_t *loader, uint8_t *dest, uint32_t address, uint32_t length)
+static esp_loader_error_t uart_recv_stub_packet(esp_loader_t *loader, uint8_t *dest,
+        size_t max_size, size_t *recv_size)
 {
-    uint8_t buf[256];
-    size_t recv_size = 0;
-    struct MD5Context md5_context;
-    MD5Init(&md5_context);
+    return SLIP_receive_packet(loader, dest, max_size, recv_size);
+}
 
-    const uint32_t seek_back_len = address % 4;
-    address -= seek_back_len;
-    length += seek_back_len;
-
-    const uint32_t overread_len = ROUNDUP(length, 4) - length;
-    length += overread_len;
-
-    loader->_port->ops->start_timer(loader->_port, UART_DEFAULT_TIMEOUT);
-    RETURN_ON_ERROR(loader_flash_read_stub_cmd(loader, address, length, sizeof(buf)));
-
-    uint32_t copy_dest_start = 0;
-    int32_t remaining = length;
-    while (remaining > 0) {
-        loader->_port->ops->start_timer(loader->_port, UART_DEFAULT_TIMEOUT);
-        const uint32_t to_receive = MIN(remaining, sizeof(buf));
-        RETURN_ON_ERROR(SLIP_receive_packet(loader, buf, to_receive, &recv_size));
-
-        if (recv_size != to_receive) {
-            return ESP_LOADER_ERROR_INVALID_RESPONSE;
-        }
-
-        MD5Update(&md5_context, buf, recv_size);
-
-        uint32_t copy_start = 0;
-        uint32_t copy_length = recv_size;
-
-        const bool first_read = remaining == (int32_t)length;
-        if (first_read) {
-            copy_start += seek_back_len;
-            copy_length -= seek_back_len;
-        }
-
-        const bool last_read = remaining - (int32_t)recv_size <= 0;
-        if (last_read) {
-            copy_length -= overread_len;
-        }
-
-        memcpy(&dest[copy_dest_start], &buf[copy_start], copy_length);
-        copy_dest_start += copy_length;
-
-        remaining -= recv_size;
-
-        const uint32_t bytes_recv = length - remaining;
-        loader->_port->ops->start_timer(loader->_port, UART_DEFAULT_TIMEOUT);
-        RETURN_ON_ERROR(SLIP_send_delimiter(loader));
-        RETURN_ON_ERROR(SLIP_send(loader, (const uint8_t *)&bytes_recv, sizeof(bytes_recv)));
-        RETURN_ON_ERROR(SLIP_send_delimiter(loader));
-    }
-
-    uint8_t md5_calc[16];
-    MD5Final(md5_calc, &md5_context);
-
-    loader->_port->ops->start_timer(loader->_port, UART_DEFAULT_TIMEOUT);
-    uint8_t md5_recv[16];
-    RETURN_ON_ERROR(SLIP_receive_packet(loader, md5_recv, sizeof(md5_recv), &recv_size));
-
-    if (recv_size != sizeof(md5_recv) || memcmp(md5_calc, md5_recv, sizeof(md5_calc))) {
-        return ESP_LOADER_ERROR_INVALID_MD5;
-    }
-
+static esp_loader_error_t uart_send_stub_ack(esp_loader_t *loader, uint32_t bytes_recv)
+{
+    RETURN_ON_ERROR(SLIP_send_delimiter(loader));
+    RETURN_ON_ERROR(SLIP_send(loader, (const uint8_t *)&bytes_recv, sizeof(bytes_recv)));
+    RETURN_ON_ERROR(SLIP_send_delimiter(loader));
     return ESP_LOADER_SUCCESS;
 }
 
@@ -207,21 +143,17 @@ static esp_loader_error_t uart_mem_begin_cmd(esp_loader_t *loader, uint32_t offs
 }
 
 const esp_loader_protocol_ops_t uart_protocol_ops = {
-    .initialize_conn = uart_initialize_conn,
-    .send_cmd        = uart_send_cmd,
-    .spi_attach      = uart_spi_attach,
-    .flash_read_stub = uart_flash_read_stub,
-    .mem_begin_cmd   = uart_mem_begin_cmd,
-    .mem_data_cmd    = NULL,
-    .mem_end_cmd     = NULL,
+    .initialize_conn   = uart_initialize_conn,
+    .send_cmd          = uart_send_cmd,
+    .spi_attach        = uart_spi_attach,
+    .recv_stub_packet  = uart_recv_stub_packet,
+    .send_stub_ack     = uart_send_stub_ack,
+    .mem_begin_cmd     = uart_mem_begin_cmd,
+    .mem_data_cmd      = NULL,
+    .mem_end_cmd       = NULL,
 };
 
-const esp_loader_protocol_ops_t *esp_loader_get_uart_ops(void)
-{
-    return &uart_protocol_ops;
-}
-
-const esp_loader_protocol_ops_t *esp_loader_get_usb_ops(void)
+const esp_loader_protocol_ops_t *esp_loader_get_serial_ops(void)
 {
     return &uart_protocol_ops;
 }
