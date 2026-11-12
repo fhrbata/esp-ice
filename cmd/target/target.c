@@ -38,6 +38,7 @@ static const struct cmd_manual target_manual = {
 	.examples =
 	H_EXAMPLE("ice target list")
 	H_EXAMPLE("ice target probe")
+	H_EXAMPLE("ice target efuse summary")
 	H_EXAMPLE("ice target monitor -p /dev/ttyUSB0")
 	H_EXAMPLE("ice target flash --port /dev/ttyUSB0 "
 		  "0x0=bootloader.bin 0x8000=partition-table.bin "
@@ -45,6 +46,7 @@ static const struct cmd_manual target_manual = {
 };
 /* clang-format on */
 
+extern const struct cmd_desc cmd_target_efuse_desc;
 extern const struct cmd_desc cmd_target_flash_desc;
 extern const struct cmd_desc cmd_target_list_desc;
 extern const struct cmd_desc cmd_target_monitor_desc;
@@ -56,6 +58,7 @@ extern const struct cmd_desc cmd_target_qemu_desc;
 /* One entry per line; clang-format would pack them into columns. */
 /* clang-format off */
 static const struct cmd_desc *const target_subs[] = {
+    &cmd_target_efuse_desc,
     &cmd_target_flash_desc,
     &cmd_target_list_desc,
     &cmd_target_monitor_desc,

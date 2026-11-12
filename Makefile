@@ -203,6 +203,8 @@ LIB_SRCS := \
 	cmd/target/target.c \
 	cmd/monitor/monitor.c \
 	cmd/target/openocd/openocd.c \
+	cmd/target/efuse/efuse.c \
+	cmd/target/efuse/summary/summary.c \
 	cmd/target/flash/flash.c \
 	cmd/target/list/list.c \
 	cmd/target/monitor/monitor.c \
@@ -557,6 +559,7 @@ SAN_TEST_ENV := LSAN_OPTIONS=detect_leaks=0
 test: $(BINARY) $(LIBICE)
 	T_OUT=$(T_OUT) BINARY=$(BINARY_ABS) LIBICE=$(LIBICE_ABS) \
 		LINK_LIBS="$(LIBS)" \
+		VENDOR_CFLAGS="-isystem $(VENDOR_PREFIX)/include" \
 		SAN_FLAGS="$(SAN_FLAGS)" $(if $(SANITIZE),$(SAN_TEST_ENV)) \
 		CC=${CC} S=$(S) prove $(PFLAGS) $(T)
 
