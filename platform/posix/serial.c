@@ -26,8 +26,14 @@
  * B-symbols (only up to B230400).  No framework link required; the
  * header just provides the ioctl number. */
 #include <IOKit/serial/ioss.h>
+/* Port enumeration reads USB metadata from the IOKit registry; this
+ * part does need IOKit and CoreFoundation at link time. */
+#include <CoreFoundation/CoreFoundation.h>
+#include <IOKit/IOKitLib.h>
+#include <IOKit/serial/IOSerialKeys.h>
 #endif
 
+#include "ice.h"
 #include "serial.h"
 
 struct serial {
@@ -345,43 +351,223 @@ void serial_free_port_list(char **ports)
 	free(ports);
 }
 
-int serial_get_usb_id(const char *device, unsigned int *vid, unsigned int *pid)
+/* ------------------------------------------------------------------ */
+/*  USB metadata                                                       */
+/* ------------------------------------------------------------------ */
+
+#if defined(__linux__)
+
+/* Read one sysfs attribute of @p dir into a heap string, trailing
+ * newline dropped.  NULL when the attribute is missing or empty.
+ * Not sbuf_read_file(): sysfs reports every attribute as 4096 bytes
+ * long, and the short read that follows looks like an error. */
+static char *sysfs_attr(const char *dir, const char *attr)
 {
-#ifdef __linux__
-	const char *name = strrchr(device, '/');
-	name = name ? name + 1 : device;
-
-	char vid_path[256], pid_path[256];
-	snprintf(vid_path, sizeof(vid_path),
-		 "/sys/class/tty/%s/device/../idVendor", name);
-	snprintf(pid_path, sizeof(pid_path),
-		 "/sys/class/tty/%s/device/../idProduct", name);
-
+	struct sbuf path = SBUF_INIT;
+	struct sbuf val = SBUF_INIT;
+	char line[256];
 	FILE *f;
 
-	f = fopen(vid_path, "r");
+	sbuf_addf(&path, "%s/%s", dir, attr);
+	f = fopen(path.buf, "r");
+	sbuf_release(&path);
 	if (!f)
-		return -1;
-	if (fscanf(f, "%x", vid) != 1) {
-		fclose(f);
-		return -1;
-	}
+		return NULL;
+	if (fgets(line, sizeof line, f))
+		sbuf_addstr(&val, line);
 	fclose(f);
 
-	f = fopen(pid_path, "r");
-	if (!f)
-		return -1;
-	if (fscanf(f, "%x", pid) != 1) {
-		fclose(f);
-		return -1;
+	sbuf_rtrim(&val);
+	if (!val.len) {
+		sbuf_release(&val);
+		return NULL;
 	}
-	fclose(f);
-
-	return 0;
-#else
-	(void)device;
-	(void)vid;
-	(void)pid;
-	return -1;
-#endif
+	return sbuf_detach(&val);
 }
+
+/* Cut the last component off @p path in place. */
+static void strip_last(char *path)
+{
+	char *slash = strrchr(path, '/');
+	if (slash)
+		*slash = '\0';
+}
+
+/*
+ * Walk sysfs from the tty to its USB interface and device.  A
+ * usb-serial bridge (ttyUSB*) hangs one level below the interface,
+ * a CDC-ACM port (ttyACM*) is the interface itself; the USB device
+ * is the interface's parent in both cases.
+ */
+static void fill_usb_info(struct serial_port_info *pi)
+{
+	const char *name = strrchr(pi->path, '/');
+	struct sbuf link = SBUF_INIT;
+	char *dev, *subsys, *intf = NULL, *usbdev = NULL;
+	char *vid = NULL, *pid = NULL;
+	const char *kind;
+
+	name = name ? name + 1 : pi->path;
+	sbuf_addf(&link, "/sys/class/tty/%s/device", name);
+	dev = path_realpath(link.buf);
+	sbuf_reset(&link);
+	if (!dev)
+		goto out;
+
+	sbuf_addf(&link, "%s/subsystem", dev);
+	subsys = path_realpath(link.buf);
+	if (!subsys)
+		goto out;
+	kind = strrchr(subsys, '/');
+	kind = kind ? kind + 1 : subsys;
+	if (!strcmp(kind, "usb-serial")) {
+		intf = sbuf_strdup(dev);
+		strip_last(intf);
+	} else if (!strcmp(kind, "usb")) {
+		intf = sbuf_strdup(dev);
+	}
+	free(subsys);
+	if (!intf)
+		goto out;
+
+	usbdev = sbuf_strdup(intf);
+	strip_last(usbdev);
+
+	vid = sysfs_attr(usbdev, "idVendor");
+	pid = sysfs_attr(usbdev, "idProduct");
+	if (!vid || !pid)
+		goto out;
+	pi->vid = (unsigned int)strtoul(vid, NULL, 16);
+	pi->pid = (unsigned int)strtoul(pid, NULL, 16);
+	pi->usb = 1;
+	pi->product = sysfs_attr(usbdev, "product");
+	pi->manufacturer = sysfs_attr(usbdev, "manufacturer");
+	pi->serial = sysfs_attr(usbdev, "serial");
+	pi->usb_interface = sysfs_attr(intf, "interface");
+	pi->location = sbuf_strdup(strrchr(intf, '/') + 1);
+
+out:
+	free(vid);
+	free(pid);
+	free(usbdev);
+	free(intf);
+	free(dev);
+	sbuf_release(&link);
+}
+
+void serial_fill_usb_info(struct serial_port_info *ports, int n)
+{
+	for (int i = 0; i < n; i++)
+		fill_usb_info(&ports[i]);
+}
+
+#elif defined(__APPLE__)
+
+/* Look @p key up on @p svc or the first parent that has it. */
+static CFTypeRef ioreg_search(io_object_t svc, const char *key)
+{
+	CFStringRef k =
+	    CFStringCreateWithCString(NULL, key, kCFStringEncodingUTF8);
+	CFTypeRef v = IORegistryEntrySearchCFProperty(
+	    svc, kIOServicePlane, k, kCFAllocatorDefault,
+	    kIORegistryIterateRecursively | kIORegistryIterateParents);
+	CFRelease(k);
+	return v;
+}
+
+static char *ioreg_string(io_object_t svc, const char *key)
+{
+	CFTypeRef v = ioreg_search(svc, key);
+	char buf[512];
+	char *out = NULL;
+
+	if (!v)
+		return NULL;
+	if (CFGetTypeID(v) == CFStringGetTypeID() &&
+	    CFStringGetCString((CFStringRef)v, buf, sizeof buf,
+			       kCFStringEncodingUTF8) &&
+	    buf[0])
+		out = sbuf_strdup(buf);
+	CFRelease(v);
+	return out;
+}
+
+static int ioreg_number(io_object_t svc, const char *key, long long *out)
+{
+	CFTypeRef v = ioreg_search(svc, key);
+	int ok = 0;
+
+	if (!v)
+		return 0;
+	if (CFGetTypeID(v) == CFNumberGetTypeID())
+		ok = CFNumberGetValue((CFNumberRef)v, kCFNumberLongLongType,
+				      out);
+	CFRelease(v);
+	return ok;
+}
+
+/* "<bus>-<port>.<port>..." from an IOUSB locationID, the way
+ * pyserial spells it: the bus in the top byte, then one hub port per
+ * nibble until the first zero nibble. */
+static char *location_string(unsigned long loc)
+{
+	struct sbuf sb = SBUF_INIT;
+	int first = 1;
+
+	sbuf_addf(&sb, "%lu-", (loc >> 24) & 0xff);
+	while (loc & 0xf00000) {
+		sbuf_addf(&sb, first ? "%lu" : ".%lu", (loc >> 20) & 0xf);
+		first = 0;
+		loc = (loc << 4) & 0xffffffffUL;
+	}
+	return sbuf_detach(&sb);
+}
+
+void serial_fill_usb_info(struct serial_port_info *ports, int n)
+{
+	io_iterator_t it;
+	io_object_t svc;
+
+	if (IOServiceGetMatchingServices(
+		MACH_PORT_NULL, IOServiceMatching(kIOSerialBSDServiceValue),
+		&it) != KERN_SUCCESS)
+		return;
+
+	while ((svc = IOIteratorNext(it))) {
+		char *path = ioreg_string(svc, kIOCalloutDeviceKey);
+		struct serial_port_info *pi = NULL;
+		long long vid, pid, loc;
+
+		for (int i = 0; path && i < n; i++)
+			if (!strcmp(ports[i].path, path))
+				pi = &ports[i];
+		free(path);
+
+		if (pi && ioreg_number(svc, "idVendor", &vid) &&
+		    ioreg_number(svc, "idProduct", &pid)) {
+			pi->usb = 1;
+			pi->vid = (unsigned int)vid;
+			pi->pid = (unsigned int)pid;
+			pi->product = ioreg_string(svc, "USB Product Name");
+			pi->manufacturer = ioreg_string(svc, "USB Vendor Name");
+			pi->serial = ioreg_string(svc, "USB Serial Number");
+			pi->usb_interface =
+			    ioreg_string(svc, "USB Interface Name");
+			if (ioreg_number(svc, "locationID", &loc))
+				pi->location =
+				    location_string((unsigned long)loc);
+		}
+		IOObjectRelease(svc);
+	}
+	IOObjectRelease(it);
+}
+
+#else
+
+void serial_fill_usb_info(struct serial_port_info *ports, int n)
+{
+	(void)ports;
+	(void)n;
+}
+
+#endif

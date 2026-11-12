@@ -15,12 +15,19 @@
  * may type plain "COM3" which is accepted as-is by CreateFileA for
  * low-numbered ports.
  */
+#include <ctype.h>
 #include <errno.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <windows.h>
 
+#include <cfgmgr32.h>
+#include <devpropdef.h>
+#include <setupapi.h>
+
 #include "serial.h"
+#include "wconv.h"
 
 struct serial {
 	HANDLE handle;
@@ -280,10 +287,220 @@ void serial_free_port_list(char **ports)
 	free(ports);
 }
 
-int serial_get_usb_id(const char *device, unsigned int *vid, unsigned int *pid)
+/* ------------------------------------------------------------------ */
+/*  USB metadata (SetupAPI)                                            */
+/* ------------------------------------------------------------------ */
+
+/* Device setup classes a COM port registers under: Ports (UART
+ * bridges, usbser CDC) and Modem (some CDC-ACM drivers). */
+static const GUID guid_class_ports = {
+    0x4d36e978,
+    0xe325,
+    0x11ce,
+    {0xbf, 0xc1, 0x08, 0x00, 0x2b, 0xe1, 0x03, 0x18}};
+static const GUID guid_class_modem = {
+    0x4d36e96d,
+    0xe325,
+    0x11ce,
+    {0xbf, 0xc1, 0x08, 0x00, 0x2b, 0xe1, 0x03, 0x18}};
+
+/* DEVPKEY_Device_BusReportedDeviceDesc: the product string the USB
+ * device itself reports, as opposed to the driver's INF name. */
+static const DEVPROPKEY key_bus_reported_desc = {
+    {0x540b947e,
+     0x8b40,
+     0x45bc,
+     {0xa8, 0xa2, 0x6a, 0x0b, 0x89, 0x4c, 0xbd, 0xa2}},
+    4};
+
+static char *port_name(HDEVINFO h, SP_DEVINFO_DATA *d)
 {
-	(void)device;
-	(void)vid;
-	(void)pid;
-	return -1;
+	wchar_t buf[64] = {0};
+	DWORD sz = sizeof buf - sizeof(wchar_t), type;
+	HKEY key;
+	LONG r;
+
+	key = SetupDiOpenDevRegKey(h, d, DICS_FLAG_GLOBAL, 0, DIREG_DEV,
+				   KEY_READ);
+	if (key == INVALID_HANDLE_VALUE)
+		return NULL;
+	r = RegQueryValueExW(key, L"PortName", NULL, &type, (LPBYTE)buf, &sz);
+	RegCloseKey(key);
+	if (r != ERROR_SUCCESS || type != REG_SZ || !buf[0])
+		return NULL;
+	return wcs_to_mbs(buf);
+}
+
+/* First string of a registry property (REG_SZ or REG_MULTI_SZ). */
+static char *registry_prop(HDEVINFO h, SP_DEVINFO_DATA *d, DWORD prop)
+{
+	wchar_t buf[512] = {0};
+	DWORD type;
+
+	if (!SetupDiGetDeviceRegistryPropertyW(h, d, prop, &type, (PBYTE)buf,
+					       sizeof buf - sizeof(wchar_t),
+					       NULL))
+		return NULL;
+	if ((type != REG_SZ && type != REG_MULTI_SZ) || !buf[0])
+		return NULL;
+	return wcs_to_mbs(buf);
+}
+
+static char *bus_reported_desc(HDEVINFO h, SP_DEVINFO_DATA *d)
+{
+	wchar_t buf[256] = {0};
+	DEVPROPTYPE type;
+
+	if (!SetupDiGetDevicePropertyW(h, d, &key_bus_reported_desc, &type,
+				       (PBYTE)buf, sizeof buf - sizeof(wchar_t),
+				       NULL, 0) ||
+	    type != DEVPROP_TYPE_STRING || !buf[0])
+		return NULL;
+	return wcs_to_mbs(buf);
+}
+
+/* Parse "<tag>XXXX" (four hex digits) out of a device instance ID. */
+static int parse_id_field(const char *id, const char *tag, unsigned int *out)
+{
+	const char *p = strstr(id, tag);
+	char hex[5];
+
+	if (!p)
+		return 0;
+	p += strlen(tag);
+	for (int i = 0; i < 4; i++) {
+		if (!isxdigit((unsigned char)p[i]))
+			return 0;
+		hex[i] = p[i];
+	}
+	hex[4] = '\0';
+	*out = (unsigned int)strtoul(hex, NULL, 16);
+	return 1;
+}
+
+/* The serial number is the last component of a USB instance ID, but
+ * only when the device reported one: Windows makes up an ID with '&'
+ * in it otherwise. */
+static char *serial_from_instance_id(const char *id)
+{
+	const char *last = strrchr(id, '\\');
+
+	if (strncmp(id, "USB\\", 4) != 0 || !last || !last[1] ||
+	    strchr(last, '&'))
+		return NULL;
+	return _strdup(last + 1);
+}
+
+static char *instance_id(DEVINST inst)
+{
+	wchar_t buf[MAX_DEVICE_ID_LEN] = {0};
+
+	if (CM_Get_Device_IDW(inst, buf, MAX_DEVICE_ID_LEN, 0) != CR_SUCCESS)
+		return NULL;
+	return wcs_to_mbs(buf);
+}
+
+/*
+ * "<bus>-<port>.<port>[:x.<interface>]" from a location path such as
+ * "PCIROOT(0)#PCI(1400)#USBROOT(0)#USB(2)#USB(1)#USBMI(0)", the way
+ * pyserial spells it.
+ */
+static char *location_from_path(const char *loc)
+{
+	char buf[128];
+	size_t len = 0;
+	int ports = 0;
+
+	buf[0] = '\0';
+	for (const char *p = loc; (p = strchr(p, '#')); p++) {
+		unsigned long v;
+		const char *open = strchr(p, '(');
+
+		if (!open)
+			break;
+		v = strtoul(open + 1, NULL, 10);
+		if (!strncmp(p, "#USBROOT(", 9))
+			len += (size_t)snprintf(buf + len, sizeof buf - len,
+						"%lu", v + 1);
+		else if (!strncmp(p, "#USB(", 5))
+			len +=
+			    (size_t)snprintf(buf + len, sizeof buf - len,
+					     "%s%lu", ports++ ? "." : "-", v);
+		else if (!strncmp(p, "#USBMI(", 7))
+			len += (size_t)snprintf(buf + len, sizeof buf - len,
+						":x.%lu", v);
+		if (len >= sizeof buf)
+			return NULL;
+	}
+	return len ? _strdup(buf) : NULL;
+}
+
+static void fill_usb_info_class(const GUID *cls, struct serial_port_info *ports,
+				int n)
+{
+	HDEVINFO h = SetupDiGetClassDevsW(cls, NULL, NULL, DIGCF_PRESENT);
+	SP_DEVINFO_DATA d;
+
+	if (h == INVALID_HANDLE_VALUE)
+		return;
+
+	for (DWORD i = 0;; i++) {
+		struct serial_port_info *pi = NULL;
+		char *name, *id, *loc;
+		DEVINST parent;
+
+		d.cbSize = sizeof d;
+		if (!SetupDiEnumDeviceInfo(h, i, &d))
+			break;
+
+		name = port_name(h, &d);
+		for (int k = 0; name && k < n; k++)
+			if (!_stricmp(ports[k].path, name))
+				pi = &ports[k];
+		free(name);
+		if (!pi || pi->usb)
+			continue;
+
+		id = instance_id(d.DevInst);
+		if (!id)
+			continue;
+		_strupr(id);
+		if (!parse_id_field(id, "VID_", &pi->vid) ||
+		    !parse_id_field(id, "PID_", &pi->pid)) {
+			free(id);
+			continue;
+		}
+		pi->usb = 1;
+
+		pi->product = bus_reported_desc(h, &d);
+		if (!pi->product)
+			pi->product = registry_prop(h, &d, SPDRP_DEVICEDESC);
+
+		/* A composite device's interface (MI_xx) has its serial
+		 * number on the parent USB device. */
+		if (strstr(id, "&MI_") &&
+		    CM_Get_Parent(&parent, d.DevInst, 0) == CR_SUCCESS) {
+			char *pid_str = instance_id(parent);
+			if (pid_str) {
+				pi->serial = serial_from_instance_id(pid_str);
+				free(pid_str);
+			}
+		} else {
+			pi->serial = serial_from_instance_id(id);
+		}
+		free(id);
+
+		loc = registry_prop(h, &d, SPDRP_LOCATION_PATHS);
+		if (loc) {
+			pi->location = location_from_path(loc);
+			free(loc);
+		}
+	}
+	SetupDiDestroyDeviceInfoList(h);
+}
+
+void serial_fill_usb_info(struct serial_port_info *ports, int n)
+{
+	fill_usb_info_class(&guid_class_ports, ports, n);
+	fill_usb_info_class(&guid_class_modem, ports, n);
 }

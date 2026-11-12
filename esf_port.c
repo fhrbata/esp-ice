@@ -326,20 +326,23 @@ target_chip_t ice_chip_to_esf(enum ice_chip chip)
 
 char *esf_find_esp_port(enum ice_chip required)
 {
-	char **ports;
-	int n = serial_list_ports(&ports);
+	struct serial_port_info *ports;
+	int n = serial_list_port_info(&ports);
 
 	if (n <= 0)
 		return NULL;
+	/* Try the likeliest ports first -- the order `ice target probe`
+	 * prints. */
+	serial_sort_ports(ports, n);
 
 	char *found = NULL;
-	for (int i = 0; ports[i] && !found; i++) {
-		fprintf(stderr, "  Trying %s... ", ports[i]);
+	for (int i = 0; i < n && !found; i++) {
+		fprintf(stderr, "  Trying %s... ", ports[i].path);
 		fflush(stderr);
 
 		esf_port_t sport = {
 		    .port.ops = &esf_port_ops,
-		    .device = ports[i],
+		    .device = ports[i].path,
 		    .baudrate = 115200,
 		};
 
@@ -357,10 +360,10 @@ char *esf_find_esp_port(enum ice_chip required)
 			if (required == ICE_CHIP_UNKNOWN || chip == required) {
 				fprintf(stderr, "%s\n", ice_chip_name(chip));
 				esp_loader_reset_target(&probe);
-				size_t len = strlen(ports[i]);
+				size_t len = strlen(ports[i].path);
 				found = malloc(len + 1);
 				if (found)
-					memcpy(found, ports[i], len + 1);
+					memcpy(found, ports[i].path, len + 1);
 			} else {
 				fprintf(stderr, "%s (want %s)\n",
 					ice_chip_name(chip),
@@ -372,7 +375,7 @@ char *esf_find_esp_port(enum ice_chip required)
 		esp_loader_deinit(&probe);
 	}
 
-	serial_free_port_list(ports);
+	serial_free_port_info(ports, n);
 	return found;
 }
 

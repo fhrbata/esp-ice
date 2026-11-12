@@ -211,6 +211,7 @@ LIB_SRCS := \
 	cmd/target/partition/read/read.c \
 	cmd/target/partition/write/write.c \
 	cmd/target/partition/erase/erase.c \
+	cmd/target/probe/probe.c \
 	cmd/target/qemu/qemu.c \
 	cmd/tools/tools.c \
 	cmd/tools/install/install.c \
@@ -317,6 +318,12 @@ BUILD_CFLAGS += -isystem $(VENDOR_PREFIX)/include
 BUILD_CFLAGS += -DPCRE2_STATIC
 LIBS += -L$(VENDOR_PREFIX)/lib -lflasher -lpcre2-8
 
+# Serial port enumeration reads USB metadata from the IOKit registry
+# (platform/posix/serial.c), in dev and static builds alike.
+ifeq ($(S),macos)
+LIBS += -framework IOKit -framework CoreFoundation
+endif
+
 ifeq ($(S), win)
 
 # wmain.c provides the Windows wide-char entry point that calls into
@@ -327,7 +334,7 @@ MAIN_SRCS += platform/win/wmain.c
 SRCS      := $(MAIN_SRCS) $(LIB_SRCS)
 CFLAGS += -municode
 LDFLAGS += -municode
-LIBS += -lws2_32 -lbcrypt -lwinhttp -liphlpapi
+LIBS += -lws2_32 -lbcrypt -lwinhttp -liphlpapi -lsetupapi -lcfgmgr32
 BINARY := $(O)/$(NAME).exe
 
 else
