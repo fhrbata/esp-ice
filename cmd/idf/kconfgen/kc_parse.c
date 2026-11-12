@@ -148,6 +148,10 @@ void kc_ctx_notify(struct kc_ctx *ctx, const char *fmt, ...)
 
 const char *kc_ctx_intern_file(struct kc_ctx *ctx, const char *path)
 {
+	/* The lexer's path is already interned; match it by address first. */
+	for (size_t i = 0; i < ctx->file_names.nr; i++)
+		if (ctx->file_names.v[i] == path)
+			return ctx->file_names.v[i];
 	for (size_t i = 0; i < ctx->file_names.nr; i++)
 		if (strcmp(ctx->file_names.v[i], path) == 0)
 			return ctx->file_names.v[i];

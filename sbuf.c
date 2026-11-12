@@ -163,10 +163,12 @@ char *sbuf_strdup(const char *s)
 char *sbuf_strndup(const char *s, size_t n)
 {
 	struct sbuf sb = SBUF_INIT;
-	size_t len = strlen(s);
+	size_t len = 0;
 
-	if (len > n)
-		len = n;
+	/* Not strlen(): the lexer passes a pointer into a whole file. */
+	while (len < n && s[len])
+		len++;
+
 	sbuf_add(&sb, s, len);
 	return sbuf_detach(&sb);
 }
