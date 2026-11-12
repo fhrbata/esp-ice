@@ -92,6 +92,18 @@ int main(void)
 		tap_done("sbuf_strdup and sbuf_strndup duplicate strings");
 	}
 
+	/* sbuf_strndup reads at most n bytes, and stops early at a NUL. */
+	{
+		const char unterminated[3] = {'x', 'y', 'z'};
+		char *a = sbuf_strndup(unterminated, 2);
+		char *b = sbuf_strndup("ab\0cd", 5);
+		tap_check(a != NULL && strcmp(a, "xy") == 0);
+		tap_check(b != NULL && strcmp(b, "ab") == 0);
+		free(a);
+		free(b);
+		tap_done("sbuf_strndup stops at n bytes or at a NUL");
+	}
+
 	/* sbuf_getline reads NUL-terminated lines from a buffer in-place,
 	 * including the last line when there is no trailing newline. */
 	{
