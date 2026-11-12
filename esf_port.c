@@ -291,6 +291,14 @@ enum ice_chip ice_chip_from_esf(target_chip_t chip)
 		return ICE_CHIP_ESP32C6;
 	case ESP32P4_CHIP:
 		return ICE_CHIP_ESP32P4;
+	case ESP32C61_CHIP:
+		return ICE_CHIP_ESP32C61;
+	case ESP32S31_CHIP:
+		return ICE_CHIP_ESP32S31;
+	case ESP32H21_CHIP:
+		return ICE_CHIP_ESP32H21;
+	case ESP32H4_CHIP:
+		return ICE_CHIP_ESP32H4;
 	default:
 		return ICE_CHIP_UNKNOWN;
 	}
@@ -319,6 +327,14 @@ target_chip_t ice_chip_to_esf(enum ice_chip chip)
 		return ESP32C6_CHIP;
 	case ICE_CHIP_ESP32P4:
 		return ESP32P4_CHIP;
+	case ICE_CHIP_ESP32C61:
+		return ESP32C61_CHIP;
+	case ICE_CHIP_ESP32S31:
+		return ESP32S31_CHIP;
+	case ICE_CHIP_ESP32H21:
+		return ESP32H21_CHIP;
+	case ICE_CHIP_ESP32H4:
+		return ESP32H4_CHIP;
 	default:
 		return ESP_UNKNOWN_CHIP;
 	}
@@ -347,7 +363,7 @@ char *esf_find_esp_port(enum ice_chip required)
 		};
 
 		esp_loader_t probe;
-		if (esp_loader_init_uart(&probe, &sport.port) !=
+		if (esp_loader_init_serial(&probe, &sport.port) !=
 		    ESP_LOADER_SUCCESS) {
 			fprintf(stderr, "open failed\n");
 			continue;
@@ -390,7 +406,8 @@ const esp_loader_port_ops_t esf_port_ops = {
     .start_timer = ice_start_timer,
     .remaining_time = ice_remaining_time,
     .delay_ms = ice_delay_ms,
-    .debug_print = NULL, /* set to ice_debug_print to enable trace */
+    .log = NULL,
+    .log_hex = NULL,
     .change_transmission_rate = ice_change_rate,
     .write = ice_port_write,
     .read = ice_port_read,

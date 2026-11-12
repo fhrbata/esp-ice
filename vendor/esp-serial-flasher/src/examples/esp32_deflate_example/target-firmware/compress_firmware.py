@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Espressif Systems (Shanghai) CO LTD
+# SPDX-License-Identifier: Unlicense OR CC0-1.0
 # This code is in the Public Domain (or CC0 licensed, at your option.)
 
 """
@@ -14,9 +16,9 @@ If no arguments provided, compresses all .bin files in the script directory
 except *_deflated.bin.
 """
 
-import zlib
 import os
 import sys
+import zlib
 
 
 def compress_firmware(input_path, output_path):
@@ -78,7 +80,7 @@ def main():
         output_path = os.path.join(script_dir, output_name)
         if not compress_firmware(input_path, output_path):
             sys.exit(1)
-        print("")
+        print()
 
 
 if __name__ == "__main__":

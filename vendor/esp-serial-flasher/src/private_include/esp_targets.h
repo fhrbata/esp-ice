@@ -1,16 +1,7 @@
-/* Copyright 2020 Espressif Systems (Shanghai) PTE LTD
+/*
+ * SPDX-FileCopyrightText: 2020-2026 Espressif Systems (Shanghai) CO LTD
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * SPDX-License-Identifier: Apache-2.0
  */
 
 #pragma once
@@ -35,8 +26,24 @@ typedef struct target_registers_t {
  * only the register table is looked up and GET_SECURITY_INFO is skipped.
  * Otherwise the full UART/SPI detection sequence is used.
  */
+// ESP32-P4 chip revision v3.0 corresponds to ECO5; earlier silicon needs the rev1 stub.
+#define ESP32P4_ECO_REV3_MIN 5
+
 esp_loader_error_t loader_detect_chip(esp_loader_t *loader);
 esp_loader_error_t loader_read_mac(esp_loader_t *loader, target_chip_t target_code, uint8_t *mac);
+
+esp_loader_error_t loader_read_chip_revision(esp_loader_t *loader, target_chip_t target_code, uint16_t *revision);
 bool encryption_in_begin_flash_cmd(target_chip_t target);
 esp_loader_error_t loader_read_spi_config(esp_loader_t *loader, target_chip_t target_chip, uint32_t *spi_config);
 target_chip_t target_from_chip_id(uint32_t chip_id);
+const target_registers_t *get_esp_target_data(target_chip_t chip);
+uint32_t esp_targets_get_efuse_base(target_chip_t target);
+esp_loader_error_t get_crystal_frequency_esp32c2(esp_loader_t *loader, uint32_t *frequency);
+
+/**
+ * @brief Power on the SPI flash of an ESP32-P4 v3.1+ before it is accessed from ROM or stub.
+ *
+ * Same sequence as esptool's ESP32P4ROM.power_on_flash(), also applied to revisions above v3.2,
+ * whose ROM can safely re-run its own power-on. Not usable in secure download mode.
+ */
+esp_loader_error_t loader_power_on_flash_esp32p4(esp_loader_t *loader);

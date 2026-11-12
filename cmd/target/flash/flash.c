@@ -277,7 +277,7 @@ int cmd_target_flash(int argc, const char **argv)
 	int n_flashed = 0;
 
 	esp_loader_t loader;
-	esp_loader_error_t err = esp_loader_init_uart(&loader, &sport.port);
+	esp_loader_error_t err = esp_loader_init_serial(&loader, &sport.port);
 	if (err != ESP_LOADER_SUCCESS) {
 		fprintf(stderr, "ice target flash: failed to open %s\n",
 			opt_port);

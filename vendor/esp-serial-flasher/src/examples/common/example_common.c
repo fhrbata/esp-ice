@@ -1,16 +1,7 @@
-/* Copyright 2020-2024 Espressif Systems (Shanghai) CO LTD
+/*
+ * SPDX-FileCopyrightText: 2020-2026 Espressif Systems (Shanghai) CO LTD
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * SPDX-License-Identifier: Apache-2.0
  */
 
 #include <stdio.h>
@@ -39,7 +30,11 @@ static const uint32_t bootloader_addresses[] = {
     [ESP32C5_CHIP] = 0x2000,
     [ESP32H2_CHIP] = 0x0,
     [ESP32C6_CHIP] = 0x0,
-    [ESP32P4_CHIP] = 0x2000
+    [ESP32P4_CHIP] = 0x2000,
+    [ESP32C61_CHIP] = 0x0,
+    [ESP32S31_CHIP] = 0x2000,
+    [ESP32H21_CHIP] = 0x0,
+    [ESP32H4_CHIP] = 0x2000
 };
 
 // If someone adds a new chip but forgets to update the array, compilation FAILS
@@ -95,9 +90,7 @@ esp_loader_error_t connect_to_target(esp_loader_t *loader, uint32_t higher_trans
     return ESP_LOADER_SUCCESS;
 }
 
-esp_loader_error_t connect_to_target_with_stub(esp_loader_t *loader,
-        const uint32_t current_transmission_rate,
-        const uint32_t higher_transmission_rate)
+esp_loader_error_t connect_to_target_with_stub(esp_loader_t *loader, uint32_t higher_transmission_rate)
 {
     esp_loader_connect_args_t connect_config = ESP_LOADER_CONNECT_DEFAULT();
 
@@ -119,13 +112,10 @@ esp_loader_error_t connect_to_target_with_stub(esp_loader_t *loader,
     }
     printf("Connected to target\n");
 
-    if (higher_transmission_rate != current_transmission_rate) {
-        err = esp_loader_change_transmission_rate_stub(loader,
-                current_transmission_rate,
-                higher_transmission_rate);
-
+    if (higher_transmission_rate && esp_loader_get_target(loader) != ESP8266_CHIP) {
+        err = esp_loader_change_transmission_rate(loader, higher_transmission_rate);
         if (err == ESP_LOADER_ERROR_UNSUPPORTED_FUNC) {
-            printf("Interface does not support changing transmission rate via stub.\n");
+            printf("Interface does not support changing transmission rate.\n");
         } else if (err != ESP_LOADER_SUCCESS) {
             printf("Unable to change transmission rate. Error: %s\n", get_error_string(err));
             return err;

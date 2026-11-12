@@ -273,7 +273,7 @@ int pt_target_connect(esp_loader_t *loader, esf_port_t *sport, const char *port,
 	printf("Connecting to @b{%s}...\n", port);
 	fflush(stdout);
 
-	err_ = esp_loader_init_uart(loader, &sport->port);
+	err_ = esp_loader_init_serial(loader, &sport->port);
 	if (err_ != ESP_LOADER_SUCCESS) {
 		err("failed to open %s", port);
 		return -1;

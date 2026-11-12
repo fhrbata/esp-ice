@@ -153,11 +153,14 @@ python -m idf_build_apps build -v -p . \
 ```
 src/                    # Core library implementation
 ├── esp_loader.c       # Main API implementation
-├── protocol_uart.c   # UART communication protocol
+├── protocol_uart.c   # SLIP serial protocol (UART, USB CDC-ACM, …)
 ├── protocol_spi.c    # SPI communication protocol
 ├── protocol_sdio.c   # SDIO communication protocol
 ├── esp_targets.c     # Target chip definitions
-├── esp_stubs.c       # Flash stub binaries
+├── stubs/            # Per-chip flash stub binaries (auto-generated)
+│   ├── esp_stub_esp32.c
+│   ├── esp_stub_esp32c2.c
+│   └── ...           # one file per supported chip + esp_stubs_table.c
 └── md5_hash.c        # Optional MD5 verification
 
 include/               # Public API headers
@@ -196,8 +199,7 @@ port/                  # Platform-specific implementations
 
 In v2 there are no compile-time interface flags. The protocol is selected at runtime by calling the appropriate init function before any other `esp_loader_*` call:
 
-- `esp_loader_init_uart(&loader, &port.port)` — UART
-- `esp_loader_init_usb(&loader, &port.port)` — USB CDC-ACM
+- `esp_loader_init_serial(&loader, &port.port)` — SLIP serial (UART, USB CDC-ACM, …)
 - `esp_loader_init_spi(&loader, &port.port)` — SPI (RAM download only)
 - `esp_loader_init_sdio(&loader, &port.port)` — SDIO (experimental)
 

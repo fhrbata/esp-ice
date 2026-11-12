@@ -23,59 +23,66 @@ This library enables you to program Espressif SoCs from various host platforms u
 - **SDIO** - Secure Digital Input/Output (experimental)
 
 > [!NOTE]
-> SDIO interface is experimental and currently supports only ESP32-C5 and ESP32-C6 as target. The implementation uses a custom stub that will be made available as part of the migration to [esp-flasher-stub](https://github.com/espressif/esp-flasher-stub).
+> SDIO interface is experimental and currently supports only ESP32-C5 and ESP32-C6 as target. It uses [esp-flasher-stub](https://github.com/espressif/esp-flasher-stub) and supports the full stub command protocol over SDIO.
 
 ### Supported Host Platforms (device running this library and performing flashing)
 
 - **STM32** microcontrollers
 - **ESP32 series** microcontrollers
 - **Zephyr OS** compatible devices
-- **Raspberry Pi Pico** (RP2040)
+- **Raspberry Pi Pico** (RP2040) and **Raspberry Pi Pico 2** (RP2350)
 - **Linux** (via UART or USB serial port, with optional GPIO control)
 
 ### Supported Target Devices (ESP device being flashed)
 
-|  Target  | UART | SPI | SDIO | USB CDC ACM |
-| :------: | :--: | :-: | :--: | :---------: |
-| ESP8266  |  ✅  | ❌  |  ❌  |     ❌      |
-|  ESP32   |  ✅  | ❌  |  🚧  |     ❌      |
-| ESP32-S2 |  ✅  | ❌  |  ❌  |     ❌      |
-| ESP32-S3 |  ✅  | ✅  |  ❌  |     ✅      |
-| ESP32-C2 |  ✅  | ✅  |  ❌  |     ❌      |
-| ESP32-C3 |  ✅  | ✅  |  ❌  |     ✅      |
-| ESP32-H2 |  ✅  | ✅  |  ❌  |     ✅      |
-| ESP32-C6 |  ✅  | ❌  |  ✅  |     ✅      |
-| ESP32-C5 |  ✅  | ❌  |  ✅  |     ✅      |
-| ESP32-P4 |  ✅  | 🚧  |  ❌  |     ✅      |
+|  Target   | UART | SPI | SDIO | USB CDC ACM |
+| :-------: | :--: | :-: | :--: | :---------: |
+|  ESP8266  |  ✅  | ❌  |  ❌  |     ❌      |
+|   ESP32   |  ✅  | ❌  |  🚧  |     ❌      |
+| ESP32-S2  |  ✅  | ❌  |  ❌  |     ❌      |
+| ESP32-S3  |  ✅  | ✅  |  ❌  |     ✅      |
+| ESP32-C2  |  ✅  | ✅  |  ❌  |     ❌      |
+| ESP32-C3  |  ✅  | ✅  |  ❌  |     ✅      |
+| ESP32-H2  |  ✅  | ✅  |  ❌  |     ✅      |
+| ESP32-H21 |  ✅  | 🚧  |  ❌  |     ✅      |
+| ESP32-C6  |  ✅  | ❌  |  ✅  |     ✅      |
+| ESP32-C5  |  ✅  | ❌  |  ✅  |     ✅      |
+| ESP32-P4  |  ✅  | 🚧  |  ❌  |     ✅      |
+| ESP32-C61 |  ✅  | ❌  |  🚧  |     ✅      |
+| ESP32-S31 |  ✅  | ❌  |  ❌  |     ✅      |
+| ESP32-H4  |  ✅  | 🚧  |  ❌  |     ✅      |
 
 **Legend**: ✅ Supported | ❌ Not supported | 🚧 Under development
-
-> [!NOTE]
-> **Stub support**: ESP8266, ESP32-C5, and ESP32-P4 stub support is under development
 
 ### Feature Support by Interface
 
 |             Feature              | UART | USB CDC ACM | SPI | SDIO |
 | :------------------------------: | :--: | :---------: | :-: | :--: |
 |     Connect (ROM bootloader)     |  ✅  |     ✅      | ✅  |  ✅  |
-|        Connect with stub         |  ✅  |     ✅      | ❌  |  ❌  |
+|        Connect with stub         |  ✅  |     ✅      | ❌  |  ✅  |
 |       Secure Download Mode       |  ✅  |     ✅      | ❌  |  ❌  |
 |           Flash write            |  ✅  |     ✅      | ❌  |  ✅  |
-| Compressed flash write (deflate) |  🔶  |     🔶      | ❌  |  ❌  |
-|        Flash read (fast)         |  🔶  |     🔶      | ❌  |  ❌  |
+| Compressed flash write (deflate) |  🔶  |     🔶      | ❌  |  ✅  |
+|        Flash read (fast)         |  🔶  |     🔶      | ❌  |  ✅  |
 |        Flash read (slow)         |  ✅  |     ✅      | ❌  |  ❌  |
 |        Flash erase (chip)        |  ✅  |     ✅      | ❌  |  ✅  |
-|       Flash erase (region)       |  ✅  |     ✅      | ❌  |  ❌  |
+|       Flash erase (region)       |  ✅  |     ✅      | ❌  |  ✅  |
 |         Flash MD5 verify         |  ✅  |     ✅      | ❌  |  ✅  |
 |           RAM download           |  ✅  |     ✅      | ✅  |  ✅  |
-|        Get security info         |  ✅  |     ✅      | ❌  |  ❌  |
+|        Get security info         |  ✅  |     ✅      | ❌  |  ✅  |
 |     Change baud / clock rate     |  ✅  |     ✅      | ❌  |  ❌  |
+|              eFuse               |  ✅  |     ✅      | ❌  |  ✅  |
 
 **Legend**: ✅ Supported | ❌ Not supported | 🔶 Requires connecting with stub (`esp_loader_connect_with_stub()`)
 
+eFuse read and burn are supported on all target devices above except ESP8266. See the [eFuse Guide](docs/efuse.md) for the per-chip capability matrix and the staged-write model.
+
+> [!TIP]
+> Connecting with stub (`esp_loader_connect_with_stub()`) is recommended over the plain ROM bootloader connection when flash size on the host is not a limiting constraint. The stub unlocks faster flashing speeds (higher baud rates), flash sizes larger than 2 MB, compressed writes (deflate), and fast flash read. SDIO connects through the stub automatically. All supported chips now have a bundled stub. See [Flash Size Footprint](#flash-size-footprint) for the flash overhead introduced by the bundled stubs.
+
 ### Public API
 
-- Public headers: [include/esp_loader.h](include/esp_loader.h), [include/esp_loader_io.h](include/esp_loader_io.h), and [include/esp_loader_error.h](include/esp_loader_error.h) define the stable public API of this library.
+- Public headers: [include/esp_loader.h](include/esp_loader.h), [include/esp_loader_io.h](include/esp_loader_io.h), [include/esp_loader_error.h](include/esp_loader_error.h), and [include/esp_loader_efuse.h](include/esp_loader_efuse.h) define the stable public API of this library.
 - Examples and helpers: [examples/common/](examples/common/) contains helper utilities used by the examples; not part of the library API, but can be used as a reference.
 
 ### Versioning and Compatibility
@@ -132,7 +139,7 @@ esp32_port_t port = {
 
 // 2. Initialize the loader context — binds the protocol and port vtable
 esp_loader_t loader;
-err = esp_loader_init_uart(&loader, &port.port);
+err = esp_loader_init_serial(&loader, &port.port);
 if (err != ESP_LOADER_SUCCESS) return err;
 
 // 3. Connect to the target chip
@@ -175,7 +182,7 @@ For complete implementation examples, see the [examples](examples/) directory:
 - [STM32 Example](examples/stm32_example/) - STM32 setup guide
 - [Linux Example](examples/linux_example/) - Linux host (PC or SBC such as Raspberry Pi)
 - [Zephyr Example](examples/zephyr_example/) - Zephyr OS integration
-- [Raspberry Pi Pico Example](examples/pi_pico_example/) - RP2040 as host
+- [Raspberry Pi Pico Example](examples/pi_pico_example/) - RP2040 or RP2350 as host
 - [ESF Demo](https://github.com/Dzarda7/esf-demo) - End-to-end demo flashing ESP targets from an embedded host (M5Stack Dial) over USB CDC ACM; includes SD card image selection and on-device progress UI
 
 ### Educational Resources
@@ -198,6 +205,58 @@ cmake -DSERIAL_FLASHER_WRITE_BLOCK_RETRIES=5 ..
 
 For complete configuration reference, see [Configuration Documentation](docs/configuration.md).
 
+## Flash Size Footprint
+
+The library carries data for every supported chip — bundled stub binaries, eFuse field tables — but it is written so that you only pay for what you call. Data is split per chip and per feature into separate translation units and sections, so the linker keeps only what your application actually references.
+
+### Build With Section Garbage Collection
+
+```bash
+-ffunction-sections -fdata-sections      # compiler
+-Wl,--gc-sections                        # linker
+```
+
+**These flags are recommended for every build.** ESP-IDF and Zephyr enable them by default; for plain CMake builds add them yourself. Without them the linker's granularity drops to whole object files, and unused per-chip data can be linked into your image even though nothing calls it.
+
+### What Costs What
+
+Rough orders of magnitude, to decide what is worth caring about. These move with upstream chip support, so measure your own build (`size -A`, or `nm --print-size --size-sort` on the final ELF) rather than budgeting against the numbers here:
+
+| Component                   | Order of magnitude          | Pulled in by                                                     |
+| :-------------------------- | :-------------------------- | :--------------------------------------------------------------- |
+| Library code                | a few KB of `.text`         | always                                                           |
+| All bundled flasher stubs   | ~87 KB of rodata            | `esp_loader_connect_with_stub()`                                 |
+| Flasher stub, per chip      | ~6–12 KiB of rodata         | a provider returning one public `esp_stub_<chip>` descriptor     |
+| SDIO stubs                  | ~20 KB of rodata            | `esp_loader_init_sdio()` — the ESP32-C5 and ESP32-C6 stubs       |
+| eFuse field table, per chip | a few KB of rodata          | referencing a named field of that chip                           |
+| eFuse field tables          | roughly stub-sized in total | `esp_loader_efuse_get_field_info()` — every chip's table at once |
+
+### Keeping It Small
+
+- **Skip the stub** — call only `esp_loader_connect()` and never `esp_loader_connect_with_stub()`. The bundled provider lives in a separate object, so a static-library link does not pull it or the stub data into the application. Note that the stub is otherwise recommended: it unlocks higher baud rates, flash larger than 2 MB, compressed writes, and fast flash read.
+- **Use one bundled stub** — call `esp_loader_connect_with_stub_provider()` with a provider that returns the required public `esp_stub_<chip>` descriptor. Linker garbage collection can then retain only that chip's stub object.
+- **Load a custom stub from external storage** — call `esp_loader_connect_with_stub_provider()` with a provider that loads and returns the stub for the detected chip. Because this API references no bundled stub symbols, the built-in stub data is not linked.
+- **Do not initialise SDIO if you do not use it** — the SDIO path references the ESP32-C5 and ESP32-C6 stubs directly, so those are linked once `esp_loader_init_sdio()` is reachable. (On ESP-IDF, `CONFIG_SERIAL_FLASHER_PORT_SDIO` additionally controls whether the ESP32 SDIO *port* is compiled; it does not gate the stub data, and it does not exist in plain CMake builds.)
+- **Reference eFuse fields for the chips you actually talk to** — each chip's field table is its own translation unit, so using e.g. `ESP32C6_EFUSE_MAC` links the ESP32-C6 table only. The raw-read, bit, key, and burn paths address eFuses by block and bit position and reference no field table at all.
+- **Avoid `esp_loader_efuse_get_field_info()` unless you need it** — resolving a chip and revision to its full field metadata names *every* chip's table and links all of them. It lives in its own translation unit so applications that never call it pay nothing.
+- **If you cannot use `--gc-sections`** — exclude what you do not need at the CMake level: drop the stub `.c` files, or the `src/efuse/<chip>/` tables, from the sources list when integrating the library as a subdirectory or submodule.
+
+For example, a provider can select one bundled stub without pulling in the others:
+
+```c
+#include "esp_loader_stubs.h"
+
+static const esp_stub_t *esp32s3_stub(esp_loader_t *loader, target_chip_t chip, void *ctx)
+{
+    (void)loader;
+    (void)ctx;
+    return chip == ESP32S3_CHIP ? &esp_stub_esp32s3 : NULL;
+}
+
+esp_loader_connect_args_t args = ESP_LOADER_CONNECT_DEFAULT();
+esp_loader_connect_with_stub_provider(&loader, &args, esp32s3_stub, NULL);
+```
+
 ## Hardware Connections
 
 Each communication interface has specific hardware connection requirements and pin configurations. For complete wiring diagrams, pin assignments, and interface-specific setup instructions, see [Hardware Connections Guide](docs/hardware-connections.md).
@@ -215,6 +274,8 @@ If you want to add support for a new host platform, see [Supporting New Host Pla
 ## License
 
 This project is licensed under the Apache 2.0 License - see the [LICENSE](LICENSE) file for details.
+
+This repository includes precompiled stub binaries from [esp-flasher-stub](https://github.com/espressif/esp-flasher-stub), which are licensed under the Apache 2.0 OR MIT license.
 
 ## Known Limitations
 

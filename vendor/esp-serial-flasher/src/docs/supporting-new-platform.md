@@ -33,7 +33,11 @@ typedef struct {
     void               (*start_timer)(esp_loader_port_t *port, uint32_t ms);
     uint32_t           (*remaining_time)(esp_loader_port_t *port);
     void               (*delay_ms)(esp_loader_port_t *port, uint32_t ms);
-    void               (*debug_print)(esp_loader_port_t *port, const char *str); /* NULL = no debug */
+    void               (*log)(esp_loader_port_t *port, esp_loader_log_level_t level,
+                              const char *fmt, va_list args); /* NULL = no text output */
+    void               (*log_hex)(esp_loader_port_t *port, esp_loader_log_level_t level,
+                                  const char *label, const uint8_t *data,
+                                  size_t size); /* NULL = no hex output */
     esp_loader_error_t (*change_transmission_rate)(esp_loader_port_t *port, uint32_t rate); /* NULL if unsupported */
 
     /* UART / USB / SPI */
@@ -63,7 +67,7 @@ esp_loader_error_t (*init)(esp_loader_port_t *port);
 void               (*deinit)(esp_loader_port_t *port);
 ```
 
-`init` is called automatically by `esp_loader_init_uart()` / `esp_loader_init_spi()` / etc. before the connection phase. Use it to open the serial port, configure GPIO, install peripheral drivers, etc.
+`init` is called automatically by `esp_loader_init_serial()` / `esp_loader_init_spi()` / etc. before the connection phase. Use it to open the serial port, configure GPIO, install peripheral drivers, etc.
 
 `deinit` is invoked by calling `esp_loader_deinit(&loader)` when the loader is no longer needed. This tears down the peripheral and zeroes the loader context. Set `deinit` to `NULL` if the peripheral is already configured before the port struct is created (e.g. STM32 with CubeMX-generated HAL code) or if teardown is not needed — `esp_loader_deinit()` is a no-op when the callback is NULL.
 
@@ -82,6 +86,10 @@ Transmit / receive bytes over the transport.
 
 - Block until all bytes are sent / received or `timeout` (ms) elapses.
 - Return `ESP_LOADER_SUCCESS` on success, `ESP_LOADER_ERROR_TIMEOUT` on timeout.
+- Accept regular byte buffers from the protocol layer. If the hardware driver has DMA,
+  cache, or word-alignment requirements, handle them inside the port implementation
+  (for example by using the platform driver's aligned-buffer support or a port-local
+  bounce buffer).
 
 Not present for SDIO — use `sdio_write` / `sdio_read` instead.
 
@@ -133,13 +141,18 @@ Blocking delay in milliseconds.
 
 ---
 
-### `debug_print` (optional)
+### `log` / `log_hex` (optional)
 
 ```c
-void (*debug_print)(esp_loader_port_t *port, const char *str);
+void (*log)(esp_loader_port_t *port, esp_loader_log_level_t level,
+            const char *fmt, va_list args);
+void (*log_hex)(esp_loader_port_t *port, esp_loader_log_level_t level,
+                const char *label, const uint8_t *data, size_t size);
 ```
 
-Route library debug messages to your platform's console/logger. Set to `NULL` to suppress all output.
+Route library messages to your platform's console or logger. `log` receives printf-style text without a trailing newline; `log_hex` receives binary buffers for transfer dumps at the supplied level. The built-in ports print hex dump headers with the same level prefix as text logs. Set either callback to `NULL` to suppress that output class.
+
+Logging is compiled according to `SERIAL_FLASHER_LOG_LEVEL` / `CONFIG_SERIAL_FLASHER_LOG_LEVEL_*`. The default level is WARN, so DEBUG command traces and hex dumps are not included unless the build selects DEBUG.
 
 ---
 
@@ -176,6 +189,8 @@ esp_loader_error_t (*sdio_card_init)(esp_loader_port_t *port);
 ```
 
 These replace `write`/`read` for SDIO. `sdio_card_init` performs bus-level card initialisation and is called once per connection (before `enter_bootloader`).
+
+As with the regular `write`/`read` callbacks, `sdio_write` and `sdio_read` must accept ordinary byte buffers from the protocol layer. Any alignment required by the host controller or DMA engine belongs in the port implementation. The ESP-IDF SDIO port enables `SDMMC_HOST_FLAG_ALLOC_ALIGNED_BUF` so the SDMMC host driver can handle unaligned buffers.
 
 ---
 
@@ -267,7 +282,8 @@ const esp_loader_port_ops_t your_platform_ops = {
     .start_timer              = your_start_timer,
     .remaining_time           = your_remaining_time,
     .delay_ms                 = your_delay_ms,
-    .debug_print              = NULL,
+    .log                      = NULL,
+    .log_hex                  = NULL,
     .change_transmission_rate = NULL,
     .write                    = your_write,
     .read                     = your_read,
@@ -364,7 +380,7 @@ int main(void)
     };
 
     esp_loader_t loader;
-    esp_loader_init_uart(&loader, &port.port);
+    esp_loader_init_serial(&loader, &port.port);
 
     esp_loader_connect_args_t args = ESP_LOADER_CONNECT_DEFAULT();
     esp_loader_connect(&loader, &args);

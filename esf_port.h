@@ -27,7 +27,7 @@ struct serial;
  * @brief Concrete ice serial port instance.
  *
  * Fill @c device and @c baudrate, set @c port.ops = &esf_port_ops,
- * then pass @c &p.port to esp_loader_init_uart().
+ * then pass @c &p.port to esp_loader_init_serial().
  *
  * @code
  *   esf_port_t p = {
@@ -36,14 +36,15 @@ struct serial;
  *       .baudrate = 115200,
  *   };
  *   esp_loader_t loader;
- *   esp_loader_init_uart(&loader, &p.port);
+ *   esp_loader_init_serial(&loader, &p.port);
  * @endcode
  */
 typedef struct {
 	esp_loader_port_t
 	    port; /*!< Embedded base; pass &port to esp_loader_init_* */
 
-	/* Public configuration — fill before calling esp_loader_init_uart() */
+	/* Public configuration — fill before calling esp_loader_init_serial()
+	 */
 	const char *device; /*!< Serial device path, e.g. "/dev/ttyUSB0" */
 	unsigned baudrate;  /*!< Initial baud rate, e.g. 115200 */
 

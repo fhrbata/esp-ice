@@ -8,8 +8,8 @@ bridging to its platform serial abstraction.
 ## Upstream
 
 - Repository: https://github.com/espressif/esp-serial-flasher
-- Commit:     `6c2bcc406b80`
-- Date:       2026-04-16
+- Commit:     `ddf3cdd8fa87` (v2.1.0 + ESP32-P4 v3.1 flash power-on fix)
+- Date:       2026-10-22
 - License:    Apache-2.0 (see `src/LICENSE`)
 
 ## Build

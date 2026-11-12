@@ -1,40 +1,17 @@
-/* Copyright 2020-2024 Espressif Systems (Shanghai) CO LTD
+/*
+ * SPDX-FileCopyrightText: 2020-2026 Espressif Systems (Shanghai) CO LTD
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * SPDX-License-Identifier: Apache-2.0
  */
 
 #include "esp32_sdio_port.h"
+#include "loader_port_stdio_log.h"
 #include "driver/gpio.h"
 #include "esp_timer.h"
+#include <stdlib.h>
 #include <unistd.h>
 
-#define WORD_ALIGNED(ptr) ((size_t)ptr % sizeof(size_t) == 0)
-
-#if SERIAL_FLASHER_DEBUG_TRACE
-static void transfer_debug_print(const uint8_t *data, uint16_t size, bool write)
-{
-    static bool write_prev = false;
-
-    if (write_prev != write) {
-        write_prev = write;
-        printf("\n--- %s ---\n", write ? "WRITE" : "READ");
-    }
-
-    for (uint32_t i = 0; i < size; i++) {
-        printf("%02x ", data[i]);
-    }
-}
-#endif
+LOADER_PORT_STDIO_LOG_CALLBACK(esp32_sdio_log, "esf-sdio");
 
 static esp_loader_error_t esp32_sdio_port_init(esp_loader_port_t *port)
 {
@@ -42,12 +19,9 @@ static esp_loader_error_t esp32_sdio_port_init(esp_loader_port_t *port)
 
     p->_card_config = (sdmmc_host_t)SDMMC_HOST_DEFAULT();
     p->_card_config.flags = p->bus_width == SDIO_1BIT ? SDMMC_HOST_FLAG_1BIT : SDMMC_HOST_FLAG_4BIT;
+    p->_card_config.flags |= SDMMC_HOST_FLAG_ALLOC_ALIGNED_BUF;
     p->_card_config.max_freq_khz = p->max_freq_khz;
     p->_card_config.slot = p->slot;
-
-#if SOC_CACHE_INTERNAL_MEM_VIA_L1CACHE
-    p->_card_config.flags |= SDMMC_HOST_FLAG_ALLOC_ALIGNED_BUF;
-#endif
 
     if (!p->dont_initialize_host_driver) {
         if (sdmmc_host_init() != ESP_OK) {
@@ -88,10 +62,10 @@ static void esp32_sdio_port_deinit(esp_loader_port_t *port)
 {
     esp32_sdio_port_t *p = container_of(port, esp32_sdio_port_t, port);
 
+    free(p->_card.host.dma_aligned_buffer);
+    p->_card.host.dma_aligned_buffer = NULL;
+
     if (p->_host_driver_needs_deinit) {
-#if SOC_CACHE_INTERNAL_MEM_VIA_L1CACHE
-        free(p->_card.host.dma_aligned_buffer);
-#endif
         sdmmc_host_deinit();
         p->_host_driver_needs_deinit = false;
     }
@@ -105,16 +79,13 @@ static esp_loader_error_t esp32_sdio_write(esp_loader_port_t *port, uint32_t fun
     esp32_sdio_port_t *p = container_of(port, esp32_sdio_port_t, port);
     (void)timeout;
 
-    if (data == NULL || !WORD_ALIGNED(data)) {
+    if (data == NULL) {
         return ESP_LOADER_ERROR_INVALID_PARAM;
     }
 
     esp_err_t err = sdmmc_io_write_bytes(&p->_card, function, addr, data, (size_t)size);
 
     if (err == ESP_OK) {
-#if SERIAL_FLASHER_DEBUG_TRACE
-        transfer_debug_print(data, size, true);
-#endif
         return ESP_LOADER_SUCCESS;
     } else if (err == ESP_ERR_TIMEOUT) {
         return ESP_LOADER_ERROR_TIMEOUT;
@@ -129,16 +100,13 @@ static esp_loader_error_t esp32_sdio_read(esp_loader_port_t *port, uint32_t func
     esp32_sdio_port_t *p = container_of(port, esp32_sdio_port_t, port);
     (void)timeout;
 
-    if (data == NULL || !WORD_ALIGNED(data)) {
+    if (data == NULL) {
         return ESP_LOADER_ERROR_INVALID_PARAM;
     }
 
     esp_err_t err = sdmmc_io_read_bytes(&p->_card, function, addr, data, (size_t)size);
 
     if (err == ESP_OK) {
-#if SERIAL_FLASHER_DEBUG_TRACE
-        transfer_debug_print(data, size, false);
-#endif
         return ESP_LOADER_SUCCESS;
     } else if (err == ESP_ERR_TIMEOUT) {
         return ESP_LOADER_ERROR_TIMEOUT;
@@ -199,12 +167,6 @@ static void esp32_sdio_enter_bootloader(esp_loader_port_t *port)
     gpio_set_level(p->boot_pin, 1);
 }
 
-static void esp32_sdio_debug_print(esp_loader_port_t *port, const char *str)
-{
-    (void)port;
-    printf("DEBUG: %s\n", str);
-}
-
 esp_loader_error_t loader_port_wait_int(esp32_sdio_port_t *port, uint32_t timeout)
 {
     if (sdmmc_io_wait_int(&port->_card, timeout) == ESP_OK) {
@@ -222,7 +184,8 @@ const esp_loader_port_ops_t esp32_sdio_ops = {
     .start_timer              = esp32_sdio_start_timer,
     .remaining_time           = esp32_sdio_remaining_time,
     .delay_ms                 = esp32_sdio_delay_ms,
-    .debug_print              = esp32_sdio_debug_print,
+    .log                      = esp32_sdio_log,
+    .log_hex                  = loader_port_stdio_log_hex,
     .change_transmission_rate = NULL,
     .sdio_write               = esp32_sdio_write,
     .sdio_read                = esp32_sdio_read,
