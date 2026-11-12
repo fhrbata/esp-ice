@@ -1,3 +1,8 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Espressif Systems (Shanghai) CO LTD
+ *
+ * SPDX-License-Identifier: Unlicense OR CC0-1.0
+ */
 /* Flashing multiple partitions over USB CDC ACM interface
 
    This example code is in the Public Domain (or CC0 licensed, at your option.)
@@ -101,7 +106,7 @@ void app_main(void)
 
     while (true) {
         ESP_LOGI(TAG, "Opening CDC ACM device 0x%04X:0x%04X...", port.device_vid, port.device_pid);
-        if (esp_loader_init_usb(&loader, &port.port) != ESP_LOADER_SUCCESS) {
+        if (esp_loader_init_serial(&loader, &port.port) != ESP_LOADER_SUCCESS) {
             continue;
         }
 

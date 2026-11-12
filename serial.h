@@ -138,10 +138,11 @@ void serial_complete_port(void);
 /**
  * @brief Pick a sensible default serial port without opening or probing.
  *
- * Calls @ref serial_list_ports and ranks each candidate by name to
- * pick the most likely "ESP UART bridge" first, falling back to
- * native USB-Serial/JTAG CDC and finally to anything else.  Filters
- * out paths that look like Bluetooth / system consoles on macOS.
+ * Returns the first port in @ref serial_sort_ports order: the most
+ * likely "ESP UART bridge" first (by USB vendor ID when the OS reports
+ * one, by name otherwise), then native USB-Serial/JTAG CDC, then
+ * anything else.  Paths that look like Bluetooth / system consoles on
+ * macOS are never picked.
  *
  * Strictly read-only -- no @c open(), no @c TIOCMSET, no ROM-mode
  * handshake -- so it never resets a running chip.  Used by porcelain
@@ -163,10 +164,77 @@ char *serial_pick_default_port(void);
 void serial_complete_baud(void);
 
 /**
+ * @brief One host serial port and what the OS reports about it.
+ *
+ * Every string member is a heap string or @c NULL when the system
+ * does not report the value.  The USB members are only meaningful
+ * when @c usb is non-zero; a port that is not on USB (a built-in
+ * UART, a Bluetooth port) has @c usb == 0 and all of them @c NULL.
+ */
+struct serial_port_info {
+	char *path;	  /**< "/dev/ttyUSB0", "/dev/cu.usbserial-1", "COM3" */
+	int usb;	  /**< 1 when @c vid / @c pid are valid */
+	unsigned int vid; /**< USB vendor ID */
+	unsigned int pid; /**< USB product ID */
+	char *product;	  /**< USB product string */
+	char *manufacturer;  /**< USB manufacturer string */
+	char *serial;	     /**< USB serial number string */
+	char *location;	     /**< USB topology, e.g. "1-1.2:1.0" */
+	char *usb_interface; /**< USB interface name, if the device has one */
+};
+
+/**
+ * @brief Enumerate serial ports together with their USB metadata.
+ *
+ * Lists the same ports as @ref serial_list_ports and adds what the OS
+ * knows about each one: sysfs on Linux, the IOKit registry on macOS,
+ * SetupAPI on Windows.  No port is opened, so it is safe to call
+ * while another program holds a device.
+ *
+ * @param[out] out  Receives a newly-allocated array; @c NULL when the
+ *                  count is 0 or on failure.  Release it with
+ *                  @ref serial_free_port_info.
+ * @return          Number of entries (>= 0), or -errno on failure.
+ */
+int serial_list_port_info(struct serial_port_info **out);
+
+/**
+ * @brief Fill in the USB metadata of the given ports (platform layer).
+ *
+ * Only @c path has to be set on entry; every other member must be
+ * zero.  Ports the OS reports nothing for keep @c usb == 0.  Cost
+ * grows with @p n on Linux (a sysfs walk per port); on macOS and
+ * Windows it is one pass over the OS's serial device list whatever
+ * @p n is.
+ *
+ * @param ports  Ports to fill.
+ * @param n      Number of entries in @p ports.
+ */
+void serial_fill_usb_info(struct serial_port_info *ports, int n);
+
+/**
+ * @brief Free an array returned by @ref serial_list_port_info.
+ *
+ * @param ports  Array to free (may be @c NULL).
+ * @param n      Number of entries in @p ports.
+ */
+void serial_free_port_info(struct serial_port_info *ports, int n);
+
+/**
+ * @brief Sort ports so the most likely ESP device comes first.
+ *
+ * USB-UART bridges first, then Espressif USB-Serial/JTAG / CDC ports,
+ * then everything else; ports of equal rank in natural path order
+ * ("COM9" before "COM10").  @ref serial_pick_default_port picks the
+ * first entry of this order.
+ */
+void serial_sort_ports(struct serial_port_info *ports, int n);
+
+/**
  * @brief Read the USB VID and PID for a serial device.
  *
- * On Linux this is read from sysfs.  On other platforms the function
- * always returns -1.
+ * Fills in @p device alone with @ref serial_fill_usb_info -- no other
+ * port is enumerated.
  *
  * @param device  Device path, e.g. "/dev/ttyACM0".
  * @param vid     Receives the USB Vendor ID.

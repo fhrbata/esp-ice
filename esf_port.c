@@ -14,6 +14,7 @@
  */
 #include "esf_port.h"
 #include "chip.h"
+#include "error.h"
 #include "esp_loader.h"	   /* RETURN_ON_ERROR, ESP_LOADER_* */
 #include "esp_loader_io.h" /* container_of, esp_loader_port_t */
 #include "json.h"
@@ -291,6 +292,14 @@ enum ice_chip ice_chip_from_esf(target_chip_t chip)
 		return ICE_CHIP_ESP32C6;
 	case ESP32P4_CHIP:
 		return ICE_CHIP_ESP32P4;
+	case ESP32C61_CHIP:
+		return ICE_CHIP_ESP32C61;
+	case ESP32S31_CHIP:
+		return ICE_CHIP_ESP32S31;
+	case ESP32H21_CHIP:
+		return ICE_CHIP_ESP32H21;
+	case ESP32H4_CHIP:
+		return ICE_CHIP_ESP32H4;
 	default:
 		return ICE_CHIP_UNKNOWN;
 	}
@@ -319,32 +328,102 @@ target_chip_t ice_chip_to_esf(enum ice_chip chip)
 		return ESP32C6_CHIP;
 	case ICE_CHIP_ESP32P4:
 		return ESP32P4_CHIP;
+	case ICE_CHIP_ESP32C61:
+		return ESP32C61_CHIP;
+	case ICE_CHIP_ESP32S31:
+		return ESP32S31_CHIP;
+	case ICE_CHIP_ESP32H21:
+		return ESP32H21_CHIP;
+	case ICE_CHIP_ESP32H4:
+		return ESP32H4_CHIP;
 	default:
 		return ESP_UNKNOWN_CHIP;
 	}
 }
 
+esp_loader_error_t esf_connect(esp_loader_t *loader, int no_stub)
+{
+	esp_loader_connect_args_t args = ESP_LOADER_CONNECT_DEFAULT();
+
+	if (no_stub)
+		return esp_loader_connect(loader, &args);
+	return esp_loader_connect_with_stub(loader, &args);
+}
+
+int esf_open(esp_loader_t *loader, esf_port_t *sport, const char *port,
+	     int baud, int no_stub, char **autoport_out)
+{
+	esp_loader_error_t lerr;
+
+	*autoport_out = NULL;
+
+	if (!port) {
+		char *autoport = esf_find_esp_port(ICE_CHIP_UNKNOWN);
+		if (!autoport) {
+			err("no ESP device found.  Use --port to specify "
+			    "explicitly.");
+			return -1;
+		}
+		*autoport_out = autoport;
+		port = autoport;
+	}
+
+	memset(sport, 0, sizeof(*sport));
+	sport->port.ops = &esf_port_ops;
+	sport->device = port;
+	sport->baudrate = 115200;
+
+	printf("Connecting to @b{%s}...\n", port);
+	fflush(stdout);
+
+	lerr = esp_loader_init_serial(loader, &sport->port);
+	if (lerr != ESP_LOADER_SUCCESS) {
+		err("failed to open %s", port);
+		return -1;
+	}
+
+	lerr = esf_connect(loader, no_stub);
+	if (lerr != ESP_LOADER_SUCCESS) {
+		err("connect failed -- is the device in bootloader mode? "
+		    "(Hold BOOT, tap RESET, then release BOOT)");
+		return -1;
+	}
+
+	if (baud > 115200) {
+		lerr =
+		    esp_loader_change_transmission_rate(loader, (uint32_t)baud);
+		if (lerr != ESP_LOADER_SUCCESS)
+			warn("failed to negotiate %d baud; staying at 115200",
+			     baud);
+	}
+
+	return 0;
+}
+
 char *esf_find_esp_port(enum ice_chip required)
 {
-	char **ports;
-	int n = serial_list_ports(&ports);
+	struct serial_port_info *ports;
+	int n = serial_list_port_info(&ports);
 
 	if (n <= 0)
 		return NULL;
+	/* Try the likeliest ports first -- the order `ice target probe`
+	 * prints. */
+	serial_sort_ports(ports, n);
 
 	char *found = NULL;
-	for (int i = 0; ports[i] && !found; i++) {
-		fprintf(stderr, "  Trying %s... ", ports[i]);
+	for (int i = 0; i < n && !found; i++) {
+		fprintf(stderr, "  Trying %s... ", ports[i].path);
 		fflush(stderr);
 
 		esf_port_t sport = {
 		    .port.ops = &esf_port_ops,
-		    .device = ports[i],
+		    .device = ports[i].path,
 		    .baudrate = 115200,
 		};
 
 		esp_loader_t probe;
-		if (esp_loader_init_uart(&probe, &sport.port) !=
+		if (esp_loader_init_serial(&probe, &sport.port) !=
 		    ESP_LOADER_SUCCESS) {
 			fprintf(stderr, "open failed\n");
 			continue;
@@ -357,10 +436,10 @@ char *esf_find_esp_port(enum ice_chip required)
 			if (required == ICE_CHIP_UNKNOWN || chip == required) {
 				fprintf(stderr, "%s\n", ice_chip_name(chip));
 				esp_loader_reset_target(&probe);
-				size_t len = strlen(ports[i]);
+				size_t len = strlen(ports[i].path);
 				found = malloc(len + 1);
 				if (found)
-					memcpy(found, ports[i], len + 1);
+					memcpy(found, ports[i].path, len + 1);
 			} else {
 				fprintf(stderr, "%s (want %s)\n",
 					ice_chip_name(chip),
@@ -372,7 +451,7 @@ char *esf_find_esp_port(enum ice_chip required)
 		esp_loader_deinit(&probe);
 	}
 
-	serial_free_port_list(ports);
+	serial_free_port_info(ports, n);
 	return found;
 }
 
@@ -387,7 +466,8 @@ const esp_loader_port_ops_t esf_port_ops = {
     .start_timer = ice_start_timer,
     .remaining_time = ice_remaining_time,
     .delay_ms = ice_delay_ms,
-    .debug_print = NULL, /* set to ice_debug_print to enable trace */
+    .log = NULL,
+    .log_hex = NULL,
     .change_transmission_rate = ice_change_rate,
     .write = ice_port_write,
     .read = ice_port_read,

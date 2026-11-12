@@ -14,7 +14,7 @@
  *
  *   1. Read project config: @c _project.target / @c _project.elf /
  *      @c _project.idf-path.
- *   2. Connect to the chip via @c pt_target_connect().
+ *   2. Connect to the chip via @c esf_open().
  *   3. Load the partition table (from device), find the
  *      @c data/coredump entry.
  *   4. @c esp_loader_flash_read() the whole partition.
@@ -50,6 +50,7 @@ int cmd_coredump(int argc, const char **argv);
 
 static const char *opt_port;
 static int opt_baud = 460800;
+static int opt_no_stub;
 static int opt_no_verify;
 static int opt_interactive;
 static const char *opt_save_core;
@@ -108,6 +109,9 @@ static const struct option cmd_coredump_opts[] = {
 		   "serial port device path", NULL, serial_complete_port),
     OPT_INT_CFG('b', "baud", &opt_baud, "rate", "serial.baud", "ESPBAUD",
 		"baud rate (default: 460800)", NULL, NULL),
+    OPT_BOOL_CFG(0, "no-stub", &opt_no_stub, "serial.no-stub", NULL,
+		 "talk to the ROM bootloader; do not upload the flasher stub",
+		 NULL),
     OPT_BOOL(0, "no-verify", &opt_no_verify,
 	     "skip the trailing CRC32 / SHA256 checksum check"),
     OPT_BOOL(0, "interactive", &opt_interactive,
@@ -259,7 +263,8 @@ static int read_coredump_partition(const char *port, int baud,
 
 	pt_target_reset_opts();
 
-	if (pt_target_connect(&loader, &sport, port, baud, autoport_out) != 0)
+	if (esf_open(&loader, &sport, port, baud, opt_no_stub, autoport_out) !=
+	    0)
 		goto out;
 
 	if (pt_target_load(entries, &count, &loader, 0x8000) != 0)

@@ -26,6 +26,7 @@ int cmd_target_flash(int argc, const char **argv);
 
 static const char *opt_port;
 static int opt_baud = 460800;
+static int opt_no_stub;
 
 /* clang-format off */
 static const struct option cmd_flash_opts[] = {
@@ -35,6 +36,8 @@ static const struct option cmd_flash_opts[] = {
 	OPT_INT_CFG('b', "baud", &opt_baud, "rate",
 		    "serial.baud", "ESPBAUD",
 		    "baud rate", NULL, NULL),
+	OPT_BOOL_CFG(0, "no-stub", &opt_no_stub, "serial.no-stub", NULL,
+		     "talk to the ROM bootloader; do not upload the flasher stub", NULL),
 	OPT_END(),
 };
 
@@ -70,6 +73,10 @@ static const struct cmd_manual manual = {
 	       "Flasher baud rate (e.g. @b{115200}, @b{460800}).  "
 	       "Connection always starts at 115200; this rate is negotiated "
 	       "after the ROM handshake.")
+	H_ITEM("serial.no-stub",
+	       "Set to @b{true} to flash through the ROM bootloader instead "
+	       "of uploading the flasher stub.  Slower; use it when the "
+	       "stub does not start on a chip.")
 
 	H_SECTION("ENVIRONMENT")
 	H_ITEM("ESPPORT",
@@ -212,9 +219,9 @@ int cmd___flash(int argc, const char **argv)
 	/* ---- build argv for ice target flash ---- */
 	/*
 	 * Maximum argv size: argv[0] + --port <p> + --chip <c> +
-	 * --baud <b> + n_files entries + NULL sentinel.
+	 * --baud <b> + --no-stub + n_files entries + NULL sentinel.
 	 */
-	int max_argc = 8 + n_files;
+	int max_argc = 9 + n_files;
 	const char **flash_argv =
 	    malloc((size_t)(max_argc + 1) * sizeof(*flash_argv));
 	if (!flash_argv)
@@ -233,6 +240,8 @@ int cmd___flash(int argc, const char **argv)
 	}
 	flash_argv[fa++] = "--baud";
 	flash_argv[fa++] = baud_str;
+	if (opt_no_stub)
+		flash_argv[fa++] = "--no-stub";
 	for (int i = 0; i < n_files; i++)
 		flash_argv[fa++] = flash_files[i]->value; /* "offset=path" */
 	flash_argv[fa] = NULL;

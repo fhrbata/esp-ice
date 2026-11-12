@@ -1,21 +1,13 @@
-/* Copyright 2020-2024 Espressif Systems (Shanghai) CO LTD
+/*
+ * SPDX-FileCopyrightText: 2020-2026 Espressif Systems (Shanghai) CO LTD
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * SPDX-License-Identifier: Apache-2.0
  */
 
 #include "slip.h"
 #include "esp_loader.h"
 #include "esp_loader_protocol.h"
+#include "loader_log.h"
 
 static const uint8_t DELIMITER = 0xC0;
 static const uint8_t C0_REPLACEMENT[2] = {0xDB, 0xDC};
@@ -48,36 +40,37 @@ esp_loader_error_t SLIP_receive_packet(esp_loader_t *loader, uint8_t *buff, cons
         RETURN_ON_ERROR( peripheral_read(loader, &ch, 1) );
     } while (ch == DELIMITER);
 
-    buff[0] = ch;
-
-    // Receive either until either delimiter or maximum receive size
-    for (size_t i = 1; i < max_size; i++) {
-        RETURN_ON_ERROR( peripheral_read(loader, &ch, 1) );
-
+    // Decode SLIP into buffer; ch already holds the first non-delimiter byte.
+    for (size_t i = 0; i < max_size; ) {
         if (ch == 0xDB) {
             RETURN_ON_ERROR( peripheral_read(loader, &ch, 1) );
             if (ch == 0xDC) {
-                buff[i] = 0xC0;
+                buff[i++] = 0xC0;
             } else if (ch == 0xDD) {
-                buff[i] = 0xDB;
+                buff[i++] = 0xDB;
             } else {
                 return ESP_LOADER_ERROR_INVALID_RESPONSE;
             }
         } else if (ch == DELIMITER) {
             *recv_size = i;
+            LOADER_LOG_HEX(loader, "SERIAL RX", buff, *recv_size);
             return ESP_LOADER_SUCCESS;
         } else {
-            buff[i] = ch;
+            buff[i++] = ch;
+        }
+
+        if (i < max_size) {
+            RETURN_ON_ERROR( peripheral_read(loader, &ch, 1) );
         }
     }
 
-    // Wait for delimiter if we already reached max receive size
-    // This enables us to ignore unsupported or unnecessary packet data instead of failing
+    // Buffer full: drain to end delimiter so the next call sees a clean stream.
     do {
         RETURN_ON_ERROR( peripheral_read(loader, &ch, 1) );
     } while (ch != DELIMITER);
 
     *recv_size = max_size;
+    LOADER_LOG_HEX(loader, "SERIAL RX", buff, *recv_size);
 
     return ESP_LOADER_SUCCESS;
 }
@@ -85,6 +78,7 @@ esp_loader_error_t SLIP_receive_packet(esp_loader_t *loader, uint8_t *buff, cons
 
 esp_loader_error_t SLIP_send(esp_loader_t *loader, const uint8_t *data, const size_t size)
 {
+    LOADER_LOG_HEX(loader, "SERIAL TX", data, size);
     uint32_t to_write = 0;  // Bytes ready to write as they are
     uint32_t written = 0;   // Bytes already written
 

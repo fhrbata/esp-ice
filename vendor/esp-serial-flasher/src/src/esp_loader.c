@@ -1,27 +1,49 @@
-/* Copyright 2020-2024 Espressif Systems (Shanghai) CO LTD
+/*
+ * SPDX-FileCopyrightText: 2020-2026 Espressif Systems (Shanghai) CO LTD
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * SPDX-License-Identifier: Apache-2.0
  */
 
 #include "protocol.h"
 #include "esp_loader.h"
 #include "esp_loader_protocol.h"
-#include "esp_stubs.h"
 #include "esp_targets.h"
 #include "md5_hash.h"
 #include "slip.h"
+#include "loader_log.h"
 #include <string.h>
 #include <assert.h>
+#include <inttypes.h>
+
+#if SERIAL_FLASHER_LOG_LEVEL >= ESP_LOADER_LOG_INFO
+static const char *target_chip_name(target_chip_t chip)
+{
+    static const char *const names[ESP_MAX_CHIP] = {
+        [ESP8266_CHIP] = "ESP8266",
+        [ESP32_CHIP] = "ESP32",
+        [ESP32S2_CHIP] = "ESP32-S2",
+        [ESP32C3_CHIP] = "ESP32-C3",
+        [ESP32S3_CHIP] = "ESP32-S3",
+        [ESP32C2_CHIP] = "ESP32-C2",
+        [ESP32C5_CHIP] = "ESP32-C5",
+        [ESP32H2_CHIP] = "ESP32-H2",
+        [ESP32H21_CHIP] = "ESP32-H21",
+        [ESP32C6_CHIP] = "ESP32-C6",
+        [ESP32P4_CHIP] = "ESP32-P4",
+        [ESP32C61_CHIP] = "ESP32-C61",
+        [ESP32S31_CHIP] = "ESP32-S31",
+        [ESP32H4_CHIP] = "ESP32-H4",
+    };
+    if ((unsigned)chip < sizeof(names) / sizeof(names[0])) {
+        return names[chip];
+    }
+    return "UNKNOWN";
+}
+#endif
+
+#ifndef SERIAL_FLASHER_WRITE_BLOCK_RETRIES
+#define SERIAL_FLASHER_WRITE_BLOCK_RETRIES 3
+#endif
 
 #define SHORT_TIMEOUT 100
 #define DEFAULT_TIMEOUT 1000
@@ -36,6 +58,8 @@
 #define ROM_FLASH_BLOCK_SIZE 1024
 
 #define DEFAULT_FLASH_SIZE (2 * 1024 * 1024)
+#define MAX_ROM_FLASH_SIZE (16 * 1024 * 1024)
+#define FLASH_READ_STUB_PACKET_SIZE 4096U
 
 typedef enum {
     SPI_FLASH_READ_ID = 0x9F
@@ -81,14 +105,9 @@ static esp_loader_error_t loader_init_common(esp_loader_t *loader,
     return ESP_LOADER_SUCCESS;
 }
 
-esp_loader_error_t esp_loader_init_uart(esp_loader_t *loader, esp_loader_port_t *port)
+esp_loader_error_t esp_loader_init_serial(esp_loader_t *loader, esp_loader_port_t *port)
 {
-    return loader_init_common(loader, ESP_LOADER_PROTOCOL_UART, esp_loader_get_uart_ops(), port);
-}
-
-esp_loader_error_t esp_loader_init_usb(esp_loader_t *loader, esp_loader_port_t *port)
-{
-    return loader_init_common(loader, ESP_LOADER_PROTOCOL_USB, esp_loader_get_usb_ops(), port);
+    return loader_init_common(loader, ESP_LOADER_PROTOCOL_SERIAL, esp_loader_get_serial_ops(), port);
 }
 
 esp_loader_error_t esp_loader_init_spi(esp_loader_t *loader, esp_loader_port_t *port)
@@ -123,7 +142,8 @@ static esp_loader_error_t loader_ensure_spi_attached(esp_loader_t *loader)
     loader->_port->ops->start_timer(loader->_port, DEFAULT_TIMEOUT);
 
     if (loader->_target == ESP8266_CHIP) {
-        RETURN_ON_ERROR(loader_flash_begin_cmd(loader, 0, 0, 0, 0, 0, false));
+        uint32_t sequence_number = 0;
+        RETURN_ON_ERROR(loader_flash_begin_cmd(loader, &sequence_number, 0, 0, 0, 0, false));
     } else {
         uint32_t spi_config;
         RETURN_ON_ERROR(loader_read_spi_config(loader, loader->_target, &spi_config));
@@ -142,6 +162,12 @@ esp_loader_error_t esp_loader_connect(esp_loader_t *loader, esp_loader_connect_a
 
     RETURN_ON_ERROR(loader_detect_chip(loader));
 
+    if (loader->_target == ESP32P4_CHIP && loader->_protocol_type == ESP_LOADER_PROTOCOL_SERIAL) {
+        RETURN_ON_ERROR(loader_power_on_flash_esp32p4(loader));
+    }
+
+    LOADER_LOGI(loader, "Connected - target: %s", target_chip_name(loader->_target));
+
     return ESP_LOADER_SUCCESS;
 }
 
@@ -150,29 +176,29 @@ target_chip_t esp_loader_get_target(esp_loader_t *loader)
     return loader->_target;
 }
 
-esp_loader_error_t esp_loader_connect_with_stub(esp_loader_t *loader, esp_loader_connect_args_t *connect_args)
+static esp_loader_error_t loader_upload_stub(esp_loader_t *loader, const esp_stub_t *stub)
 {
-    if (loader->_protocol_type != ESP_LOADER_PROTOCOL_UART &&
-            loader->_protocol_type != ESP_LOADER_PROTOCOL_USB) {
-        return ESP_LOADER_ERROR_UNSUPPORTED_FUNC;
+    if (stub->header.entrypoint == 0 || stub->segments == NULL || stub->segment_count == 0) {
+        return ESP_LOADER_ERROR_INVALID_PARAM;
     }
 
-    loader->_target_flash_size = 0;
-
-    loader->_port->ops->enter_bootloader(loader->_port);
-
-    RETURN_ON_ERROR(loader->_protocol->initialize_conn(loader, connect_args));
-
-    RETURN_ON_ERROR(loader_detect_chip(loader));
-
-    if (loader->_target == ESP32P4_CHIP || loader->_target == ESP32C5_CHIP) {
-        return ESP_LOADER_ERROR_UNSUPPORTED_CHIP;
+    bool has_data = false;
+    for (size_t seg = 0; seg < stub->segment_count; seg++) {
+        if (stub->segments[seg].size != 0 && stub->segments[seg].data == NULL) {
+            return ESP_LOADER_ERROR_INVALID_PARAM;
+        }
+        has_data = has_data || stub->segments[seg].size != 0;
+    }
+    if (!has_data) {
+        return ESP_LOADER_ERROR_INVALID_PARAM;
     }
 
-    const esp_stub_t *stub = &esp_stub[loader->_target];
     esp_loader_mem_cfg_t mem_cfg = {0};
 
-    for (uint32_t seg = 0; seg < sizeof(stub->segments) / sizeof(stub->segments[0]); seg++) {
+    for (size_t seg = 0; seg < stub->segment_count; seg++) {
+        if (stub->segments[seg].size == 0) {
+            continue;
+        }
         mem_cfg = (esp_loader_mem_cfg_t) {
             .offset = stub->segments[seg].addr,
             .size = stub->segments[seg].size,
@@ -207,6 +233,42 @@ esp_loader_error_t esp_loader_connect_with_stub(esp_loader_t *loader, esp_loader
     return ESP_LOADER_SUCCESS;
 }
 
+esp_loader_error_t esp_loader_connect_with_stub_provider(esp_loader_t *loader,
+        esp_loader_connect_args_t *connect_args, esp_loader_stub_provider_t provider, void *ctx)
+{
+    if (loader->_protocol_type != ESP_LOADER_PROTOCOL_SERIAL) {
+        return ESP_LOADER_ERROR_UNSUPPORTED_FUNC;
+    }
+
+    if (provider == NULL) {
+        return ESP_LOADER_ERROR_INVALID_PARAM;
+    }
+
+    loader->_target_flash_size = 0;
+    loader->_spi_attached = false;
+    loader->_stub_running = false;
+
+    loader->_port->ops->enter_bootloader(loader->_port);
+
+    RETURN_ON_ERROR(loader->_protocol->initialize_conn(loader, connect_args));
+
+    RETURN_ON_ERROR(loader_detect_chip(loader));
+
+    /* The stub attaches flash on startup, so it must already be powered */
+    if (loader->_target == ESP32P4_CHIP) {
+        RETURN_ON_ERROR(loader_power_on_flash_esp32p4(loader));
+    }
+
+    const esp_stub_t *stub = provider(loader, loader->_target, ctx);
+    if (stub == NULL) {
+        return ESP_LOADER_ERROR_UNSUPPORTED_CHIP;
+    }
+
+    LOADER_LOGI(loader, "Connected - target: %s", target_chip_name(loader->_target));
+
+    return loader_upload_stub(loader, stub);
+}
+
 esp_loader_error_t esp_loader_connect_secure_download_mode(esp_loader_t *loader,
         esp_loader_connect_args_t *connect_args,
         const uint32_t flash_size)
@@ -229,6 +291,8 @@ esp_loader_error_t esp_loader_connect_secure_download_mode(esp_loader_t *loader,
 
     loader->_port->ops->start_timer(loader->_port, DEFAULT_TIMEOUT);
     RETURN_ON_ERROR(loader->_protocol->spi_attach(loader, 0));
+
+    LOADER_LOGI(loader, "Connected - target: %s", target_chip_name(loader->_target));
 
     /* Mark as attached so loader_ensure_spi_attached() does not repeat the call.
      * spi_config is 0 here because efuse registers are not readable in secure
@@ -417,10 +481,11 @@ static esp_loader_error_t init_flash_params(esp_loader_t *loader)
     /* Flash size will be known in advance if we're in secure download mode or we already read it*/
     if (loader->_target_flash_size == 0) {
         if (esp_loader_flash_detect_size(loader, &loader->_target_flash_size) != ESP_LOADER_SUCCESS) {
-            if (loader->_port->ops->debug_print != NULL) {
-                loader->_port->ops->debug_print(loader->_port, "Flash size detection failed, falling back to default");
-            }
+            LOADER_LOGW(loader, "Flash size detection failed, falling back to default");
             loader->_target_flash_size = DEFAULT_FLASH_SIZE;
+        } else {
+            LOADER_LOGI(loader, "Flash size: %" PRIu32 " MB",
+                        loader->_target_flash_size / (1024u * 1024u));
         }
     }
 
@@ -444,6 +509,15 @@ esp_loader_error_t esp_loader_flash_start(esp_loader_t *loader, esp_loader_flash
         return ESP_LOADER_ERROR_INVALID_PARAM;
     }
 
+    /* ROM bootloader uses 24-bit SPI addressing — addresses >= 16 MB silently
+     * wrap around to 0. Reject such writes early to prevent silent corruption. */
+    if (!loader->_stub_running && cfg->offset >= MAX_ROM_FLASH_SIZE) {
+        return ESP_LOADER_ERROR_UNSUPPORTED_FUNC;
+    }
+
+    LOADER_LOGI(loader, "Flash write start - offset: 0x%08" PRIx32 "  size: %" PRIu32 " bytes",
+                cfg->offset, cfg->image_size);
+
     RETURN_ON_ERROR(init_flash_params(loader));
     if (cfg->image_size + cfg->offset > loader->_target_flash_size) {
         return ESP_LOADER_ERROR_IMAGE_SIZE;
@@ -464,7 +538,7 @@ esp_loader_error_t esp_loader_flash_start(esp_loader_t *loader, esp_loader_flash
 }
 
 
-esp_loader_error_t esp_loader_flash_write(esp_loader_t *loader, esp_loader_flash_cfg_t *cfg, void *payload, uint32_t size)
+esp_loader_error_t esp_loader_flash_write(esp_loader_t *loader, esp_loader_flash_cfg_t *cfg, const void *payload, uint32_t size)
 {
 
     if (loader->_protocol_type == ESP_LOADER_PROTOCOL_SPI) {
@@ -475,17 +549,8 @@ esp_loader_error_t esp_loader_flash_write(esp_loader_t *loader, esp_loader_flash
         return ESP_LOADER_ERROR_INVALID_PARAM;
     }
 
-    uint32_t padding_bytes = cfg->block_size - size;
-    uint8_t *data = (uint8_t *)payload;
-    uint32_t padding_index = size;
-
-    const uint8_t padding_value = 0xFF;
-    while (padding_bytes--) {
-        data[padding_index++] = padding_value;
-    }
-
     if (!cfg->skip_verify) {
-        md5_update(cfg, payload, (size + 3) & ~3);
+        md5_update(cfg, payload, size);
     }
 
     unsigned int attempt = 0;
@@ -494,8 +559,12 @@ esp_loader_error_t esp_loader_flash_write(esp_loader_t *loader, esp_loader_flash
     do {
         cfg->_state._sequence_number = saved_seq;
         loader->_port->ops->start_timer(loader->_port, DEFAULT_TIMEOUT);
-        result = loader_flash_data_cmd(loader, &cfg->_state._sequence_number, (uint8_t *)payload, cfg->block_size);
+        result = loader_flash_data_cmd(loader, &cfg->_state._sequence_number, payload, size);
         attempt++;
+        if (result != ESP_LOADER_SUCCESS && attempt < SERIAL_FLASHER_WRITE_BLOCK_RETRIES) {
+            LOADER_LOGW(loader, "Flash write failed (attempt %u/%u), retrying",
+                        attempt, (unsigned)SERIAL_FLASHER_WRITE_BLOCK_RETRIES);
+        }
     } while (result != ESP_LOADER_SUCCESS && attempt < SERIAL_FLASHER_WRITE_BLOCK_RETRIES);
 
     return result;
@@ -541,8 +610,7 @@ esp_loader_error_t esp_loader_flash_finish(esp_loader_t *loader, esp_loader_flas
 esp_loader_error_t esp_loader_flash_deflate_start(esp_loader_t *loader, esp_loader_flash_deflate_cfg_t *cfg)
 {
 
-    if (loader->_protocol_type == ESP_LOADER_PROTOCOL_SPI ||
-            loader->_protocol_type == ESP_LOADER_PROTOCOL_SDIO) {
+    if (loader->_protocol_type == ESP_LOADER_PROTOCOL_SPI) {
         return ESP_LOADER_ERROR_UNSUPPORTED_FUNC;
     }
 
@@ -553,6 +621,10 @@ esp_loader_error_t esp_loader_flash_deflate_start(esp_loader_t *loader, esp_load
     if (loader->_target == ESP8266_CHIP && !loader->_stub_running) {
         return ESP_LOADER_ERROR_UNSUPPORTED_FUNC;
     }
+
+    LOADER_LOGI(loader,
+                "Compressed flash write start - offset: 0x%08" PRIx32 "  size: %" PRIu32 " bytes  compressed: %" PRIu32 " bytes",
+                cfg->offset, cfg->image_size, cfg->compressed_size);
 
     RETURN_ON_ERROR(init_flash_params(loader));
     if (cfg->image_size + cfg->offset > loader->_target_flash_size) {
@@ -571,8 +643,7 @@ esp_loader_error_t esp_loader_flash_deflate_start(esp_loader_t *loader, esp_load
 esp_loader_error_t esp_loader_flash_deflate_write(esp_loader_t *loader, esp_loader_flash_deflate_cfg_t *cfg, void *payload, uint32_t size)
 {
 
-    if (loader->_protocol_type == ESP_LOADER_PROTOCOL_SPI ||
-            loader->_protocol_type == ESP_LOADER_PROTOCOL_SDIO) {
+    if (loader->_protocol_type == ESP_LOADER_PROTOCOL_SPI) {
         return ESP_LOADER_ERROR_UNSUPPORTED_FUNC;
     }
 
@@ -588,6 +659,10 @@ esp_loader_error_t esp_loader_flash_deflate_write(esp_loader_t *loader, esp_load
         loader->_port->ops->start_timer(loader->_port, DEFAULT_TIMEOUT);
         result = loader_flash_deflate_data_cmd(loader, &cfg->_state._sequence_number, payload, size);
         attempt++;
+        if (result != ESP_LOADER_SUCCESS && attempt < SERIAL_FLASHER_WRITE_BLOCK_RETRIES) {
+            LOADER_LOGW(loader, "Compressed flash write failed (attempt %u/%u), retrying",
+                        attempt, (unsigned)SERIAL_FLASHER_WRITE_BLOCK_RETRIES);
+        }
     } while (result != ESP_LOADER_SUCCESS && attempt < SERIAL_FLASHER_WRITE_BLOCK_RETRIES);
 
     return result;
@@ -598,8 +673,7 @@ esp_loader_error_t esp_loader_flash_deflate_finish(esp_loader_t *loader, esp_loa
 {
     (void)cfg;
 
-    if (loader->_protocol_type == ESP_LOADER_PROTOCOL_SPI ||
-            loader->_protocol_type == ESP_LOADER_PROTOCOL_SDIO) {
+    if (loader->_protocol_type == ESP_LOADER_PROTOCOL_SPI) {
         return ESP_LOADER_ERROR_UNSUPPORTED_FUNC;
     }
 
@@ -617,6 +691,8 @@ esp_loader_error_t esp_loader_flash_erase(esp_loader_t *loader)
     if (loader->_protocol_type == ESP_LOADER_PROTOCOL_SPI) {
         return ESP_LOADER_ERROR_UNSUPPORTED_FUNC;
     }
+
+    LOADER_LOGI(loader, "Flash erase start");
 
     if (loader->_stub_running) {
         RETURN_ON_ERROR(init_flash_params(loader));
@@ -640,13 +716,16 @@ esp_loader_error_t esp_loader_flash_erase(esp_loader_t *loader)
 esp_loader_error_t esp_loader_flash_erase_region(esp_loader_t *loader, uint32_t offset, uint32_t size)
 {
 
-    if (loader->_protocol_type == ESP_LOADER_PROTOCOL_SPI || loader->_protocol_type == ESP_LOADER_PROTOCOL_SDIO) {
+    if (loader->_protocol_type == ESP_LOADER_PROTOCOL_SPI) {
         return ESP_LOADER_ERROR_UNSUPPORTED_FUNC;
     }
 
     if (offset % FLASH_SECTOR_SIZE != 0 || size % FLASH_SECTOR_SIZE != 0) {
         return ESP_LOADER_ERROR_INVALID_PARAM;
     }
+
+    LOADER_LOGI(loader, "Flash erase region start - offset: 0x%08" PRIx32 "  size: %" PRIu32 " bytes",
+                offset, size);
 
     if (loader->_stub_running) {
         RETURN_ON_ERROR(init_flash_params(loader));
@@ -670,29 +749,6 @@ esp_loader_error_t esp_loader_flash_erase_region(esp_loader_t *loader, uint32_t 
     return ESP_LOADER_SUCCESS;
 }
 
-esp_loader_error_t esp_loader_change_transmission_rate_stub(esp_loader_t *loader,
-        const uint32_t old_transmission_rate,
-        const uint32_t new_transmission_rate)
-{
-
-    if (loader->_target == ESP8266_CHIP || !loader->_stub_running || loader->_protocol_type == ESP_LOADER_PROTOCOL_SDIO) {
-        return ESP_LOADER_ERROR_UNSUPPORTED_FUNC;
-    }
-
-    loader->_port->ops->start_timer(loader->_port, DEFAULT_TIMEOUT);
-
-    esp_loader_error_t err = loader_change_baudrate_cmd(loader, new_transmission_rate, old_transmission_rate);
-
-    if (err == ESP_LOADER_SUCCESS) {
-        loader->_port->ops->delay_ms(loader->_port, 25);
-        if (loader->_port->ops->change_transmission_rate != NULL) {
-            err = loader->_port->ops->change_transmission_rate(loader->_port, new_transmission_rate);
-        }
-    }
-
-    return err;
-}
-
 static uint32_t byte_popcnt(uint8_t byte)
 {
     uint32_t cnt = 0;
@@ -704,11 +760,24 @@ static uint32_t byte_popcnt(uint8_t byte)
     return cnt;
 }
 
+esp_loader_error_t esp_loader_get_chip_revision(esp_loader_t *loader, uint16_t *revision)
+{
+    if (loader == NULL || revision == NULL) {
+        return ESP_LOADER_ERROR_INVALID_PARAM;
+    }
+
+    if (loader->_target == ESP_UNKNOWN_CHIP) {
+        return ESP_LOADER_ERROR_UNSUPPORTED_CHIP;
+    }
+
+    return loader_read_chip_revision(loader, loader->_target, revision);
+}
+
 esp_loader_error_t esp_loader_get_security_info(esp_loader_t *loader,
         esp_loader_target_security_info_t *security_info)
 {
 
-    if (loader->_protocol_type == ESP_LOADER_PROTOCOL_SPI || loader->_protocol_type == ESP_LOADER_PROTOCOL_SDIO) {
+    if (loader->_protocol_type == ESP_LOADER_PROTOCOL_SPI) {
         return ESP_LOADER_ERROR_UNSUPPORTED_FUNC;
     }
 
@@ -760,11 +829,60 @@ esp_loader_error_t esp_loader_get_security_info(esp_loader_t *loader,
     return ESP_LOADER_SUCCESS;
 }
 
+static esp_loader_error_t loader_flash_read_stub(esp_loader_t *loader, uint8_t *dest,
+        uint32_t address, uint32_t length)
+{
+    if (loader->_protocol->recv_stub_packet == NULL || loader->_protocol->send_stub_ack == NULL) {
+        return ESP_LOADER_ERROR_UNSUPPORTED_FUNC;
+    }
+
+    struct MD5Context md5_context;
+    MD5Init(&md5_context);
+
+    const uint32_t packet_size = MIN(length, FLASH_READ_STUB_PACKET_SIZE);
+
+    loader->_port->ops->start_timer(loader->_port, DEFAULT_TIMEOUT);
+    RETURN_ON_ERROR(loader_flash_read_stub_cmd(loader, address, length, packet_size));
+
+    uint32_t remaining = length;
+    while (remaining > 0) {
+        const uint32_t offset = length - remaining;
+        const uint32_t to_receive = MIN(remaining, packet_size);
+        size_t recv_size = 0;
+
+        loader->_port->ops->start_timer(loader->_port, DEFAULT_TIMEOUT);
+        RETURN_ON_ERROR(loader->_protocol->recv_stub_packet(loader, &dest[offset], to_receive, &recv_size));
+
+        if (recv_size != to_receive) {
+            return ESP_LOADER_ERROR_INVALID_RESPONSE;
+        }
+
+        MD5Update(&md5_context, &dest[offset], recv_size);
+        remaining -= recv_size;
+
+        loader->_port->ops->start_timer(loader->_port, DEFAULT_TIMEOUT);
+        RETURN_ON_ERROR(loader->_protocol->send_stub_ack(loader, length - remaining));
+    }
+
+    uint8_t md5_calc[16];
+    MD5Final(md5_calc, &md5_context);
+
+    uint8_t md5_recv[16];
+    size_t recv_size = 0;
+    loader->_port->ops->start_timer(loader->_port, DEFAULT_TIMEOUT);
+    RETURN_ON_ERROR(loader->_protocol->recv_stub_packet(loader, md5_recv, sizeof(md5_recv), &recv_size));
+
+    if (recv_size != sizeof(md5_recv) || memcmp(md5_calc, md5_recv, sizeof(md5_calc))) {
+        return ESP_LOADER_ERROR_INVALID_MD5;
+    }
+
+    return ESP_LOADER_SUCCESS;
+}
+
 esp_loader_error_t esp_loader_flash_read(esp_loader_t *loader, uint8_t *dest, uint32_t address, uint32_t length)
 {
 
-    if (loader->_protocol_type == ESP_LOADER_PROTOCOL_SDIO ||
-            loader->_protocol_type == ESP_LOADER_PROTOCOL_SPI) {
+    if (loader->_protocol_type == ESP_LOADER_PROTOCOL_SPI) {
         return ESP_LOADER_ERROR_UNSUPPORTED_FUNC;
     }
 
@@ -774,10 +892,7 @@ esp_loader_error_t esp_loader_flash_read(esp_loader_t *loader, uint8_t *dest, ui
     }
 
     if (loader->_stub_running) {
-        if (loader->_protocol->flash_read_stub == NULL) {
-            return ESP_LOADER_ERROR_UNSUPPORTED_FUNC;
-        }
-        RETURN_ON_ERROR(loader->_protocol->flash_read_stub(loader, dest, address, length));
+        RETURN_ON_ERROR(loader_flash_read_stub(loader, dest, address, length));
     } else {
         const uint32_t seek_back_len = address % READ_FLASH_ROM_DATA_SIZE;
         address -= seek_back_len;
@@ -838,6 +953,10 @@ esp_loader_error_t esp_loader_mem_write(esp_loader_t *loader, esp_loader_mem_cfg
             result = loader_mem_data_cmd(loader, &cfg->_state._sequence_number, data, size);
         }
         attempt++;
+        if (result != ESP_LOADER_SUCCESS && attempt < SERIAL_FLASHER_WRITE_BLOCK_RETRIES) {
+            LOADER_LOGW(loader, "RAM write failed (attempt %u/%u), retrying",
+                        attempt, (unsigned)SERIAL_FLASHER_WRITE_BLOCK_RETRIES);
+        }
     } while (result != ESP_LOADER_SUCCESS && attempt < SERIAL_FLASHER_WRITE_BLOCK_RETRIES);
 
     return result;
@@ -881,52 +1000,11 @@ esp_loader_error_t esp_loader_write_register(esp_loader_t *loader, uint32_t addr
     return loader_write_reg_cmd(loader, address, reg_value, 0xFFFFFFFF, 0);
 }
 
-static esp_loader_error_t get_crystal_frequency_esp32c2(esp_loader_t *loader, uint32_t *frequency)
-{
-    /*
-    There is a bug in the ESP32-C2 ROM that causes it to think it has a 40 MHz crystal,
-    even though it might be 26 MHz. That is why we need to check frequency and adjust
-    the transmission rate accordingly.
-
-    The logic here is:
-    - We know that our baud rate and the target's UART baud rate are roughly the same,
-    or we couldn't communicate
-    - We can read the UART clock divider register to know how the ESP derives this
-    from the APB bus frequency
-    - Multiplying these two together gives us the bus frequency which is either
-    the crystal frequency or multiple of the crystal frequency (for some chips).
-    */
-
-    // ESP32-C2 supported crystal frequencies
-    const uint32_t ESP32C2_CRYSTAL_26MHZ = 26;
-    const uint32_t ESP32C2_CRYSTAL_40MHZ = 40;
-
-    const uint32_t CRYSTAL_FREQ_THRESHOLD = 33;
-
-    // UART clock divider register address and mask
-    const uint32_t UART_CLK_DIV_REG = 0x60000014;
-    const uint32_t UART_CLK_DIV_REG_MASK = 0xFFFFF;
-
-    *frequency = 0;
-    uint32_t est_freq;
-    RETURN_ON_ERROR(esp_loader_read_register(loader, UART_CLK_DIV_REG, &est_freq));
-    est_freq &= UART_CLK_DIV_REG_MASK;
-
-    est_freq = (INITIAL_UART_BAUDRATE * est_freq) / 1000000U;
-
-    if (est_freq > CRYSTAL_FREQ_THRESHOLD) {
-        *frequency = ESP32C2_CRYSTAL_40MHZ;
-    } else {
-        *frequency = ESP32C2_CRYSTAL_26MHZ;
-    }
-
-    return ESP_LOADER_SUCCESS;
-}
 
 esp_loader_error_t esp_loader_change_transmission_rate(esp_loader_t *loader, uint32_t transmission_rate)
 {
 
-    if (loader->_target == ESP8266_CHIP || loader->_stub_running || loader->_protocol_type == ESP_LOADER_PROTOCOL_SDIO) {
+    if (loader->_target == ESP8266_CHIP || loader->_protocol_type == ESP_LOADER_PROTOCOL_SDIO) {
         return ESP_LOADER_ERROR_UNSUPPORTED_FUNC;
     }
     if (loader->_target == ESP32C2_CHIP) {
@@ -945,8 +1023,13 @@ esp_loader_error_t esp_loader_change_transmission_rate(esp_loader_t *loader, uin
     loader->_port->ops->start_timer(loader->_port, DEFAULT_TIMEOUT);
 
     esp_loader_error_t err = loader_change_baudrate_cmd(loader, transmission_rate, 0);
-    if (err == ESP_LOADER_SUCCESS && loader->_port->ops->change_transmission_rate != NULL) {
-        err = loader->_port->ops->change_transmission_rate(loader->_port, transmission_rate);
+    if (err == ESP_LOADER_SUCCESS) {
+        if (loader->_stub_running) {
+            loader->_port->ops->delay_ms(loader->_port, 25);
+        }
+        if (loader->_port->ops->change_transmission_rate != NULL) {
+            err = loader->_port->ops->change_transmission_rate(loader->_port, transmission_rate);
+        }
     }
     return err;
 }
@@ -981,14 +1064,9 @@ esp_loader_error_t esp_loader_flash_verify_known_md5(esp_loader_t *loader,
 
     bool md5_match = memcmp(expected_md5, received_md5, MD5_SIZE_ROM) == 0;
     if (!md5_match) {
-        if (loader->_port->ops->debug_print != NULL) {
-            loader->_port->ops->debug_print(loader->_port, "Error: MD5 checksum does not match");
-            loader->_port->ops->debug_print(loader->_port, "Expected:");
-            loader->_port->ops->debug_print(loader->_port, (char *)expected_md5);
-            loader->_port->ops->debug_print(loader->_port, "Actual:");
-            loader->_port->ops->debug_print(loader->_port, (char *)received_md5);
-        }
-
+        LOADER_LOGE(loader, "MD5 mismatch - expected: %.*s  actual: %.*s",
+                    (int)MD5_SIZE_ROM, (const char *)expected_md5,
+                    (int)MD5_SIZE_ROM, (const char *)received_md5);
         return ESP_LOADER_ERROR_INVALID_MD5;
     }
 

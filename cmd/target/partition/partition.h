@@ -44,6 +44,7 @@ struct pt_target_selector {
  */
 extern const char *pt_opt_port;
 extern int pt_opt_baud;
+extern int pt_opt_no_stub;
 extern const char *pt_opt_pt_file;
 extern const char *pt_opt_pt_offset;
 extern const char *pt_opt_name;
@@ -108,20 +109,6 @@ void pt_target_finalize_opts(void);
 const struct pt_entry *pt_target_select(const struct pt_entry *entries, int n,
 					const struct pt_target_selector *sel,
 					esp_loader_t *loader);
-
-/**
- * @brief Open and connect to the device, leaving the loader ready
- * for flash_read / flash_write / flash_erase_region.
- *
- * @p port may be NULL to auto-detect; @p baud is the negotiated
- * post-handshake speed.  On success the caller owns the @p loader,
- * the @p sport (which lives for the loader's lifetime), and any
- * autoport string written through @p autoport_out (free()-able).
- *
- * @return 0 on success, non-zero error printed via err().
- */
-int pt_target_connect(esp_loader_t *loader, esf_port_t *sport, const char *port,
-		      int baud, char **autoport_out);
 
 /**
  * @brief Read the partition table from the connected device.

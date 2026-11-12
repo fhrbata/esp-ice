@@ -1,16 +1,7 @@
-/* Copyright 2026 Espressif Systems (Shanghai) CO LTD
+/*
+ * SPDX-FileCopyrightText: 2026 Espressif Systems (Shanghai) CO LTD
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * SPDX-License-Identifier: Apache-2.0
  */
 
 #pragma once
@@ -32,7 +23,13 @@ typedef enum {
     ESP_LOADER_ERROR_INVALID_TARGET,   /*!< Connected target is invalid */
     ESP_LOADER_ERROR_UNSUPPORTED_CHIP, /*!< Attached chip is not supported */
     ESP_LOADER_ERROR_UNSUPPORTED_FUNC, /*!< Function is not supported on attached target */
-    ESP_LOADER_ERROR_INVALID_RESPONSE  /*!< Internal error */
+    ESP_LOADER_ERROR_INVALID_RESPONSE, /*!< Internal error */
+    ESP_LOADER_ERROR_EFUSE_BLOCK_IN_USE, /*!< eFuse block cannot receive the write: already
+                                              written with different content, write/read
+                                              protected, or its KEY_PURPOSE is already set */
+    ESP_LOADER_ERROR_EFUSE_BURN_FAILED /*!< eFuse programming was attempted but the chip
+                                            reported an error or failed read-back
+                                            verification; fuses may be partially burned */
 } esp_loader_error_t;
 
 #ifdef __cplusplus
