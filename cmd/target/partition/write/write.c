@@ -136,8 +136,8 @@ int cmd_target_partition_write(int argc, const char **argv)
 		return 1;
 	}
 
-	if (pt_target_connect(&loader, &sport, pt_opt_port, pt_opt_baud,
-			      pt_opt_no_stub, &autoport) != 0)
+	if (esf_open(&loader, &sport, pt_opt_port, pt_opt_baud, pt_opt_no_stub,
+		     &autoport) != 0)
 		goto out;
 
 	if (pt_target_load(entries, &count, &loader, table_offset) != 0)

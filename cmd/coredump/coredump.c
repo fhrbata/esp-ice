@@ -14,7 +14,7 @@
  *
  *   1. Read project config: @c _project.target / @c _project.elf /
  *      @c _project.idf-path.
- *   2. Connect to the chip via @c pt_target_connect().
+ *   2. Connect to the chip via @c esf_open().
  *   3. Load the partition table (from device), find the
  *      @c data/coredump entry.
  *   4. @c esp_loader_flash_read() the whole partition.
@@ -263,8 +263,8 @@ static int read_coredump_partition(const char *port, int baud,
 
 	pt_target_reset_opts();
 
-	if (pt_target_connect(&loader, &sport, port, baud, opt_no_stub,
-			      autoport_out) != 0)
+	if (esf_open(&loader, &sport, port, baud, opt_no_stub, autoport_out) !=
+	    0)
 		goto out;
 
 	if (pt_target_load(entries, &count, &loader, 0x8000) != 0)

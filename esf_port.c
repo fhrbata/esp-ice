@@ -14,6 +14,7 @@
  */
 #include "esf_port.h"
 #include "chip.h"
+#include "error.h"
 #include "esp_loader.h"	   /* RETURN_ON_ERROR, ESP_LOADER_* */
 #include "esp_loader_io.h" /* container_of, esp_loader_port_t */
 #include "json.h"
@@ -347,6 +348,56 @@ esp_loader_error_t esf_connect(esp_loader_t *loader, int no_stub)
 	if (no_stub)
 		return esp_loader_connect(loader, &args);
 	return esp_loader_connect_with_stub(loader, &args);
+}
+
+int esf_open(esp_loader_t *loader, esf_port_t *sport, const char *port,
+	     int baud, int no_stub, char **autoport_out)
+{
+	esp_loader_error_t lerr;
+
+	*autoport_out = NULL;
+
+	if (!port) {
+		char *autoport = esf_find_esp_port(ICE_CHIP_UNKNOWN);
+		if (!autoport) {
+			err("no ESP device found.  Use --port to specify "
+			    "explicitly.");
+			return -1;
+		}
+		*autoport_out = autoport;
+		port = autoport;
+	}
+
+	memset(sport, 0, sizeof(*sport));
+	sport->port.ops = &esf_port_ops;
+	sport->device = port;
+	sport->baudrate = 115200;
+
+	printf("Connecting to @b{%s}...\n", port);
+	fflush(stdout);
+
+	lerr = esp_loader_init_serial(loader, &sport->port);
+	if (lerr != ESP_LOADER_SUCCESS) {
+		err("failed to open %s", port);
+		return -1;
+	}
+
+	lerr = esf_connect(loader, no_stub);
+	if (lerr != ESP_LOADER_SUCCESS) {
+		err("connect failed -- is the device in bootloader mode? "
+		    "(Hold BOOT, tap RESET, then release BOOT)");
+		return -1;
+	}
+
+	if (baud > 115200) {
+		lerr =
+		    esp_loader_change_transmission_rate(loader, (uint32_t)baud);
+		if (lerr != ESP_LOADER_SUCCESS)
+			warn("failed to negotiate %d baud; staying at 115200",
+			     baud);
+	}
+
+	return 0;
 }
 
 char *esf_find_esp_port(enum ice_chip required)

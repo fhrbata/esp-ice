@@ -94,6 +94,23 @@ char *esf_find_esp_port(enum ice_chip required);
  */
 esp_loader_error_t esf_connect(esp_loader_t *loader, int no_stub);
 
+/**
+ * @brief Open a device and leave the loader connected and ready.
+ *
+ * Opens @p port -- or, when it is NULL, the first port that answers as
+ * an ESP chip (see esf_find_esp_port()) -- connects through
+ * esf_connect() and negotiates @p baud.  A failed baud change is only
+ * a warning; the session stays at 115200.
+ *
+ * On success the caller owns @p loader, @p sport (which must outlive
+ * the loader) and the auto-detected port name written to
+ * @p autoport_out (free()-able, NULL when @p port was given).
+ *
+ * @return 0 on success, -1 on failure with the reason printed.
+ */
+int esf_open(esp_loader_t *loader, esf_port_t *sport, const char *port,
+	     int baud, int no_stub, char **autoport_out);
+
 #ifdef __cplusplus
 }
 #endif
